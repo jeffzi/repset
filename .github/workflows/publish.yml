@@ -30,7 +30,7 @@ jobs:
           persist-credentials: false
       - name: Setup Node.js
         # zizmor: ignore[cache-poisoning] -- setup-node does not cache unless cache: is set
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "lts/*"
       - name: Install dependencies
@@ -69,7 +69,7 @@ jobs:
     steps:
       - name: Setup Node.js
         # zizmor: ignore[cache-poisoning] -- setup-node does not cache unless cache: is set
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "lts/*"
       - name: Update npm (trusted publishing needs >= 11.5.1; lts/* may ship older)

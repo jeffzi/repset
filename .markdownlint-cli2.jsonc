@@ -1,0 +1,16 @@
+{
+  "config": {
+    "default": true,
+    "MD013": { "line_length": 100, "code_blocks": true, "tables": false },
+    "MD024": {
+      "siblings_only": true,
+    },
+    "MD033": false,
+    "MD044": {
+      "names": ["ESLint", "GitHub", "JavaScript", "Node.js", "npm", "TypeScript", "Vitest"],
+      "code_blocks": false,
+    },
+    "MD060": false,
+  },
+  "ignores": [".planning/**", ".research/**", ".stryker-tmp/**", "LICENSE", "node_modules/**"],
+}

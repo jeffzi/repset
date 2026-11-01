@@ -1,0 +1,18 @@
+{
+  "$schema": "https://raw.githubusercontent.com/streetsidesoftware/cspell/main/cspell.schema.json",
+  "version": "0.2",
+  "language": "en-US",
+  "files": ["**/*.{ts,tsx,mts,cts,md}"],
+  "words": ["repset", "taskkill", "unref", "unstub"],
+  "ignorePaths": [
+    ".agents",
+    ".claude",
+    ".planning",
+    ".research",
+    "*.tsbuildinfo",
+    "coverage",
+    "dist",
+    "node_modules",
+    "package-lock.json"
+  ]
+}

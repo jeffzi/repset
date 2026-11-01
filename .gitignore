@@ -1,0 +1,60 @@
+# Logs
+*.log
+
+# Runtime data
+*.pid
+*.pid.lock
+*.seed
+
+# Coverage
+coverage
+*.lcov
+
+# Dependency directories
+node_modules/
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Output of 'npm pack'
+*.tgz
+
+# dotenv environment variable files
+.env
+.env.*
+!.env.example
+
+# Build output
+dist
+
+# Vite files
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+.vite/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+*.swp
+*.swo
+
+# VSCode (keep shared config)
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# Fallow cache
+.fallow/
+
+# StrykerJS sandbox
+.stryker-tmp/
+
+# Agents
+.agents/settings.local.json
+.claude/settings.local.json
+.mcp.json
+AGENTS.local.md
+CLAUDE.local.md

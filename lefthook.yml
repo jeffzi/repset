@@ -1,0 +1,69 @@
+# yaml-language-server: $schema=https://json.schemastore.org/lefthook.json
+glob_matcher: doublestar
+
+pre-commit:
+  files: git diff --cached --name-only --diff-filter=ACMR
+  commands: &checks
+    lint:
+      priority: 1
+      glob: "**/*.{ts,tsx,mts,cts,js}"
+      run: npx oxlint --fix {files}
+      stage_fixed: true
+    md:
+      priority: 1
+      glob: "**/*.md"
+      run: npx markdownlint-cli2 --fix {files}
+      stage_fixed: true
+    fmt:
+      priority: 2
+      glob: "**/*.{ts,tsx,mts,cts,js,json,jsonc,md,yml,yaml}"
+      # oxfmt errors when every staged file is ignored; oxlint exits 0 and needs no guard
+      run: npx oxfmt --no-error-on-unmatched-pattern {files}
+      stage_fixed: true
+    type:
+      priority: 3
+      glob: "**/*.{ts,tsx,mts,cts}"
+      run: npx tsc -p tsconfig.json --noEmit
+    typelint:
+      priority: 3
+      glob: "**/*.{ts,tsx,mts,cts}"
+      run: npx oxlint --type-aware
+    spelling:
+      priority: 3
+      glob: "**/*.{ts,tsx,mts,cts,md}"
+      run: npx cspell --no-progress --no-summary --no-must-find-files {files}
+    actions:
+      priority: 3
+      glob: ".github/workflows/*.yml"
+      run: actionlint {files} && zizmor --persona=pedantic {files}
+
+check:
+  files: git ls-files --cached --others --exclude-standard
+  commands:
+    <<: *checks
+    quality:
+      priority: 3
+      glob: "**/*.{ts,tsx,mts,cts,js,json}"
+      # check-coverage-fresh.ts must run before fallow: fallow scores CRAP against
+      # coverage/coverage-final.json, so a src/ edit made after the last test run
+      # would be scored against stale line maps.
+      run: npx tsx scripts/check-coverage-fresh.ts && npx fallow --fail-on-issues --quiet
+    package:
+      priority: 4
+      run: npm run build && npx publint --strict && npx attw --pack . --profile esm-only
+
+commit-msg:
+  commands:
+    commitlint:
+      run: npx commitlint --edit {1}
+
+pre-push:
+  commands:
+    # Tests first: check's fallow health step reads coverage/, which only a
+    # test run produces. On a fresh clone the first push would otherwise fail.
+    test:
+      priority: 1
+      run: npm test
+    check:
+      priority: 2
+      run: npm run check

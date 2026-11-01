@@ -1,0 +1,147 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "categories": {
+    "correctness": "error",
+    "perf": "error",
+    "suspicious": "error"
+  },
+  "ignorePatterns": [
+    ".agents",
+    ".claude",
+    ".planning",
+    ".research",
+    "coverage",
+    "dist",
+    "node_modules"
+  ],
+  "overrides": [
+    {
+      "files": ["scripts/**", "src/cli.ts", "src/cli/**"],
+      "rules": {
+        "no-console": "off"
+      }
+    },
+    {
+      "files": ["tests/**", "**/*.test.ts", "**/*.test-d.ts", "**/*.spec.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 800, "skipBlankLines": true, "skipComments": true }],
+        "jsdoc/require-param": "off",
+        "jsdoc/require-returns": "off",
+        "max-lines-per-function": "off",
+        "no-control-regex": "off",
+        "typescript/no-unsafe-argument": "off",
+        "typescript/no-unsafe-assignment": "off",
+        "typescript/no-unsafe-call": "off",
+        "typescript/no-unsafe-member-access": "off",
+        "typescript/no-unsafe-return": "off",
+        "typescript/no-unsafe-type-assertion": "off",
+        "typescript/require-await": "off",
+        "unicorn/consistent-function-scoping": "off"
+      }
+    }
+  ],
+  "plugins": ["typescript", "unicorn", "oxc", "import", "promise", "vitest", "jsdoc"],
+  "rules": {
+    "array-callback-return": "error",
+    "complexity": ["error", 15],
+    "default-param-last": "error",
+    "eqeqeq": ["error", "smart"],
+    "import/no-cycle": ["error", { "ignoreTypes": true }],
+    "import/no-duplicates": "error",
+    "import/no-namespace": "error",
+    "import/no-self-import": "error",
+    "jsdoc/check-tag-names": ["error", { "definedTags": ["typeParam"] }],
+    "jsdoc/empty-tags": "error",
+    "jsdoc/implements-on-classes": "error",
+    "jsdoc/no-defaults": "error",
+    "jsdoc/require-param": "error",
+    "jsdoc/require-param-description": "error",
+    "jsdoc/require-returns": ["error", { "checkGetters": false }],
+    "jsdoc/require-returns-description": "error",
+    "max-depth": ["error", 3],
+    "max-lines": ["error", { "max": 400, "skipBlankLines": true, "skipComments": true }],
+    "max-lines-per-function": [
+      "error",
+      { "max": 60, "skipBlankLines": true, "skipComments": true }
+    ],
+    "max-params": ["error", 4],
+    "no-await-in-loop": "off",
+    "no-console": "error",
+    "no-constructor-return": "error",
+    "no-else-return": ["error", { "allowElseIf": false }],
+    "no-empty": "error",
+    "no-nested-ternary": "error",
+    "no-param-reassign": "error",
+    "no-self-compare": "error",
+    "no-underscore-dangle": "off",
+    "no-unused-vars": [
+      "error",
+      {
+        "args": "all",
+        "argsIgnorePattern": "^_",
+        "caughtErrorsIgnorePattern": "^_",
+        "varsIgnorePattern": "^_"
+      }
+    ],
+    "no-var": "error",
+    "prefer-const": "error",
+    "typescript/await-thenable": "error",
+    "typescript/ban-ts-comment": ["error", { "ts-expect-error": "allow-with-description" }],
+    "typescript/explicit-module-boundary-types": "error",
+    "typescript/no-array-delete": "error",
+    "typescript/no-base-to-string": "error",
+    "typescript/no-confusing-void-expression": "error",
+    "typescript/no-deprecated": "error",
+    "typescript/no-explicit-any": "error",
+    "typescript/no-floating-promises": "error",
+    "typescript/no-for-in-array": "error",
+    "typescript/no-implied-eval": "error",
+    "typescript/no-misused-promises": "error",
+    "typescript/no-misused-spread": "error",
+    "typescript/no-non-null-assertion": "error",
+    "typescript/no-redundant-type-constituents": "error",
+    "typescript/no-unnecessary-boolean-literal-compare": "error",
+    "typescript/no-unnecessary-condition": "error",
+    "typescript/no-unnecessary-template-expression": "error",
+    "typescript/no-unnecessary-type-assertion": "error",
+    "typescript/no-unnecessary-type-parameters": "error",
+    "typescript/no-unsafe-argument": "error",
+    "typescript/no-unsafe-assignment": "error",
+    "typescript/no-unsafe-call": "error",
+    "typescript/no-unsafe-enum-comparison": "error",
+    "typescript/no-unsafe-member-access": "error",
+    "typescript/no-unsafe-return": "error",
+    "typescript/no-unsafe-type-assertion": "error",
+    "typescript/only-throw-error": "error",
+    "typescript/prefer-nullish-coalescing": "error",
+    "typescript/prefer-optional-chain": "error",
+    "typescript/prefer-promise-reject-errors": "error",
+    "typescript/prefer-readonly": "error",
+    "typescript/require-await": "error",
+    "typescript/restrict-plus-operands": "error",
+    "typescript/restrict-template-expressions": "error",
+    "typescript/return-await": ["error", "error-handling-correctness-only"],
+    "typescript/strict-boolean-expressions": [
+      "error",
+      { "allowString": false, "allowNumber": false, "allowNullableObject": false }
+    ],
+    "typescript/switch-exhaustiveness-check": [
+      "error",
+      { "considerDefaultExhaustiveForUnions": true }
+    ],
+    "typescript/unbound-method": "error",
+    "typescript/use-unknown-in-catch-callback-variable": "error",
+    "unicorn/no-abusive-eslint-disable": "error",
+    "unicorn/no-unnecessary-await": "error",
+    "unicorn/no-useless-promise-resolve-reject": "error",
+    "unicorn/prefer-node-protocol": "error",
+    "unicorn/prefer-set-has": "error",
+    "vitest/expect-expect": ["error", { "assertFunctionNames": ["expect", "expect*", "assert*"] }],
+    "vitest/no-conditional-expect": "error",
+    "vitest/no-disabled-tests": "error",
+    "vitest/no-focused-tests": "error",
+    "vitest/prefer-strict-equal": "error",
+    "vitest/require-mock-type-parameters": "off",
+    "vitest/require-to-throw-message": "error"
+  }
+}

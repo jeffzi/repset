@@ -37,12 +37,15 @@ export interface EmptyOptions extends Sampling {
 // as theirs do.
 interface Timed {
   readonly now: () => number;
-  readonly fn: () => void;
+  readonly fn: () => unknown;
 }
 
+/** Holds what the batched loop's last empty call returned, as the shared-context sampler does. */
+const consumed: { value: unknown } = { value: undefined };
+
 /**
- * Times `count` consecutive empty calls between one pair of clock reads, as a shared-context sample
- * does.
+ * Times `count` consecutive empty calls between one pair of clock reads, then keeps what the last
+ * call returned, as a shared-context sample does.
  *
  * @param timed - The clock and the empty body.
  * @param count - Calls in this sample.
@@ -50,11 +53,14 @@ interface Timed {
  */
 function batched(timed: Timed, count: number): number {
   const { now, fn } = timed;
+  let last: unknown;
   const started = now();
   for (let call = 0; call < count; call++) {
-    fn();
+    last = fn();
   }
-  return now() - started;
+  const spanMs = now() - started;
+  consumed.value = last;
+  return spanMs;
 }
 
 /**

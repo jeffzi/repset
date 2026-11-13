@@ -60,7 +60,7 @@ export type SamplerClock = Partial<Pick<Sampling, "now" | "stepMs">>;
 export interface SharedContextOptions<Context>
   extends Omit<Sampling, "now" | "stepMs">, SamplerClock {
   /** The benchmark body; every call receives `context`. */
-  readonly fn: (context: Context) => void;
+  readonly fn: (context: Context) => unknown;
   /** The one context every sample runs on; the caller builds and tears it down. */
   readonly context: Context;
   /** Runs after every timing run's last sample, before the run is checked. */
@@ -197,12 +197,20 @@ export function warmedUp(progress: WarmupProgress): WarmupResult {
 
 interface Timed<Context> {
   readonly now: () => number;
-  readonly fn: (context: Context) => void;
+  readonly fn: (context: Context) => unknown;
   readonly context: Context;
 }
 
 /**
- * Times `count` consecutive calls of the body on its context between one pair of clock reads.
+ * Holds what the last sample's last call returned, so the engine cannot treat the body's result as
+ * dead. One store per sample, after the clock read: a store on every call costs about 2 ns per call
+ * on Node and hides a deleted body from the empty-body check.
+ */
+const consumed: { value: unknown } = { value: undefined };
+
+/**
+ * Times `count` consecutive calls of the body on its context between one pair of clock reads, then
+ * keeps what the last call returned until the next sample replaces it.
  *
  * @param timed - The clock, the body, and its context.
  * @param count - Calls in this sample.
@@ -211,11 +219,14 @@ interface Timed<Context> {
  */
 function sample<Context>(timed: Timed<Context>, count: number): number {
   const { now, fn, context } = timed;
+  let last: unknown;
   const started = now();
   for (let call = 0; call < count; call++) {
-    fn(context);
+    last = fn(context);
   }
-  return now() - started;
+  const spanMs = now() - started;
+  consumed.value = last;
+  return spanMs;
 }
 
 /**

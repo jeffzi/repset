@@ -134,6 +134,21 @@ function fasterEveryRun(_sample: number, _timed: boolean, timingRun: number): nu
   return timingRun === 0 ? coarse(40) : coarse(20 / 2 ** (timingRun - 1));
 }
 
+/**
+ * Costs 100 ms a call outside the first timing run, so warmup runs 16 samples of one call; in the
+ * first run, 50 ms on every third sample and 10 fine steps on the rest, so its 64 samples are
+ * discarded and the count grows to 20 for a kept second run of 64 samples of 2000 ms.
+ */
+function discardedFirstRun(sample: number, _timed: boolean, timingRun: number): number {
+  if (timingRun !== 1) return 100;
+  return sample % 3 === 0 ? 50 : 10 * FINE_STEP;
+}
+
+/** Warmup spans of 0 ms (no step read), 30 and then 50: the shortest that read a step is 30. */
+function warmupSpanMs(sample: number): number {
+  return [0, 30][sample] ?? 50;
+}
+
 /** Returns the Error a call throws, failing the test when it throws nothing or a non-Error. */
 function errorOf(call: () => unknown): Error {
   try {
@@ -279,7 +294,7 @@ describe("sampleSharedContext", () => {
         {
           rule: "the shortest warmup sample that read a step",
           stepMs: 0.1875,
-          warmupMs: (sample: number) => [0, 30][sample] ?? 50,
+          warmupMs: warmupSpanMs,
           expected: 27,
         },
         {
@@ -300,6 +315,14 @@ describe("sampleSharedContext", () => {
           expect(result.samples).toBe(expected);
         },
       );
+
+      it("reports the run's length when it fills its store before `time` has passed", () => {
+        const fake = harness((sample, timed) => (timed ? 0.75 : warmupSpanMs(sample)));
+
+        const result = run(fake, 0.1875, { callsPerSample: 1, time: 500, samples: 10 });
+
+        expect(result.timingMs).toBe(20.25);
+      });
     });
   });
 
@@ -510,6 +533,37 @@ describe("sampleSharedContext", () => {
 
         expect(fake.sampleCalls).toContain(20);
         expect(fake.sampleCalls).not.toContain(40);
+      });
+    });
+
+    describe("when a run is discarded", () => {
+      it("counts the discarded run's samples among warmup's", () => {
+        const fake = harness(discardedFirstRun);
+
+        const result = run(fake, FINE_STEP);
+
+        expect(result.warmupSamples).toBe(80);
+      });
+
+      it("counts the samples of every discarded run among warmup's", () => {
+        const fake = harness((_sample, _timed, timingRun) => {
+          if (timingRun === 0) return coarse(40);
+          if (timingRun === 1) return coarse(10);
+          return timingRun === 2 ? coarse(7.5) : coarse(10);
+        });
+
+        const result = run(fake, COARSE_STEP);
+
+        expect(result.timingRuns).toBe(3);
+        expect(result.warmupSamples).toBe(fake.collectsAt[2]);
+      });
+
+      it("reports the kept run's length alone", () => {
+        const fake = harness(discardedFirstRun);
+
+        const result = run(fake, FINE_STEP);
+
+        expect(result.timingMs).toBe(128_000);
       });
     });
 

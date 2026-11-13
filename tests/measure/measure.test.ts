@@ -209,6 +209,40 @@ function fasterAfterWarmup(onBody: (collections: number) => void = () => undefin
   };
 }
 
+/**
+ * Builds a benchmark whose body costs 100 ms a call, on a scripted clock that moves one step on a
+ * read that directly follows another only after a setup with no body call since, or past eight reads
+ * in a row. The body's run, where no more than eight reads follow a body call, reads only the body's
+ * cost, while the empty body's run moves the clock on its own. Stubs `globalThis.gc` with a no-op.
+ *
+ * @param kind - The benchmark's lifecycle.
+ * @returns The benchmark and its scripted clock.
+ */
+function bodyTimedOnly(kind: Kind): Scripted {
+  let afterSetup = false;
+  const clock = steppedClock((reads) => (afterSetup || reads > 8 ? STEP_MS : 0));
+  vi.stubGlobal("gc", () => undefined);
+  return {
+    benchmark: {
+      kind,
+      setup: () => {
+        afterSetup = true;
+        clock.advance(0);
+        return 0;
+      },
+      fn: () => {
+        afterSetup = false;
+        clock.advance(100);
+      },
+      teardown: () => {
+        afterSetup = false;
+        clock.advance(0);
+      },
+    },
+    now: clock.now,
+  };
+}
+
 /** V8's garbage collector, exposed through a flag set at run time. */
 function exposedGc(...args: unknown[]): () => void {
   setFlagsFromString("--expose-gc");
@@ -511,6 +545,8 @@ describe("measure's result", () => {
       emptyRatio: 1600,
       gcDuringTiming: expect.any(Object),
       timingRuns: 1,
+      warmupSamples: 16,
+      timingMs: expect.any(Number),
     });
   });
 
@@ -542,14 +578,14 @@ describe("measure's result", () => {
 
 describe("measure's result, read from the body's run", () => {
   // The body costs 800 steps a call, so its warmup settles on one call per sample. At most three
-  // reads follow a body call while the body runs; the empty body's first sample ends on the fourth
+  // reads follow a body call while the body runs; the empty body's first sample ends on the fifth
   // read after the body's last call and spans 100 steps, every later one 200, so the empty body's
   // warmup settles on two calls per sample: 100 steps per call, a ratio of 8.
   it("reports the count the body's warmup settled on, not the empty body's", async () => {
     let bodyCalled = false;
     const clock = steppedClock((reads) => {
       if (!bodyCalled || reads <= 2) return STEP_MS;
-      return (reads === 4 ? 100 : 200) * STEP_MS;
+      return (reads === 5 ? 100 : 200) * STEP_MS;
     });
     vi.stubGlobal("gc", () => undefined);
     const benchmark: Case<number> = {
@@ -565,6 +601,22 @@ describe("measure's result, read from the body's run", () => {
 
     expect(result.emptyRatio).toBeCloseTo(8, 6);
     expect(result.callsPerSample).toBe(1);
+  });
+
+  it.each(KINDS)("reports the warmup samples of a %s body's run", async (kind) => {
+    const fake = bodyTimedOnly(kind);
+
+    const result = await measure(fake.benchmark, { now: fake.now, callsPerSample: 2 });
+
+    expect(result.warmupSamples).toBe(16);
+  });
+
+  it.each(KINDS)("reports the timing length of a %s body's run", async (kind) => {
+    const fake = bodyTimedOnly(kind);
+
+    const result = await measure(fake.benchmark, { now: fake.now, callsPerSample: 2 });
+
+    expect(result.timingMs).toBe(12_800);
   });
 });
 

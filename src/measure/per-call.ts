@@ -96,7 +96,7 @@ function sample<Context>(perCall: PerCall<Context>, count: number): number {
  * @param perCall - The clock, the lifecycle, and the slots.
  * @param stepMs - The timer step, in milliseconds.
  * @param fixed - The fixed calls per sample, or `undefined` to calibrate one.
- * @returns The count warmup ended on.
+ * @returns The count warmup ended on, and the samples it ran.
  * @throws Whatever `setup`, `fn` or `teardown` throws, and Error when the calibrated count would
  *   pass `ceil(200 × step / 0.1 ns)`, naming the count asked for and the cap, before any sample
  *   runs it.
@@ -129,7 +129,8 @@ function warmup<Context>(
  * @param count - Calls per sample.
  * @param spans - Preallocated storage for the spans, in milliseconds.
  * @param minimums - The wall time and the samples the run must pass.
- * @returns How many entries of `spans` were filled.
+ * @returns How many entries of `spans` were filled, and the run's wall time from before its first
+ *   sample's first setup to after its last sample's last teardown.
  * @throws Whatever `setup`, `fn` or `teardown` throws.
  */
 function timeSamples<Context>(
@@ -137,7 +138,7 @@ function timeSamples<Context>(
   count: number,
   spans: Float64Array,
   minimums: TimedMinimums,
-): number {
+): Pick<SamplerResult, "samples" | "timingMs"> {
   const { now } = perCall;
   const { time, samples } = minimums;
   const capacity = spans.length;
@@ -149,7 +150,7 @@ function timeSamples<Context>(
     elapsedMs = now() - started;
     stored += 1;
   }
-  return stored;
+  return { samples: stored, timingMs: elapsedMs };
 }
 
 /**
@@ -163,8 +164,9 @@ function timeSamples<Context>(
  * its allocation never lands in a timed sample. No two contexts are ever alive at once.
  *
  * @param options - The lifecycle, the collection, the slots, `time` and `samples`, and the clock.
- * @returns The timed spans, the calls per sample, and `timingRuns` of 1: this
- *   sampler never checks a timing run or times again.
+ * @returns The timed spans, the calls per sample, `timingRuns` of 1 (this sampler never checks a
+ *   timing run or times again), warmup's samples without the collection's call, and the
+ *   timed run's wall time, every setup and teardown in it included.
  * @throws Whatever `setup`, `fn`, `teardown` or `collect` throws, leaving every context built and
  *   not torn down in `options.slots`; and Error when warmup's calibrated count would pass
  *   `ceil(200 × step / 0.1 ns)`, naming the count asked for and the cap, before any sample runs it.
@@ -184,11 +186,13 @@ export function samplePerCall<Context>(options: PerCallOptions<Context>): Sample
   collect();
   teardown(held);
   slots[0] = undefined;
-  const samples = timeSamples(perCall, warmed.callsPerSample, spans, options);
+  const { samples, timingMs } = timeSamples(perCall, warmed.callsPerSample, spans, options);
   return {
     spans,
     samples,
     callsPerSample: warmed.callsPerSample,
     timingRuns: 1,
+    warmupSamples: warmed.warmupSamples,
+    timingMs,
   };
 }

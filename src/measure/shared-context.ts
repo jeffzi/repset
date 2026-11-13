@@ -84,10 +84,20 @@ export interface SamplerResult {
   readonly callsPerSample: number;
   /** How many timing runs were taken, the kept one included. */
   readonly timingRuns: number;
+  /**
+   * The samples run before the kept run: warmup's, plus every sample of each discarded timing run.
+   * A call outside any clock read, such as the per-call sampler's collection run, is not a sample.
+   */
+  readonly warmupSamples: number;
+  /**
+   * The kept run's length on the sampler's clock, in milliseconds, from the start of its first
+   * sample to the end of its last; for the per-call sampler, every setup and teardown in between
+   * included.
+   */
+  readonly timingMs: number;
 }
 
-/** What a warmup settles: the count it ended on. */
-export type WarmupResult = Pick<SamplerResult, "callsPerSample">;
+export type WarmupResult = Pick<SamplerResult, "callsPerSample" | "warmupSamples">;
 
 /**
  * The span, in milliseconds, of a sample at the 200 steps a calibrated count reaches.
@@ -233,10 +243,10 @@ export function recordWarmup(progress: WarmupProgress, spanMs: number): void {
  * Ends a warmup's bookkeeping.
  *
  * @param progress - The warmup's bookkeeping after its last sample.
- * @returns The count warmup ended on.
+ * @returns The count warmup ended on, and the samples it recorded.
  */
 export function warmedUp(progress: WarmupProgress): WarmupResult {
-  return { callsPerSample: progress.count };
+  return { callsPerSample: progress.count, warmupSamples: progress.samples };
 }
 
 interface Timed<Context> {
@@ -289,7 +299,7 @@ interface SharedContextWarmup extends WarmupResult {
  * @param timed - The clock, the body, and its context.
  * @param stepMs - The timer step, in milliseconds.
  * @param fixed - The fixed calls per sample, or `undefined` to calibrate one.
- * @returns The count warmup ended on, and its shortest sample that read a step.
+ * @returns The count warmup ended on, the samples it ran, and its shortest sample that read a step.
  * @throws Whatever the body throws, and Error when the count would pass the cap, before any
  *   sample runs it.
  */
@@ -316,17 +326,20 @@ interface TimedRun {
   readonly stored: number;
   /** Whether the store filled before both `time` and `samples` had passed. */
   readonly cutShort: boolean;
+  /** The run's length on the sampler's clock, in milliseconds. */
+  readonly lengthMs: number;
 }
 
 /**
  * Fills `spans` with timed samples until both `time` and `samples` have passed, or `spans` is
- * full.
+ * full, then reads the run's length once, after its last sample, so the loop takes no extra read.
  *
  * @param timed - The clock, the body, and its context.
  * @param count - Calls per sample.
  * @param spans - Preallocated storage for the spans, in milliseconds.
  * @param minimums - The time, on the sampler's clock, and the samples the run must pass.
- * @returns How many entries of `spans` were filled, and whether the store filled first.
+ * @returns How many entries of `spans` were filled, whether the store filled first, and the run's
+ *   length.
  * @throws Whatever the body throws.
  */
 function timeSamples<Context>(
@@ -338,15 +351,17 @@ function timeSamples<Context>(
   const { now } = timed;
   const { time, samples } = minimums;
   let stored = 0;
+  let cutShort = false;
   const started = now();
   while (stored < samples || now() - started < time) {
     if (stored === spans.length) {
-      return { stored, cutShort: true };
+      cutShort = true;
+      break;
     }
     spans[stored] = sample(timed, count);
     stored += 1;
   }
-  return { stored, cutShort: false };
+  return { stored, cutShort, lengthMs: now() - started };
 }
 
 /**
@@ -358,7 +373,8 @@ function timeSamples<Context>(
  * @param hooks - The `collect` callback that runs before the samples, the `afterTiming` callback
  *   that runs after the last sample, before the run is checked (absent means nothing), and the
  *   `time` and `samples` the run must pass.
- * @returns How many entries of `spans` were filled, and whether the store filled first.
+ * @returns How many entries of `spans` were filled, whether the store filled first, and the run's
+ *   length.
  * @throws Whatever the body, `collect` or `afterTiming` throws.
  */
 function timingRun<Context>(
@@ -430,7 +446,8 @@ function grownCount(count: number, spans: Float64Array, stepMs: number): number 
  *
  * @param options - The body, its context, the collection, the callback after each run, `time` and
  *   `samples`, and the clock.
- * @returns The kept run's spans and calls per sample, and the timing runs taken.
+ * @returns The kept run's spans and calls per sample, the timing runs taken, warmup's samples plus
+ *   every discarded run's, and the kept run's length on the sampler's clock.
  * @throws Whatever `fn`, `collect` or `afterTiming` throws; Error when warmup's or a grown count
  *   would pass `ceil(200 × step / 0.1 ns)`, naming the count asked for and the cap; and Error when
  *   the third run is discarded too, naming the count a fourth would need and the runs taken.
@@ -448,6 +465,7 @@ export function sampleSharedContext<Context>(
     callsPerSample === undefined ? calibratedSampleMs(stepMs) : warmed.shortestMs,
   );
   let calls = warmed.callsPerSample;
+  let warmupSamples = warmed.warmupSamples;
   let timingRuns = 1;
   let run = timingRun(timed, calls, spans, options);
   if (callsPerSample === undefined) {
@@ -458,9 +476,17 @@ export function sampleSharedContext<Context>(
           `${String(timingRuns)} timing runs were discarded; the next would need ${String(calls)} calls per sample`,
         );
       }
+      warmupSamples += run.stored;
       run = timingRun(timed, calls, spans, options);
       timingRuns += 1;
     }
   }
-  return { spans, samples: run.stored, callsPerSample: calls, timingRuns };
+  return {
+    spans,
+    samples: run.stored,
+    callsPerSample: calls,
+    timingRuns,
+    warmupSamples,
+    timingMs: run.lengthMs,
+  };
 }

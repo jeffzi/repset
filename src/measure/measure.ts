@@ -99,6 +99,10 @@ export interface Measurement extends Statistics {
   readonly gcDuringTiming?: GcDuringTiming;
   /** How many timing runs the body's sampler took, the kept one included. */
   readonly timingRuns: number;
+  /** The body's samples before its kept run: warmup's, plus every discarded timing run's. */
+  readonly warmupSamples: number;
+  /** The body's kept timing run's length on the clock, in milliseconds. */
+  readonly timingMs: number;
 }
 
 /** What the body's sampler is handed: the empty run's sampling plus `time` and `samples`. */
@@ -202,6 +206,8 @@ export async function measure<Context>(
     emptyRatio,
     ...(gcDuringTiming === undefined ? {} : { gcDuringTiming }),
     timingRuns: run.timingRuns,
+    warmupSamples: run.warmupSamples,
+    timingMs: run.timingMs,
   };
 }
 
@@ -262,7 +268,7 @@ async function engineNoInline(): Promise<NoInline | undefined> {
  *   `time` and `samples` timing runs until.
  * @param timing - Receives the end of each timing run's samples, before the sampler checks the run;
  *   the collection before each run records their start.
- * @returns The body's timed spans.
+ * @returns What the body's sampler returned.
  * @throws Whatever `setup` throws, before anything else runs.
  * @throws Error when the body's first call returns a thenable, after teardown ran.
  * @throws Whatever the body or the sampler throws, unchanged, after teardown ran; a teardown error
@@ -303,7 +309,7 @@ function measureSharedContext<Context>(
  * @param sampling - The clock, its step, the collection, the fixed count if one was given, and the
  *   `time` and `samples` timing runs until.
  * @param timing - Receives the end of the timed samples; the collection records their start.
- * @returns The body's timed spans.
+ * @returns What the body's sampler returned.
  * @throws Error when the body's first call returns a thenable, after its context is torn down.
  * @throws Whatever `setup`, `fn`, `teardown` or the sampler throws, unchanged, after every context
  *   built and not torn down is torn down; a teardown error during that cleanup is discarded.

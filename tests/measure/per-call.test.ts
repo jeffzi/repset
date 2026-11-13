@@ -169,6 +169,14 @@ describe("samplePerCall", () => {
       );
     });
 
+    it("reports the run's length, every setup and teardown in it included", () => {
+      const fake = harness({ bodyMs: () => 100, buildMs: 50, teardownMs: 50 });
+
+      const result = run(fake, { stepMs: FINE_STEP, callsPerSample: 3 });
+
+      expect(result.timingMs).toBe(38_400);
+    });
+
     it("runs without a teardown", () => {
       const fake = harness({ bodyMs: () => 200 });
 
@@ -194,6 +202,14 @@ describe("samplePerCall", () => {
         run(fake, { stepMs: FINE_STEP });
 
         expect(fake.collectsAt).toStrictEqual([16]);
+      });
+
+      it("reports warmup's samples, leaving out the collection's call", () => {
+        const fake = harness({ bodyMs: () => 200 });
+
+        const result = run(fake, { stepMs: FINE_STEP });
+
+        expect(result.warmupSamples).toBe(16);
       });
 
       it("runs 64 timed samples", () => {

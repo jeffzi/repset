@@ -4,6 +4,8 @@ min_version = "2026.11.1"
 [tools]
 # Same major as @types/node in package.json.
 node = "26"
+# The measure tests spawn real Bun children; on CI they must run, not skip.
+bun = "1"
 "aqua:evilmartians/lefthook" = "2"
 "aqua:gitleaks/gitleaks" = "8"
 "aqua:go-task/task" = "3"

@@ -1,5 +1,5 @@
 # No [settings] or [env]: they would make every clone run `mise trust`.
-min_version = "2026.10.12"
+min_version = "2026.11.1"
 
 [tools]
 # Same major as @types/node in package.json.

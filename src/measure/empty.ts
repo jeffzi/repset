@@ -11,11 +11,13 @@
 
 import {
   cappedCount,
-  TIMED_MIN_SAMPLES,
   WARMUP_MIN_SAMPLES,
   type SamplerResult,
   type Sampling,
 } from "./shared-context.js";
+
+/** The empty run's timed samples, whatever `time` and `samples` the body ran on. */
+const TIMED_SAMPLES = 64;
 
 /** The empty body the body's reading is compared against. */
 export function empty(): void {
@@ -103,7 +105,7 @@ export function sampleEmpty(options: EmptyOptions): EmptyResult {
       count = cappedCount(count, spanMs, stepMs);
     }
   }
-  const spans = new Float64Array(TIMED_MIN_SAMPLES);
+  const spans = new Float64Array(TIMED_SAMPLES);
   collect();
   for (let stored = 0; stored < spans.length; stored++) {
     spans[stored] = span(timed, count);

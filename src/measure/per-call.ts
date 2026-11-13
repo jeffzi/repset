@@ -17,25 +17,26 @@
  */
 
 import {
+  calibratedSampleMs,
   recordWarmup,
+  spanStore,
   startWarmup,
   warmedUp,
-  TIMED_MIN_MS,
-  TIMED_MIN_SAMPLES,
   WARMUP_MIN_SAMPLES,
   type SamplerClock,
   type SamplerResult,
   type Sampling,
+  type TimedMinimums,
   type WarmupResult,
 } from "./shared-context.js";
 import { performanceNow, timerStepMs } from "./timer.js";
 
 const WARMUP_MIN_MS = 3000;
 const WARMUP_MAX_SAMPLES = 1000;
-const TIMED_MAX_SAMPLES = 2000;
 
 /** `now` defaults to `performance.now()`, and `stepMs` to a probe of `now`. */
-export interface PerCallOptions<Context> extends Omit<Sampling, "now" | "stepMs">, SamplerClock {
+export interface PerCallOptions<Context>
+  extends Omit<Sampling, "now" | "stepMs">, SamplerClock, TimedMinimums {
   /** Builds the fresh context one body call consumes. */
   readonly setup: () => Context;
   /** The benchmark body; every call receives a context built for it alone. */
@@ -121,12 +122,13 @@ function warmup<Context>(
 }
 
 /**
- * Fills `spans` with timed samples until it is full, or until both 1000 ms of wall time, every
- * setup and teardown included, and 64 samples have passed.
+ * Fills `spans` with timed samples until it is full, or until both `time` of wall time, every
+ * setup and teardown included, and `samples` have passed.
  *
  * @param perCall - The clock, the lifecycle, and the slots.
  * @param count - Calls per sample.
  * @param spans - Preallocated storage for the spans, in milliseconds.
+ * @param minimums - The wall time and the samples the run must pass.
  * @returns How many entries of `spans` were filled.
  * @throws Whatever `setup`, `fn` or `teardown` throws.
  */
@@ -134,13 +136,15 @@ function timeSamples<Context>(
   perCall: PerCall<Context>,
   count: number,
   spans: Float64Array,
+  minimums: TimedMinimums,
 ): number {
   const { now } = perCall;
+  const { time, samples } = minimums;
   const capacity = spans.length;
   let stored = 0;
   const started = now();
   let elapsedMs = 0;
-  while (stored < capacity && (stored < TIMED_MIN_SAMPLES || elapsedMs < TIMED_MIN_MS)) {
+  while (stored < capacity && (stored < samples || elapsedMs < time)) {
     spans[stored] = sample(perCall, count);
     elapsedMs = now() - started;
     stored += 1;
@@ -152,11 +156,13 @@ function timeSamples<Context>(
  * Warms a perCall body up, collects once, then times every sample, each call on a fresh context.
  *
  * The collection builds one context, runs the body on it outside any clock read, calls `collect`
- * while it is alive, then tears it down. The span store holds 2000 samples and is allocated before
- * the collection, so its allocation never lands in a timed sample. No two contexts are ever alive
- * at once.
+ * while it is alive, then tears it down. Timing takes samples until both `time`, in wall time with
+ * every setup and teardown, and `samples` have passed, or the span store is full; a run that fills
+ * the store is returned as it is. The store holds `time` filled with 200-step samples, rounded up,
+ * plus `samples`, whether or not the count was fixed, and is allocated before the collection, so
+ * its allocation never lands in a timed sample. No two contexts are ever alive at once.
  *
- * @param options - The lifecycle, the collection, the slots, and the clock.
+ * @param options - The lifecycle, the collection, the slots, `time` and `samples`, and the clock.
  * @returns The timed spans, the calls per sample, and `timingRuns` of 1: this
  *   sampler never checks a timing run or times again.
  * @throws Whatever `setup`, `fn`, `teardown` or `collect` throws, leaving every context built and
@@ -171,14 +177,14 @@ export function samplePerCall<Context>(options: PerCallOptions<Context>): Sample
   const slots = options.slots ?? [];
   const perCall: PerCall<Context> = { now, setup, fn, teardown, slots };
   const warmed = warmup(perCall, stepMs, callsPerSample);
-  const spans = new Float64Array(TIMED_MAX_SAMPLES);
+  const spans = spanStore(options, calibratedSampleMs(stepMs));
   const held = setup();
   slots[0] = held;
   fn(held);
   collect();
   teardown(held);
   slots[0] = undefined;
-  const samples = timeSamples(perCall, warmed.callsPerSample, spans);
+  const samples = timeSamples(perCall, warmed.callsPerSample, spans, options);
   return {
     spans,
     samples,

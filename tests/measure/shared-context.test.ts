@@ -72,9 +72,11 @@ function harness(costMs: CostMs): Harness {
 interface RunOptions {
   readonly callsPerSample?: number;
   readonly afterTiming?: boolean;
+  readonly time?: number;
+  readonly samples?: number;
 }
 
-/** Runs the sampler on a harness with a fresh context. */
+/** Runs the sampler on a harness with a fresh context, for 1000 ms and 64 samples unless given. */
 function run(fake: Harness, stepMs: number, options: RunOptions = {}): SamplerResult {
   const context: World = { name: "world" };
   return sampleSharedContext({
@@ -83,6 +85,8 @@ function run(fake: Harness, stepMs: number, options: RunOptions = {}): SamplerRe
     fn: fake.fn,
     context,
     collect: fake.collect,
+    time: options.time ?? 1000,
+    samples: options.samples ?? 64,
     ...(options.callsPerSample === undefined ? {} : { callsPerSample: options.callsPerSample }),
     ...(options.afterTiming === true ? { afterTiming: fake.afterTiming } : {}),
   });
@@ -262,16 +266,59 @@ describe("sampleSharedContext", () => {
       expect(fake.collectsAt).toHaveLength(1);
     });
 
-    describe("when the store fills before 1000 ms have passed", () => {
-      it("stops at the store's size, the time minimum in 200-step samples plus 64", () => {
-        const fake = harness((_sample, timed) => (timed ? 0.75 : 50));
+    it("runs until `time` and `samples` have passed when its samples are as long as warmup's", () => {
+      const fake = harness(() => 0.75);
 
-        const result = run(fake, 0.1875, { callsPerSample: 1 });
+      const result = run(fake, 0.1875, { callsPerSample: 1, time: 500, samples: 10 });
 
-        expect(result.spans).toBeInstanceOf(Float64Array);
-        expect(result.spans).toHaveLength(91);
-        expect(result.samples).toBe(91);
-      });
+      expect(result.samples).toBe(667);
+    });
+
+    describe("when its samples get shorter than warmup's", () => {
+      it.each([
+        {
+          rule: "the shortest warmup sample that read a step",
+          stepMs: 0.1875,
+          warmupMs: (sample: number) => [0, 30][sample] ?? 50,
+          expected: 27,
+        },
+        {
+          rule: "one step when no warmup sample read one",
+          stepMs: 100,
+          warmupMs: () => 25,
+          expected: 15,
+        },
+      ])(
+        "stops at the store's size, `time` in samples of $rule, rounded up, plus `samples`",
+        ({ stepMs, warmupMs, expected }) => {
+          const fake = harness((sample, timed) => (timed ? 0.75 : warmupMs(sample)));
+
+          const result = run(fake, stepMs, { callsPerSample: 1, time: 500, samples: 10 });
+
+          expect(result.spans).toBeInstanceOf(Float64Array);
+          expect(result.spans).toHaveLength(expected);
+          expect(result.samples).toBe(expected);
+        },
+      );
+    });
+  });
+
+  describe("when calibrating the count", () => {
+    it("sizes the store to `time` in 200-step samples, rounded up, plus `samples`", () => {
+      const fake = harness(() => 100);
+
+      const result = run(fake, FINE_STEP, { time: 100.1, samples: 10 });
+
+      expect(result.spans).toHaveLength(523);
+    });
+
+    it("keeps a run of exactly `samples` samples at `time` 0 whose median spans 200 steps", () => {
+      const fake = harness(() => coarse(40));
+
+      const result = run(fake, COARSE_STEP, { time: 0, samples: 10 });
+
+      expect(result.samples).toBe(10);
+      expect(result.timingRuns).toBe(1);
     });
   });
 
@@ -496,6 +543,8 @@ describe("sampleSharedContext", () => {
       fn: fake.fn,
       context,
       collect: fake.collect,
+      time: 1000,
+      samples: 64,
     });
 
     expect(fake.contexts).toStrictEqual(new Set([context]));
@@ -514,6 +563,8 @@ describe("sampleSharedContext", () => {
         collect: () => {
           collections += 1;
         },
+        time: 1000,
+        samples: 64,
       });
 
       expect(collections).toBe(result.timingRuns);

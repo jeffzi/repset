@@ -13,7 +13,12 @@
 import { empty, type Lifecycle, sampleEmpty } from "./empty.js";
 import { runningEngine } from "./engine.js";
 import { keep, samplePerCall } from "./per-call.js";
-import { sampleSharedContext, type SamplerResult, type Sampling } from "./shared-context.js";
+import {
+  sampleSharedContext,
+  type SamplerResult,
+  type Sampling,
+  type TimedMinimums,
+} from "./shared-context.js";
 import { NS_PER_MS, type Statistics, summarize } from "./statistics.js";
 import { performanceNow, timerStepMs } from "./timer.js";
 
@@ -25,6 +30,12 @@ const GC_MINOR = 1;
 
 /** `detail.kind` of a Node `gc` performance entry for a full mark-compact (`NODE_PERFORMANCE_GC_MAJOR`). */
 const GC_MAJOR = 4;
+
+/** The time, in milliseconds, the body's timed samples span at least when `time` is absent. */
+const DEFAULT_TIME_MS = 1000;
+
+/** The fewest timed samples the body runs when `samples` is absent. */
+const DEFAULT_SAMPLES = 64;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -54,6 +65,16 @@ export interface MeasureOptions {
   readonly noInline?: NoInline;
   /** The clock, in milliseconds; defaults to `performance.now()`. */
   readonly now?: () => number;
+  /**
+   * The time, in milliseconds, the body's timed samples span at least; defaults to 1000. Not
+   * validated: the caller passes a finite number of 0 or more.
+   */
+  readonly time?: number;
+  /**
+   * The fewest timed samples the body runs; defaults to 64. Not validated: the caller passes an
+   * integer of 1 or more.
+   */
+  readonly samples?: number;
 }
 
 /** The collections a `gc` performance observer saw while the body's samples were timed. */
@@ -80,6 +101,9 @@ export interface Measurement extends Statistics {
   readonly timingRuns: number;
 }
 
+/** What the body's sampler is handed: the empty run's sampling plus `time` and `samples`. */
+type BodySampling = Sampling & TimedMinimums;
+
 /** A case whose absent teardown was replaced by one that releases nothing. */
 interface Released<Context> extends Case<Context> {
   readonly teardown: (context: Context) => void;
@@ -103,7 +127,9 @@ interface TimingWindow {
  * body: some bodies read up to 78 % slow.
  *
  * @param benchmark - The benchmark to measure.
- * @param options - A fixed count, an injected `noInline`, or a clock to read.
+ * @param options - A fixed count, an injected `noInline`, a clock to read, and the `time` and
+ *   `samples` the body's timing runs until, 1000 ms and 64 when absent; the empty body always
+ *   takes 64 timed samples.
  * @returns The body's per-call statistics in nanoseconds and how they were taken.
  * @throws Error when no garbage collector is exposed, before anything runs.
  * @throws Error when Bun is running but `bun:jsc` cannot be loaded, before anything runs.
@@ -141,6 +167,8 @@ export async function measure<Context>(
     },
   };
 
+  const bodySampling: BodySampling = { ...sampling, ...timedMinimums(options) };
+
   const released: Released<Context> = { ...benchmark, teardown: benchmark.teardown ?? keep };
   const observer = observeCollections();
   let run: SamplerResult;
@@ -148,8 +176,8 @@ export async function measure<Context>(
   try {
     run =
       benchmark.kind === "sharedContext"
-        ? measureSharedContext(released, sampling, timing)
-        : measurePerCall(released, sampling, timing);
+        ? measureSharedContext(released, bodySampling, timing)
+        : measurePerCall(released, bodySampling, timing);
     if (observer !== undefined) {
       gcDuringTiming = await observer.during(timing);
     }
@@ -175,6 +203,16 @@ export async function measure<Context>(
     ...(gcDuringTiming === undefined ? {} : { gcDuringTiming }),
     timingRuns: run.timingRuns,
   };
+}
+
+/**
+ * The `time` and `samples` the body's timing runs until.
+ *
+ * @param options - The options `measure` was given.
+ * @returns The given `time` and `samples`, 1000 ms and 64 when absent.
+ */
+function timedMinimums(options: MeasureOptions): TimedMinimums {
+  return { time: options.time ?? DEFAULT_TIME_MS, samples: options.samples ?? DEFAULT_SAMPLES };
 }
 
 /**
@@ -220,7 +258,8 @@ async function engineNoInline(): Promise<NoInline | undefined> {
  * then tears the context down.
  *
  * @param benchmark - The benchmark.
- * @param sampling - The clock, its step, the collection, and the fixed count if one was given.
+ * @param sampling - The clock, its step, the collection, the fixed count if one was given, and the
+ *   `time` and `samples` timing runs until.
  * @param timing - Receives the end of each timing run's samples, before the sampler checks the run;
  *   the collection before each run records their start.
  * @returns The body's timed spans.
@@ -232,7 +271,7 @@ async function engineNoInline(): Promise<NoInline | undefined> {
  */
 function measureSharedContext<Context>(
   benchmark: Released<Context>,
-  sampling: Sampling,
+  sampling: BodySampling,
   timing: TimingWindow,
 ): SamplerResult {
   const { setup, fn, teardown } = benchmark;
@@ -261,7 +300,8 @@ function measureSharedContext<Context>(
  * tearing down every context left alive when anything throws.
  *
  * @param benchmark - The benchmark.
- * @param sampling - The clock, its step, the collection, and the fixed count if one was given.
+ * @param sampling - The clock, its step, the collection, the fixed count if one was given, and the
+ *   `time` and `samples` timing runs until.
  * @param timing - Receives the end of the timed samples; the collection records their start.
  * @returns The body's timed spans.
  * @throws Error when the body's first call returns a thenable, after its context is torn down.
@@ -270,7 +310,7 @@ function measureSharedContext<Context>(
  */
 function measurePerCall<Context>(
   benchmark: Released<Context>,
-  sampling: Sampling,
+  sampling: BodySampling,
   timing: TimingWindow,
 ): SamplerResult {
   const { setup, fn, teardown } = benchmark;

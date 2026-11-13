@@ -473,6 +473,22 @@ describe("measure's empty-body check", () => {
   });
 });
 
+describe("measure's time and samples", () => {
+  it.each(KINDS)("times a %s body until both given have passed", async (kind) => {
+    const fake = bench(kind);
+
+    const result = await measure(fake.benchmark, {
+      now: fake.now,
+      callsPerSample: 1,
+      noInline: fake.noInline,
+      time: 2950,
+      samples: 10,
+    });
+
+    expect(result.samples).toBe(30);
+  });
+});
+
 describe("measure's result", () => {
   it("returns the timed statistics with the step, the fixed count, the collection and the empty ratio", async () => {
     const fake = bench("sharedContext");

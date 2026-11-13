@@ -97,9 +97,9 @@ function sample<Context>(perCall: PerCall<Context>, count: number): number {
  * @param stepMs - The timer step, in milliseconds.
  * @param fixed - The fixed calls per sample, or `undefined` to calibrate one.
  * @returns The count warmup ended on, and the samples it ran.
- * @throws Whatever `setup`, `fn` or `teardown` throws, and Error when the calibrated count would
- *   pass `ceil(200 × step / 0.1 ns)`, naming the count asked for and the cap, before any sample
- *   runs it.
+ * @throws Whatever `setup`, `fn` or `teardown` throws, and BudgetError when the calibrated count
+ *   would pass `ceil(200 × step / 0.1 ns)`, naming the count asked for and the cap, before any
+ *   sample runs it.
  */
 function warmup<Context>(
   perCall: PerCall<Context>,
@@ -168,7 +168,7 @@ function timeSamples<Context>(
  *   timing run or times again), warmup's samples without the collection's call, and the
  *   timed run's wall time, every setup and teardown in it included.
  * @throws Whatever `setup`, `fn`, `teardown` or `collect` throws, leaving every context built and
- *   not torn down in `options.slots`; and Error when warmup's calibrated count would pass
+ *   not torn down in `options.slots`; and BudgetError when warmup's calibrated count would pass
  *   `ceil(200 × step / 0.1 ns)`, naming the count asked for and the cap, before any sample runs it.
  */
 export function samplePerCall<Context>(options: PerCallOptions<Context>): SamplerResult {

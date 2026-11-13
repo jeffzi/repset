@@ -91,7 +91,7 @@ function summed(timed: Timed, count: number): number {
  * @param options - The lifecycle to time it in, the clock, its step, the collection, and the fixed
  *   count if one was given.
  * @returns The 64 timed spans and the calls per sample they ran.
- * @throws Whatever `collect` throws, and Error when warmup's count would pass
+ * @throws Whatever `collect` throws, and BudgetError when warmup's count would pass
  *   `ceil(200 × step / 0.1 ns)`, naming the count asked for and the cap.
  */
 export function sampleEmpty(options: EmptyOptions): EmptyResult {

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { sampleSharedContext, type SamplerResult } from "../../src/measure/shared-context.js";
+import {
+  BudgetError,
+  sampleSharedContext,
+  type SamplerResult,
+} from "../../src/measure/shared-context.js";
 import { COARSE_STEP, FINE_STEP } from "./fixtures.js";
 
 interface World {
@@ -534,6 +538,26 @@ describe("sampleSharedContext", () => {
         expect(fake.sampleCalls).toContain(20);
         expect(fake.sampleCalls).not.toContain(40);
       });
+    });
+
+    it.each([
+      { when: "warmup's count passes the cap", costMs: () => 0, stepMs: CAPPED_STEP },
+      {
+        when: "a grown count passes the cap",
+        costMs: shortRuns([{ calls: 200, shortSteps: 1 }]),
+        stepMs: CAPPED_STEP,
+      },
+      {
+        when: "the third run is discarded within the cap",
+        costMs: fasterEveryRun,
+        stepMs: COARSE_STEP,
+      },
+    ])("fails with a BudgetError when $when", ({ costMs, stepMs }) => {
+      const fake = harness(costMs);
+
+      const error = errorOf(() => run(fake, stepMs));
+
+      expect(error).toBeInstanceOf(BudgetError);
     });
 
     describe("when a run is discarded", () => {

@@ -29,6 +29,14 @@ export const WARMUP_MIN_SAMPLES = 16;
 /** The most timing runs a calibrated count takes before the sampler gives up. */
 const MAX_TIMING_RUNS = 3;
 
+/**
+ * A sampler's refusal to time a body within its budget: a count past the cap, or a third timing run
+ * discarded too. `measure` tells it from an error the body throws by its class, never its message.
+ */
+export class BudgetError extends Error {
+  override name = "BudgetError";
+}
+
 /** What every sampler is handed beyond the body: the clock, its step, the collection, a fixed count. */
 export interface Sampling {
   /** The clock, in milliseconds. */
@@ -175,7 +183,7 @@ function calibratedCount(count: number, spanMs: number, stepMs: number): number 
  * @param spanMs - That sample's span, in milliseconds.
  * @param stepMs - The timer step, in milliseconds.
  * @returns The next count.
- * @throws Error when the next count passes the cap, naming the count asked for and the cap.
+ * @throws BudgetError when the next count passes the cap, naming the count asked for and the cap.
  */
 export function cappedCount(count: number, spanMs: number, stepMs: number): number {
   return withinCap(calibratedCount(count, spanMs, stepMs), stepMs);
@@ -187,12 +195,12 @@ export function cappedCount(count: number, spanMs: number, stepMs: number): numb
  * @param next - The count asked for.
  * @param stepMs - The timer step, in milliseconds.
  * @returns `next`.
- * @throws Error when `next` passes the cap, naming the count asked for and the cap.
+ * @throws BudgetError when `next` passes the cap, naming the count asked for and the cap.
  */
 function withinCap(next: number, stepMs: number): number {
   const cap = Math.ceil((MIN_STEPS_PER_SAMPLE * stepMs) / SHORTEST_BODY_MS);
   if (next > cap) {
-    throw new Error(
+    throw new BudgetError(
       `warmup asked for ${String(next)} calls per sample, above the cap of ${String(cap)}`,
     );
   }
@@ -229,7 +237,7 @@ export function startWarmup(stepMs: number, fixed: number | undefined): WarmupPr
  *
  * @param progress - The warmup's bookkeeping, updated in place.
  * @param spanMs - The span of the sample that just ran `progress.count` calls, in milliseconds.
- * @throws Error when the next count passes `ceil(200 × step / 0.1 ns)`, naming the count
+ * @throws BudgetError when the next count passes `ceil(200 × step / 0.1 ns)`, naming the count
  *   asked for and the cap, before any sample runs it.
  */
 export function recordWarmup(progress: WarmupProgress, spanMs: number): void {
@@ -300,7 +308,7 @@ interface SharedContextWarmup extends WarmupResult {
  * @param stepMs - The timer step, in milliseconds.
  * @param fixed - The fixed calls per sample, or `undefined` to calibrate one.
  * @returns The count warmup ended on, the samples it ran, and its shortest sample that read a step.
- * @throws Whatever the body throws, and Error when the count would pass the cap, before any
+ * @throws Whatever the body throws, and BudgetError when the count would pass the cap, before any
  *   sample runs it.
  */
 function warmup<Context>(
@@ -418,8 +426,8 @@ function isKept(spans: Float64Array, run: TimedRun, stepMs: number): boolean {
  * @param spans - The discarded run's spans, in milliseconds.
  * @param stepMs - The timer step, in milliseconds.
  * @returns The next count, or 100 times `count` when no sample read a step.
- * @throws Error when the next count passes `ceil(200 × step / 0.1 ns)`, naming the count asked for
- *   and the cap.
+ * @throws BudgetError when the next count passes `ceil(200 × step / 0.1 ns)`, naming the count asked
+ *   for and the cap.
  */
 function grownCount(count: number, spans: Float64Array, stepMs: number): number {
   let shortest = 0;
@@ -448,9 +456,10 @@ function grownCount(count: number, spans: Float64Array, stepMs: number): number 
  *   `samples`, and the clock.
  * @returns The kept run's spans and calls per sample, the timing runs taken, warmup's samples plus
  *   every discarded run's, and the kept run's length on the sampler's clock.
- * @throws Whatever `fn`, `collect` or `afterTiming` throws; Error when warmup's or a grown count
- *   would pass `ceil(200 × step / 0.1 ns)`, naming the count asked for and the cap; and Error when
- *   the third run is discarded too, naming the count a fourth would need and the runs taken.
+ * @throws Whatever `fn`, `collect` or `afterTiming` throws; BudgetError when warmup's or a grown
+ *   count would pass `ceil(200 × step / 0.1 ns)`, naming the count asked for and the cap; and
+ *   BudgetError when the third run is discarded too, naming the count a fourth would need and the
+ *   runs taken.
  */
 export function sampleSharedContext<Context>(
   options: SharedContextOptions<Context>,
@@ -472,7 +481,7 @@ export function sampleSharedContext<Context>(
     while (!isKept(spans, run, stepMs)) {
       calls = grownCount(calls, spans.subarray(0, run.stored), stepMs);
       if (timingRuns === MAX_TIMING_RUNS) {
-        throw new Error(
+        throw new BudgetError(
           `${String(timingRuns)} timing runs were discarded; the next would need ${String(calls)} calls per sample`,
         );
       }

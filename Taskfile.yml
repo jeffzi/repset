@@ -1,0 +1,218 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+version: "3"
+
+vars:
+  MISE: mise exec --
+
+tasks:
+  default:
+    cmds:
+      - task --list --sort none
+    silent: true
+
+  install:
+    desc: Install the pinned tools, the npm dependencies and the git hooks
+    deps: [_require-mise]
+    cmds:
+      - mise install --locked
+      - task: _deps
+      - "{{.MISE}} lefthook install"
+
+  test:
+    desc: Run the tests with coverage; arguments after -- run only those, without coverage
+    deps: [_deps]
+    cmds:
+      # A partial coverage report would skew the quality check.
+      - "{{.MISE}} npx vitest run {{if .CLI_ARGS}}{{.CLI_ARGS}}{{else}}--coverage{{end}}"
+
+  build:
+    desc: Compile src/ to dist/
+    deps: [_deps]
+    cmds:
+      # tsc keeps the output of deleted sources.
+      - '{{.MISE}} node -e "fs.rmSync(''dist'', { recursive: true, force: true })"'
+      - "{{.MISE}} npx tsc -p tsconfig.build.json"
+
+  check:
+    desc: Run the checks, fixing what they can; ONLY=<names> runs some, files after -- narrow them
+    vars:
+      STEPS:
+        '{{.ONLY | default "mise-lock lint md fmt links types spelling actions quality security
+        secrets"}}'
+    cmds:
+      - for:
+          var: STEPS
+        task: "_{{.ITEM}}"
+
+  fix:
+    desc: Fix what the checks can, then delete unused code
+    deps: [_deps]
+    cmds:
+      - for: [lint, md, fmt]
+        task: "_{{.ITEM}}"
+      - "{{.MISE}} npx fallow fix --yes --no-create-config"
+
+  check-package:
+    desc: Build, lint the published surface, then install the packed package in an empty app
+    deps: [_deps]
+    cmds:
+      - task: build
+      - "{{.MISE}} npx publint --strict"
+      - "{{.MISE}} npx attw --pack . --profile esm-only"
+      # Outside the repository, a nested install fails on any undeclared dependency.
+      - |
+        {{.MISE}} sh -c '
+          set -eu
+          name=$(node -p "require(\"./package.json\").name")
+          app=$(mktemp -d)
+          trap "rm -rf \"$app\"" EXIT
+          npm pack --silent --pack-destination "$app"
+          cp .npmrc scripts/import-exports.ts "$app/"
+          echo "{ \"name\": \"package-check\", \"private\": true, \"type\": \"module\" }" > "$app/package.json"
+          cd "$app"
+          npm install --no-audit --no-fund --install-strategy=nested ./*.tgz
+          node import-exports.ts "$name"
+        '
+
+  # Runs CMD on existing, non-ignored files matching PATTERN (narrowed by the files after --), and
+  # skips it when none match.
+  _on-files:
+    internal: true
+    vars:
+      PATHS: "{{range .CLI_ARGS_LIST}}{{. | shellQuote}} {{end}}"
+      FILES:
+        sh: >-
+          listed=$(git ls-files --cached --others --exclude-standard -- {{.PATHS}}) && deleted=$(git
+          ls-files --deleted -- {{.PATHS}}) && { printf '%s\n' "$listed" | grep -E '{{.PATTERN}}' |
+          grep -vxF -e "$deleted" || true; }
+    cmds:
+      - cmd: "{{.CMD}} {{range .FILES | splitLines}}{{if .}}{{. | shellQuote}} {{end}}{{end}}"
+        if: "{{if .FILES}}true{{else}}false{{end}}"
+
+  _mise-lock:
+    internal: true
+    deps: [_deps]
+    cmds:
+      - "{{.MISE}} npx tsx scripts/check-mise-lock.ts"
+
+  _lint:
+    internal: true
+    deps: [_deps]
+    cmds:
+      - task: _on-files
+        vars:
+          PATTERN: '\.(ts|tsx|mts|cts|js)$'
+          CMD: "{{.MISE}} npx oxlint --fix"
+
+  _md:
+    internal: true
+    deps: [_deps]
+    cmds:
+      - task: _on-files
+        vars:
+          PATTERN: '\.md$'
+          CMD: "{{.MISE}} npx markdownlint-cli2 --fix"
+
+  _fmt:
+    internal: true
+    deps: [_deps]
+    cmds:
+      - task: _on-files
+        vars:
+          PATTERN: '\.(ts|tsx|mts|cts|js|json|jsonc|md|yml|yaml)$'
+          CMD: "{{.MISE}} npx oxfmt --no-error-on-unmatched-pattern"
+
+  _links:
+    internal: true
+    deps: [_require-mise]
+    cmds:
+      - task: _on-files
+        vars:
+          PATTERN: '^([^.]|\.github/).*\.md$'
+          CMD: "{{.MISE}} lychee --offline --include-fragments --no-progress"
+
+  # Only the Links workflow runs this.
+  _urls:
+    internal: true
+    deps: [_require-mise]
+    cmds:
+      - task: _on-files
+        vars:
+          PATTERN: '^([^.]|\.github/).*\.md$'
+          CMD: "{{.MISE}} lychee --scheme https --scheme http --include-fragments --no-progress"
+
+  _types:
+    internal: true
+    deps: [_deps]
+    cmds:
+      - "{{.MISE}} npx tsc -p tsconfig.json"
+      - "{{.MISE}} npx oxlint --type-aware --disable-nested-config"
+
+  _spelling:
+    internal: true
+    deps: [_deps]
+    cmds:
+      - task: _on-files
+        vars:
+          PATTERN: '\.(ts|tsx|mts|cts|md)$'
+          CMD: "{{.MISE}} npx cspell --no-progress --no-summary --no-must-find-files"
+
+  _actions:
+    internal: true
+    deps: [_require-mise]
+    cmds:
+      - task: _on-files
+        vars:
+          PATTERN: '^\.github/workflows/.*\.ya?ml$'
+          CMD: "{{.MISE}} actionlint"
+      - task: _on-files
+        vars:
+          PATTERN: '^\.github/.*\.ya?ml$'
+          CMD: "{{.MISE}} zizmor --persona=pedantic"
+
+  _quality:
+    internal: true
+    deps: [_deps]
+    cmds:
+      - "{{.MISE}} npx tsx scripts/check-coverage-fresh.ts"
+      - "{{.MISE}} npx fallow --fail-on-issues --quiet"
+
+  _security:
+    internal: true
+    deps: [_deps]
+    cmds:
+      - "{{.MISE}} npx fallow security"
+
+  _secrets:
+    internal: true
+    deps: [_require-mise]
+    cmds:
+      - "{{.MISE}} gitleaks git --redact --no-banner --log-opts='--all --full-history -m'"
+      - "{{.MISE}} gitleaks git --pre-commit --staged --redact --no-banner"
+
+  _commitlint:
+    internal: true
+    deps: [_deps]
+    cmds:
+      - "{{.MISE}} npx commitlint --edit {{.CLI_ARGS}}"
+
+  _require-mise:
+    internal: true
+    preconditions:
+      - sh: command -v mise
+        msg:
+          "mise is required — install it (https://mise.jdx.dev/installing-mise.html), then run: mise
+          exec -- task install"
+
+  # npm ci wipes node_modules, so it runs only when package-lock.json changed.
+  _deps:
+    internal: true
+    deps: [_require-mise]
+    run: once
+    sources:
+      - package-lock.json
+    generates:
+      - node_modules/.package-lock.json
+    method: timestamp
+    cmds:
+      - "{{.MISE}} npm ci"

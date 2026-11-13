@@ -1,25 +1,36 @@
-import { readdirSync, statSync } from "node:fs";
-import { join, relative, resolve, sep } from "node:path";
+import { readdirSync, realpathSync, statSync } from "node:fs";
+import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const COVERAGE_REPORT = "coverage/coverage-final.json";
+const VITEST_CONFIG = "vitest.config.ts";
 
 function isSourceFile(name: string): boolean {
   return name.endsWith(".ts") && !name.endsWith(".d.ts");
 }
 
+function exists(path: string): boolean {
+  return statSync(path, { throwIfNoEntry: false }) !== undefined;
+}
+
 /**
- * Verify that `coverage/coverage-final.json` is at least as recent as every `.ts` source under
- * `src/` (declaration files excluded).
+ * @param dir - Root to walk.
+ * @returns `dir`, every directory below it, and every `.ts` source; directories count because
+ * deleting or renaming a file only bumps its directory's mtime.
+ */
+function listInputs(dir: string): string[] {
+  const entries = readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isDirectory() || (entry.isFile() && isSourceFile(entry.name)))
+    .map((entry) => join(entry.parentPath, entry.name));
+  return [dir, ...entries];
+}
+
+/**
+ * Fail when `src/`, `tests/`, a directory or `.ts` file below them, or `vitest.config.ts` is
+ * newer than the coverage report. A missing report passes.
  *
- * A missing coverage report passes so a clean checkout that has not run `npm test` is not blocked;
- * fallow estimates coverage itself in that case. Throwing here would fail the hook before fallow
- * runs.
- *
- * @param projectRoot - Directory holding `src/` and `coverage/`; the CLI passes `process.cwd()`.
- * @throws Error naming every source file modified after the coverage report was written, each as
- * a path relative to `projectRoot` with forward slashes on every platform; a missing `src/`
- * directory or any other filesystem failure propagates as the filesystem error itself.
+ * @param projectRoot - Directory holding `src/` and `coverage/`.
+ * @throws Error naming each stale input, or the filesystem error.
  */
 export function checkCoverageFresh(projectRoot: string): void {
   const coverage = statSync(join(projectRoot, COVERAGE_REPORT), { throwIfNoEntry: false });
@@ -27,26 +38,30 @@ export function checkCoverageFresh(projectRoot: string): void {
     return;
   }
 
-  const stale: string[] = [];
-  const entries = readdirSync(join(projectRoot, "src"), { recursive: true, withFileTypes: true });
-  for (const entry of entries) {
-    if (!entry.isFile() || !isSourceFile(entry.name)) {
-      continue;
-    }
-    const path = join(entry.parentPath, entry.name);
-    if (statSync(path).mtimeMs > coverage.mtimeMs) {
-      stale.push(relative(projectRoot, path).replaceAll(sep, "/"));
-    }
-  }
+  const testsDir = join(projectRoot, "tests");
+  const vitestConfig = join(projectRoot, VITEST_CONFIG);
+  const inputs = [
+    ...listInputs(join(projectRoot, "src")),
+    ...(exists(testsDir) ? listInputs(testsDir) : []),
+    ...(exists(vitestConfig) ? [vitestConfig] : []),
+  ];
+  const stale = inputs
+    .filter((path) => statSync(path).mtimeMs > coverage.mtimeMs)
+    .map((path) => relative(projectRoot, path).replaceAll(sep, "/"))
+    .toSorted();
 
   if (stale.length > 0) {
-    stale.sort();
     throw new Error(
-      `${COVERAGE_REPORT} is older than ${stale.join(", ")} — run: npm test, then npm run check`,
+      `${COVERAGE_REPORT} is older than ${stale.join(", ")} — run: task test, then task check`,
     );
   }
 }
 
-if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
+const entry = process.argv[1];
+if (
+  entry !== undefined &&
+  exists(entry) &&
+  realpathSync(entry) === fileURLToPath(import.meta.url)
+) {
   checkCoverageFresh(process.cwd());
 }

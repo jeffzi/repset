@@ -49,6 +49,9 @@ Thumbs.db
 # Fallow cache
 .fallow/
 
+# Task checksums and timestamps
+.task/
+
 # StrykerJS sandbox
 .stryker-tmp/
 

@@ -3,7 +3,18 @@
   "version": "0.2",
   "language": "en-US",
   "files": ["**/*.{ts,tsx,mts,cts,md}"],
-  "words": ["repset", "taskkill", "unref", "unstub"],
+  "words": [
+    "gymrat",
+    "luamark",
+    "mitata",
+    "pmndrs",
+    "repset",
+    "smol",
+    "Taskfile",
+    "taskkill",
+    "unref",
+    "unstub"
+  ],
   "ignorePaths": [
     ".agents",
     ".claude",

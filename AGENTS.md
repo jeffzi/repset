@@ -7,22 +7,28 @@ this file. It is gitignored for personal, machine-specific preferences and never
 
 ## Commands
 
-- `npm run build` — compile with `tsc -p tsconfig.build.json`
-- `npm test` — `vitest run --coverage`; coverage thresholds fail the run, and untested `src/` files
-  count against them
-- `npm run check` — every pre-commit hook over all tracked and untracked files (lint, markdown,
-  formatting, workflow lint/audit, type-aware lint, spelling, types), plus dead code and publish
-  hygiene (`publint` + `@arethetypeswrong/cli`). The lint, markdown, and formatting hooks rewrite
-  files in place. The dead-code hook scores complexity against the coverage `npm test` writes and
-  refuses to run when a `src/` file is newer than that report, so run `npm test` first after editing
-  `src/`. It runs in `check` and `pre-push` (right after `npm test`), never at pre-commit. Run
-  before committing.
-- `npm run fix` — auto-fix lint, markdown, and formatting, then remove unused exports, dependencies,
-  and enum members (`fallow fix`). Deletes code — review the diff before committing.
-- `npm run check:security` — surface security candidates (`fallow security`). Candidates need
-  verification; they are not confirmed vulnerabilities. Not part of `check`.
-- `npm run check:package` — publish hygiene (`publint` + `@arethetypeswrong/cli`) for packages that
-  ship to npm. Not part of `check`.
+`Taskfile.yml` is the only entry point (`task --list`); the git hooks only call tasks.
+
+- `task install` — install the pinned tools, the npm dependencies and the git hooks
+- `task test` — run the tests with coverage; coverage thresholds fail the run. Arguments after `--`
+  go to Vitest, which then runs without coverage.
+- `task check` — every check; run before committing. Fixing steps rewrite files in place. The
+  quality step refuses a coverage report older than `src/`, `tests/` or `vitest.config.ts`: run
+  `task test` first. `ONLY=<names>` runs some steps; files after `--` narrow them. Security
+  candidates never fail the run: verify each before reporting it.
+- `task fix` — auto-fix, then delete unused exports, dependencies and enum members. Review the diff.
+- `task build` — compile `src/` to `dist/`
+- `task check-package` — pack the package, install it in an empty app and import every entry. The
+  publish workflow runs it.
+
+## Tools (mise)
+
+`mise.toml` holds tool ranges; `mise.lock` pins exact versions and checksums. To change a range,
+edit `mise.toml`, run
+`mise lock --minimum-release-age 3d --platform macos-arm64,linux-x64,windows-x64`, and commit both.
+
+When `mise` is missing, ask the person to install it (<https://mise.jdx.dev/installing-mise.html>)
+and never install it yourself; once it is there, run `mise exec -- task install`.
 
 ## Git hygiene
 
@@ -43,9 +49,73 @@ directive with a reason — not in the shared config. When the same inline direc
 for the same rule, that is a signal the rule may deserve a config-level ignore — propose it to the
 user and wait for explicit approval; never promote a suppression into config on your own.
 
+## Module layout
+
+A line-count check caps a file's code lines and a function's: `max-lines` and
+`max-lines-per-function` in `.oxlintrc.json`, with a higher file cap for tests. Blank lines and
+comments, TSDoc included, are not code lines. The cap marks a file that holds more than one concern;
+it is not a budget. These rules decide where code lives. A reason that is not written here does not
+move code: apply the rules as written and report the reason in one line.
+
+A module's **importers** are the project modules that import it in any form: a static `import`, an
+`import type`, an `export … from`, or a dynamic `import()`. Tests, files under `scripts/`, and the
+package entries (the modules `package.json` `exports` and `bin` point to) are not importers. To
+**fold** a module is to move all of it into another module and delete the file.
+
+**Registration is not use.** A module that only registers another (a command, a handler, a plugin)
+and never calls it is neither its user nor its home, and does not count among its importers. A
+module that nothing but its registrar imports is a module of its own at any size; one that other
+modules also import is placed by those importers alone.
+
+The **generic-helpers module**, `src/utils.ts`, holds code that passes this admission test: it names
+no project type, imports nothing but Node built-ins (`node:` modules), and would make sense pasted
+unchanged into an unrelated repository.
+
+1. **New code goes in the module that uses it.** One user: that module. No new file until rule 2 or
+   rule 6 calls for one.
+2. **Shared code goes to its home.** When two or more modules use it, the first of these that
+   applies:
+   - It passes the admission test: the generic-helpers module.
+   - One of its importers is already imported by every other importer: that importer is the home,
+     because nobody loads the code without loading it. The home must use the code at runtime, and
+     the fold must not turn another module's `import type` of the home into a runtime import.
+   - It is a rule about one project type (a predicate, a constructor, a conversion) and every user
+     already imports the module that defines the type: beside the type.
+   - Otherwise: an existing module you have read that already owns that concern, or a module of its
+     own, named for what it does, whatever its size.
+3. **A module that has a home folds into it.** A module with one importer folds into that importer.
+   A shared module that passes the admission test folds into the generic-helpers module. Any other
+   shared module whose importers satisfy the second test in rule 2 folds into that home. A module
+   nothing in the project imports (a package entry, a script under `scripts/`) stands.
+4. **Only size blocks a fold**: the target would exceed the cap, summing the code lines of every
+   file that goes into it.
+
+   None of these block a fold: "it is a distinct concern", "it is pure logic", "it is easier to test
+   alone", "it is one of several alike", "reusable later", "keeps the importer small", "matches the
+   existing small modules". Small modules already in the tree are debt, not precedent: report one
+   that has a home and no block, and fold it when asked.
+
+5. **Never pool.** Merging two modules when neither imports the other is pooling, whatever the file
+   count gained. A module's name says what everything in it does; a name that fits only because it
+   is wide (`helpers`, `common`, `shared`, `core`, `misc`) marks a pool. The generic-helpers module
+   is the one exemption from both sentences: the admission test, not its name, decides what belongs
+   in it, and it obeys the cap like any file.
+6. **At the cap, move one whole concern**: the code least tied to the rest that changes together for
+   one reason. The code just added is never the concern that moves. It goes to a new module named
+   for what it does, or to an existing module you have read that already owns that concern. The file
+   must land under the cap; if it does not, pick a different, larger concern. Never move just enough
+   to pass, never top up the move with unrelated code, and never compress code to fit. The module
+   carved out stands for as long as folding it back would exceed the cap.
+7. **A directory is a group of modules that each stand under these rules.** It holds no `index.ts`
+   unless that file is a package entry. When folding leaves a directory with one module, the
+   directory becomes that module (`src/cli/run.ts` becomes `src/cli.ts`).
+8. **One import path per name.** Import a name from the module that defines it. Only a package entry
+   re-exports, and only its public API; no project module imports from an entry. Every other module
+   exports only names it defines, never `export … from`.
+
 ## Doc comments
 
-TSDoc. None is required on private functions, void functions without parameters, or non-function
+TSDoc. None is required on private functions, void functions with no parameters, or non-function
 symbols. A one-line doc comment is complete on its own — no `@param`, `@returns`, or `@throws` tags
 — when the signature says the rest. When a function needs more than one line (a side effect, an
 invariant, a precondition, what `undefined` means, or behavior the name does not convey), use a

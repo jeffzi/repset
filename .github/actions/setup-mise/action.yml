@@ -1,0 +1,23 @@
+name: Set up mise
+description: Install the mise release mise.toml's min_version names, then the tools mise.lock pins.
+
+inputs:
+  install_args:
+    description: Arguments for `mise install`, such as `--locked node` to install one tool alone.
+    required: false
+    default: --locked
+
+runs:
+  using: composite
+  steps:
+    - name: Turn off mise exec's auto-install
+      shell: bash
+      run: echo "MISE_EXEC_AUTO_INSTALL=false" >>"$GITHUB_ENV"
+    - name: Read mise.toml's min_version
+      id: min-version
+      shell: bash
+      run: sed -n 's/^min_version = "\(.*\)"$/version=\1/p' mise.toml >>"$GITHUB_OUTPUT"
+    - uses: jdx/mise-action@6612f0ef07ed2a736cd1e00a94a065522dd41195 # v5.2.5
+      with:
+        version: ${{ steps.min-version.outputs.version }}
+        install_args: ${{ inputs.install_args }}

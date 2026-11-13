@@ -1,15 +1,17 @@
 {
   "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
   "entry": ["src/index.ts"],
+  "supportEntry": ["scripts/*.ts"],
   "ignoreExportsUsedInFile": true,
   "ignoreDependencies": [
+    "@arethetypeswrong/cli",
     "cspell",
     "fallow",
-    "lefthook",
     "markdownlint-cli2",
     "oxfmt",
     "oxlint",
-    "oxlint-tsgolint"
+    "oxlint-tsgolint",
+    "publint"
   ],
   "duplicates": { "ignore": ["tests/**"] },
   "rules": { "duplicate-exports": "off" },

@@ -1,6 +1,6 @@
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -25,15 +25,33 @@ function writeFileWithMtime(path: string, content: string, mtime: number): void 
   utimesSync(path, mtime, mtime);
 }
 
-/** Builds a throwaway project with the given files (relative path → mtime in seconds) and an optional coverage report. */
-function createProject(files: Record<string, number>, coverageMtime?: number): string {
-  const dir = mkdtempSync(join(tmpdir(), "ecstatic-coverage-"));
+/**
+ * Builds a throwaway project with the given files (relative path → mtime in seconds) and an
+ * optional coverage report. Directories default to OLDER; `directories` creates and overrides them.
+ */
+function createProject(
+  files: Record<string, number>,
+  coverageMtime?: number,
+  directories: Record<string, number> = {},
+): string {
+  const dir = mkdtempSync(join(tmpdir(), "coverage-fresh-"));
   projects.push(dir);
-  for (const [relative, mtime] of Object.entries(files)) {
-    writeFileWithMtime(join(dir, relative), "", mtime);
+  for (const [path, mtime] of Object.entries(files)) {
+    writeFileWithMtime(join(dir, path), "", mtime);
+  }
+  for (const path of Object.keys(directories)) {
+    mkdirSync(join(dir, path), { recursive: true });
   }
   if (coverageMtime !== undefined) {
     writeFileWithMtime(join(dir, "coverage", "coverage-final.json"), "{}", coverageMtime);
+  }
+  // Last, because writing a child bumps its directory's mtime.
+  for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      const path = join(entry.parentPath, entry.name);
+      const mtime = directories[relative(dir, path)] ?? OLDER;
+      utimesSync(path, mtime, mtime);
+    }
   }
   return dir;
 }
@@ -49,15 +67,19 @@ describe("checkCoverageFresh", () => {
     });
   });
 
-  describe("when no source file is newer than the coverage report", () => {
+  describe("when no input is newer than the coverage report", () => {
     it("returns without throwing", () => {
       const dir = createProject(
         {
           "src/world.ts": OLDER,
           "src/entity/spawn.ts": OLDER,
           "src/query.ts": COVERAGE_MTIME,
+          "tests/entity/spawn.test.ts": OLDER,
+          "tests/query.test.ts": COVERAGE_MTIME,
+          "vitest.config.ts": OLDER,
         },
         COVERAGE_MTIME,
+        { tests: COVERAGE_MTIME },
       );
 
       expect(() => {
@@ -66,21 +88,59 @@ describe("checkCoverageFresh", () => {
     });
   });
 
-  describe("when a source file is newer than the coverage report", () => {
-    it.each(["src/query.ts", "src/entity/spawn.ts"])("throws naming %s", (stale) => {
-      const dir = createProject({ "src/world.ts": OLDER, [stale]: NEWER }, COVERAGE_MTIME);
+  describe("when an input is newer than the coverage report", () => {
+    it.each(["src/entity/spawn.ts", "tests/entity/spawn.test.ts", "vitest.config.ts"])(
+      "throws naming %s",
+      (stale) => {
+        const dir = createProject({ "src/world.ts": OLDER, [stale]: NEWER }, COVERAGE_MTIME);
+
+        expect(() => {
+          checkCoverageFresh(dir);
+        }).toThrow(`older than ${stale} —`);
+      },
+    );
+
+    it("names every stale input in sorted order", () => {
+      const dir = createProject(
+        {
+          "vitest.config.ts": NEWER,
+          "tests/world.test.ts": NEWER,
+          "src/world.ts": NEWER,
+          "src/entity/spawn.ts": NEWER,
+          "src/query.ts": OLDER,
+        },
+        COVERAGE_MTIME,
+      );
 
       expect(() => {
         checkCoverageFresh(dir);
-      }).toThrow(stale);
+      }).toThrow(
+        /src\/entity\/spawn\.ts[\s\S]*src\/world\.ts[\s\S]*tests\/world\.test\.ts[\s\S]*vitest\.config\.ts/,
+      );
     });
 
-    it("tells the user to run npm test before npm run check", () => {
-      const dir = createProject({ "src/world.ts": NEWER }, COVERAGE_MTIME);
+    it.each(["src", "tests/entity"])("throws naming the directory %s", (stale) => {
+      const dir = createProject(
+        { "src/world.ts": OLDER, "tests/entity/spawn.test.ts": OLDER },
+        COVERAGE_MTIME,
+        { [stale]: NEWER },
+      );
 
       expect(() => {
         checkCoverageFresh(dir);
-      }).toThrow(/npm test.*npm run check/s);
+      }).toThrow(`older than ${stale} —`);
+    });
+
+    it("names stale directories among the sorted stale files", () => {
+      const dir = createProject(
+        { "src/world.ts": NEWER, "src/entity/spawn.ts": OLDER, "tests/world.test.ts": NEWER },
+        COVERAGE_MTIME,
+        { "src/entity": NEWER, tests: NEWER },
+      );
+
+      expect(() => {
+        checkCoverageFresh(dir);
+      }).toThrow("older than src/entity, src/world.ts, tests, tests/world.test.ts —");
     });
   });
 
@@ -91,6 +151,24 @@ describe("checkCoverageFresh", () => {
       expect(() => {
         checkCoverageFresh(dir);
       }).not.toThrow();
+    });
+  });
+
+  describe("when reading an input fails", () => {
+    it("propagates the filesystem error", () => {
+      const dir = createProject({ "src/world.ts": OLDER, tests: OLDER }, COVERAGE_MTIME);
+
+      expect(() => {
+        checkCoverageFresh(dir);
+      }).toThrow(expect.objectContaining({ code: "ENOTDIR" }));
+    });
+
+    it("propagates the error of a missing src directory", () => {
+      const dir = createProject({}, COVERAGE_MTIME);
+
+      expect(() => {
+        checkCoverageFresh(dir);
+      }).toThrow(expect.objectContaining({ code: "ENOENT" }));
     });
   });
 });

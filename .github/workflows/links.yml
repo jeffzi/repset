@@ -1,0 +1,49 @@
+name: Links
+
+# Web URLs in Markdown. Not a required check: a slow site would block every merge.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "**.md"
+  schedule:
+    - cron: "30 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: links-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  links:
+    name: Web links
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: ./.github/actions/setup-mise # zizmor: ignore[self-repository] -- actionlint 1.7.12 rejects the $/ form
+        with:
+          install_args: --locked node aqua:go-task/task aqua:lycheeverse/lychee
+
+      - name: Check web links
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }} # avoids GitHub's anonymous rate limit
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ -z "$BASE_SHA" ]; then
+            task check ONLY=urls
+            exit
+          fi
+          # With no files, task check would check them all.
+          mapfile -t files < <(git diff --name-only --diff-filter=d "$BASE_SHA" HEAD -- '*.md')
+          if [ "${#files[@]}" -gt 0 ]; then
+            task check ONLY=urls -- "${files[@]}"
+          fi

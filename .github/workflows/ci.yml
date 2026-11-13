@@ -31,36 +31,26 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The secret scan reads every commit of the pull request.
+          fetch-depth: 0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+      - uses: ./.github/actions/setup-mise # zizmor: ignore[self-repository] -- actionlint 1.7.12 rejects the $/ form
         with:
-          node-version: "lts/*"
-          cache: "npm"
+          install_args: >-
+            --locked node aqua:go-task/task ${{ runner.os == 'Linux' && 'aqua:rhysd/actionlint
+            aqua:zizmorcore/zizmor aqua:gitleaks/gitleaks aqua:lycheeverse/lychee' || '' }}
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Install workflow linters
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-          pipx install zizmor==1.29.0
-          echo "$(python3 -m site --user-base)/bin" >> "$GITHUB_PATH"
-
-      - name: Build
-        run: npm run build
-
-      # Tests first: check's fallow health step reads coverage/, which only
-      # a test run produces.
       - name: Test
-        run: npm test
+        run: task test
 
+      # The diff first: a rewritten file also fails check's coverage step with misleading advice.
       - name: Check
         if: runner.os == 'Linux'
-        run: npm run check && git diff --exit-code
+        run: |
+          status=0
+          task check || status=$?
+          git diff --exit-code
+          exit "$status"

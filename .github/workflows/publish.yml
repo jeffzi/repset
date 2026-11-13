@@ -25,16 +25,12 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Setup Node.js
-        # zizmor: ignore[cache-poisoning] -- setup-node does not cache unless cache: is set
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+      - uses: ./.github/actions/setup-mise # zizmor: ignore[self-repository] -- actionlint 1.7.12 rejects the $/ form
         with:
-          node-version: "lts/*"
-      - name: Install dependencies
-        run: npm ci
+          install_args: --locked node aqua:go-task/task
       - name: Verify tag matches package version
         run: |
           set -euo pipefail
@@ -45,9 +41,11 @@ jobs:
             exit 1
           fi
       - name: Check published surface
-        run: npm run check:package
+        run: task check-package
       - name: Pack
-        run: npm pack
+        run: |
+          task build
+          npm pack
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: package

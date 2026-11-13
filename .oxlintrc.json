@@ -25,8 +25,6 @@
       "files": ["tests/**", "**/*.test.ts", "**/*.test-d.ts", "**/*.spec.ts"],
       "rules": {
         "max-lines": ["error", { "max": 800, "skipBlankLines": true, "skipComments": true }],
-        "jsdoc/require-param": "off",
-        "jsdoc/require-returns": "off",
         "max-lines-per-function": "off",
         "no-control-regex": "off",
         "typescript/no-unsafe-argument": "off",
@@ -54,9 +52,7 @@
     "jsdoc/empty-tags": "error",
     "jsdoc/implements-on-classes": "error",
     "jsdoc/no-defaults": "error",
-    "jsdoc/require-param": "error",
     "jsdoc/require-param-description": "error",
-    "jsdoc/require-returns": ["error", { "checkGetters": false }],
     "jsdoc/require-returns-description": "error",
     "max-depth": ["error", 3],
     "max-lines": ["error", { "max": 400, "skipBlankLines": true, "skipComments": true }],

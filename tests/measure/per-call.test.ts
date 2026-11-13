@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { samplePerCall } from "../../src/measure/per-call.js";
 import type { SamplerResult } from "../../src/measure/shared-context.js";
-import { COARSE_STEP, FINE_STEP, SETTLED_CASES } from "./fixtures.js";
+import { COARSE_STEP, FINE_STEP } from "./fixtures.js";
 
 interface World {
   readonly id: number;
@@ -313,23 +313,6 @@ describe("samplePerCall", () => {
         `teardown ${id}`,
       ]);
     });
-  });
-
-  describe("settled flag", () => {
-    it.each(SETTLED_CASES.filter(({ when }) => !when.includes("within 5 %")))(
-      "is $expected when $when",
-      ({ costMs, expected }) => {
-        const fake = harness({
-          bodyMs: (sample, timed) => (timed ? 100 : costMs(sample)),
-          buildMs: 200,
-        });
-
-        const result = run(fake, { stepMs: FINE_STEP });
-
-        expect(fake.collectsAt).toStrictEqual([16]);
-        expect(result.settled).toBe(expected);
-      },
-    );
   });
 
   describe("contexts reachable for cleanup", () => {

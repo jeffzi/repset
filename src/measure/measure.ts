@@ -72,8 +72,6 @@ export interface Measurement extends Statistics {
   readonly countFixed: boolean;
   /** Whether a collection ran between warmup and timing. */
   readonly collected: boolean;
-  /** Whether the per-call costs of the last five warmup samples agreed within 5 %. */
-  readonly settled: boolean;
   /** The body's mean per call divided by the empty body's. */
   readonly emptyRatio: number;
   /** Present only where the engine delivers `gc` performance entries, as Node does. */
@@ -173,7 +171,6 @@ export async function measure<Context>(
     callsPerSample: run.callsPerSample,
     countFixed: options.callsPerSample !== undefined,
     collected: true,
-    settled: run.settled,
     emptyRatio,
     ...(gcDuringTiming === undefined ? {} : { gcDuringTiming }),
     timingRuns: run.timingRuns,

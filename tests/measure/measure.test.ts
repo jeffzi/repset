@@ -474,7 +474,7 @@ describe("measure's empty-body check", () => {
 });
 
 describe("measure's result", () => {
-  it("returns the timed statistics with the step, the fixed count, the collection, the settled flag and the empty ratio", async () => {
+  it("returns the timed statistics with the step, the fixed count, the collection and the empty ratio", async () => {
     const fake = bench("sharedContext");
 
     const result = await measure(fake.benchmark, { now: fake.now, callsPerSample: 2 });
@@ -492,7 +492,6 @@ describe("measure's result", () => {
       callsPerSample: 2,
       countFixed: true,
       collected: true,
-      settled: true,
       emptyRatio: 1600,
       gcDuringTiming: expect.any(Object),
       timingRuns: 1,
@@ -526,24 +525,6 @@ describe("measure's result", () => {
 });
 
 describe("measure's result, read from the body's run", () => {
-  it("reports the body's settled flag, not the empty body's", async () => {
-    const clock = steppedClock();
-    let calls = 0;
-    vi.stubGlobal("gc", () => undefined);
-    const benchmark: Case<number> = {
-      kind: "sharedContext",
-      setup: () => 0,
-      fn: () => {
-        clock.advance(calls % 2 === 0 ? 100 : 150);
-        calls += 1;
-      },
-    };
-
-    const result = await measure(benchmark, { now: clock.now, callsPerSample: 1 });
-
-    expect(result.settled).toBe(false);
-  });
-
   // The body costs 800 steps a call, so its warmup settles on one call per sample. At most three
   // reads follow a body call while the body runs; the empty body's first sample ends on the fourth
   // read after the body's last call and spans 100 steps, every later one 200, so the empty body's

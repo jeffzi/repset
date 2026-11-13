@@ -32,13 +32,7 @@ export const TIMED_MIN_MS = 1000;
 /** The fewest timed samples either sampler runs. */
 export const TIMED_MIN_SAMPLES = 64;
 
-/** How many of the last warmup samples the settled flag compares. */
-const SETTLED_WINDOW = 5;
-
-/** How far, as a fraction of their median, the compared per-call costs may lie. */
-const SETTLED_TOLERANCE = 0.05;
-
-/** The most timing runs a settled count takes before the sampler gives up. */
+/** The most timing runs a calibrated count takes before the sampler gives up. */
 const MAX_TIMING_RUNS = 3;
 
 /** What every sampler is handed beyond the body: the clock, its step, the collection, a fixed count. */
@@ -80,14 +74,12 @@ export interface SamplerResult {
   readonly samples: number;
   /** The count every sample of the kept run ran, or the fixed count when one was given. */
   readonly callsPerSample: number;
-  /** Whether the per-call costs of the last five warmup samples agreed within 5 % of their median. */
-  readonly settled: boolean;
   /** How many timing runs were taken, the kept one included. */
   readonly timingRuns: number;
 }
 
-/** What a warmup settles: the count it ended on and whether its last per-call costs agreed. */
-export type WarmupResult = Pick<SamplerResult, "callsPerSample" | "settled">;
+/** What a warmup settles: the count it ended on. */
+export type WarmupResult = Pick<SamplerResult, "callsPerSample">;
 
 /**
  * How many timer steps a span covers, rounded to the nearest: warmup, the run check and the count
@@ -154,25 +146,6 @@ function withinCap(next: number, stepMs: number): number {
 }
 
 /**
- * Whether per-call costs agree: every one lies within 5 % of their median.
- *
- * @param costs - The per-call costs to compare; at least one.
- * @returns `true` when every cost lies within 5 % of the median (the upper median for an even
- *   count), `false` otherwise.
- */
-function isSettled(costs: ArrayLike<number>): boolean {
-  const sorted = Array.from(costs).toSorted((left, right) => left - right);
-  const median = sorted[sorted.length >> 1] ?? Number.NaN;
-  const tolerance = Math.abs(median) * SETTLED_TOLERANCE;
-  for (const cost of sorted) {
-    if (!(Math.abs(cost - median) <= tolerance)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-/**
  * Either sampler's warmup bookkeeping between samples. Each sampler keeps its own loop, stop rule
  * and call to its own `sample`, so no sampling loop runs another sampler's body.
  */
@@ -181,8 +154,6 @@ export interface WarmupProgress {
   count: number;
   /** The warmup samples recorded so far. */
   samples: number;
-  /** The per-call costs of the last five samples, in milliseconds, in ring order. */
-  readonly recent: Float64Array;
   readonly stepMs: number;
   /** The fixed calls per sample, or `undefined` when warmup calibrates the count. */
   readonly fixed: number | undefined;
@@ -196,18 +167,11 @@ export interface WarmupProgress {
  * @returns Progress with no sample recorded, whose count is `fixed`, or 1 when calibrating.
  */
 export function startWarmup(stepMs: number, fixed: number | undefined): WarmupProgress {
-  return {
-    count: fixed ?? 1,
-    samples: 0,
-    recent: new Float64Array(SETTLED_WINDOW),
-    stepMs,
-    fixed,
-  };
+  return { count: fixed ?? 1, samples: 0, stepMs, fixed };
 }
 
 /**
- * Records a warmup sample: its per-call cost joins the last five, and the count the next sample runs
- * is calibrated again unless it was fixed.
+ * Records a warmup sample: the count the next sample runs is calibrated again unless it was fixed.
  *
  * @param progress - The warmup's bookkeeping, updated in place.
  * @param spanMs - The span of the sample that just ran `progress.count` calls, in milliseconds.
@@ -215,7 +179,6 @@ export function startWarmup(stepMs: number, fixed: number | undefined): WarmupPr
  *   asked for and the cap, before any sample runs it.
  */
 export function recordWarmup(progress: WarmupProgress, spanMs: number): void {
-  progress.recent[progress.samples % SETTLED_WINDOW] = spanMs / progress.count;
   progress.samples += 1;
   if (progress.fixed === undefined) {
     progress.count = cappedCount(progress.count, spanMs, progress.stepMs);
@@ -226,11 +189,10 @@ export function recordWarmup(progress: WarmupProgress, spanMs: number): void {
  * Ends a warmup's bookkeeping.
  *
  * @param progress - The warmup's bookkeeping after its last sample.
- * @returns The count warmup ended on, and whether its last five per-call costs agreed within 5 %
- *   of their median.
+ * @returns The count warmup ended on.
  */
 export function warmedUp(progress: WarmupProgress): WarmupResult {
-  return { callsPerSample: progress.count, settled: isSettled(progress.recent) };
+  return { callsPerSample: progress.count };
 }
 
 interface Timed<Context> {
@@ -263,7 +225,7 @@ function sample<Context>(timed: Timed<Context>, count: number): number {
  * @param timed - The clock, the body, and its context.
  * @param stepMs - The timer step, in milliseconds.
  * @param fixed - The fixed calls per sample, or `undefined` to calibrate one.
- * @returns The count warmup ended on, and whether its last five per-call costs agreed.
+ * @returns The count warmup ended on.
  * @throws Whatever the body throws, and Error when the count would pass the cap, before any
  *   sample runs it.
  */
@@ -380,7 +342,7 @@ function grownCount(count: number, spans: Float64Array, stepMs: number): number 
  *
  * @param options - The body, its context, the collection, the callback after each run, and the
  *   clock.
- * @returns The kept run's spans and calls per sample, the settled flag, and the timing runs taken.
+ * @returns The kept run's spans and calls per sample, and the timing runs taken.
  * @throws Whatever `fn`, `collect` or `afterTiming` throws; Error when warmup's or a grown count
  *   would pass `ceil(200 × step / 0.1 ns)`, naming the count asked for and the cap; and Error when
  *   the third run is discarded too, naming the count a fourth would need and the runs taken.
@@ -410,5 +372,5 @@ export function sampleSharedContext<Context>(
       timingRuns += 1;
     }
   }
-  return { spans, samples: stored, callsPerSample: calls, settled: warmed.settled, timingRuns };
+  return { spans, samples: stored, callsPerSample: calls, timingRuns };
 }

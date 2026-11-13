@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { sampleSharedContext, type SamplerResult } from "../../src/measure/shared-context.js";
-import { COARSE_STEP, FINE_STEP, SETTLED_CASES } from "./fixtures.js";
+import { COARSE_STEP, FINE_STEP } from "./fixtures.js";
 
 interface World {
   readonly name: string;
@@ -499,17 +499,6 @@ describe("sampleSharedContext", () => {
     });
 
     expect(fake.contexts).toStrictEqual(new Set([context]));
-  });
-
-  describe("settled flag", () => {
-    it.each(SETTLED_CASES)("is $expected when $when", ({ costMs, expected }) => {
-      const fake = harness((sample, timed) => (timed ? 100 : costMs(sample)));
-
-      const result = run(fake, FINE_STEP);
-
-      expect(fake.collectsAt).toStrictEqual([16]);
-      expect(result.settled).toBe(expected);
-    });
   });
 
   describe("when given no clock or step", () => {

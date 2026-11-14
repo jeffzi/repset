@@ -1,20 +1,23 @@
 import { describe, expect, it } from "vitest";
 
-import { timerStepMs } from "../../src/measure/timer.js";
+import { timerResolutionMs } from "../../src/measure/timer.js";
 
-const STEP = 0.125;
+const RESOLUTION = 0.125;
 const COARSE_TRANSITIONS = 2000;
 
 /**
- * Builds a clock that advances by `stepsAt(transition)` steps per transition, repeating each value a few times.
+ * Builds a clock that advances by `resolutionsAt(transition)` resolutions per transition, repeating each value a few times.
  */
-function scriptedClock(stepsAt: (transition: number) => number, step: number): () => number {
+function scriptedClock(
+  resolutionsAt: (transition: number) => number,
+  resolution: number,
+): () => number {
   let value = 1000;
   let transition = 0;
   let repeatsLeft = 1;
   return () => {
     if (repeatsLeft === 0) {
-      value += stepsAt(transition) * step;
+      value += resolutionsAt(transition) * resolution;
       transition += 1;
       repeatsLeft = (transition % 3) + 1;
     }
@@ -23,26 +26,26 @@ function scriptedClock(stepsAt: (transition: number) => number, step: number): (
   };
 }
 
-describe("timerStepMs", () => {
-  describe("when the first transitions span several steps and later ones span one", () => {
-    it("returns the single step", () => {
+describe("timerResolutionMs", () => {
+  describe("when the first transitions span several multiples of the resolution and later ones span one", () => {
+    it("returns the single resolution", () => {
       const now = scriptedClock(
         (transition) => (transition < COARSE_TRANSITIONS ? 2 + (transition % 2) : 1),
-        STEP,
+        RESOLUTION,
       );
 
-      const step = timerStepMs(now);
+      const resolution = timerResolutionMs(now);
 
-      expect(step).toBe(STEP);
+      expect(resolution).toBe(RESOLUTION);
     });
   });
 
   describe("when given no clock", () => {
     it("probes performance.now", () => {
-      const step = timerStepMs();
+      const resolution = timerResolutionMs();
 
-      expect(step).toBeGreaterThan(0);
-      expect(step).toBeLessThan(Number.POSITIVE_INFINITY);
+      expect(resolution).toBeGreaterThan(0);
+      expect(resolution).toBeLessThan(Number.POSITIVE_INFINITY);
     });
   });
 });

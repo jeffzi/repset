@@ -35,16 +35,16 @@ function smallestChange(now: () => number, transitions: number): number {
 }
 
 /**
- * Probes the step of a clock: the smallest change between two successive distinct reads.
+ * Probes the resolution of a clock: the smallest change between two successive distinct reads.
  *
  * A first pass of transitions warms the loop and is discarded, since its early transitions span
- * more than one step; the step is the smallest change across the second pass. Blocks until the
+ * more than one resolution; the resolution is the smallest change across the second pass. Blocks until the
  * clock has advanced through both passes, so a clock that never changes never returns.
  *
  * @param now - The clock to probe, in milliseconds. Defaults to {@link performanceNow}.
- * @returns The clock's step in milliseconds.
+ * @returns The clock's resolution in milliseconds.
  */
-export function timerStepMs(now: () => number = performanceNow): number {
+export function timerResolutionMs(now: () => number = performanceNow): number {
   smallestChange(now, TRANSITIONS_PER_PASS);
   return smallestChange(now, TRANSITIONS_PER_PASS);
 }

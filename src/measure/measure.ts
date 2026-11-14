@@ -3,7 +3,7 @@
  * statistics.
  *
  * The samplers are plain synchronous loops with no `try` anywhere above the timed calls; the error
- * rules (tear down every context left alive, keep the first thrown value) live here, in their
+ * rules (tear down every state left alive, keep the first thrown value) live here, in their
  * caller, so a `try` never reaches the compile of a sampling loop.
  *
  * The module reads no Node builtin, so it loads in a browser page; `bun:jsc` is imported only
@@ -11,20 +11,20 @@
  */
 
 import { empty, type EmptyResult, type Lifecycle, sampleEmpty } from "./empty.js";
-import { runningEngine } from "./engine.js";
 import { keep, samplePerCall } from "./per-call.js";
+import { runningRuntime } from "./runtime.js";
 import {
-  BudgetError,
-  sampleSharedContext,
+  CalibrationError,
+  sampleSharedState,
   type SamplerResult,
   type Sampling,
   type TimedMinimums,
-} from "./shared-context.js";
+} from "./shared-state.js";
 import { NS_PER_MS, type Statistics, summarize } from "./statistics.js";
-import { performanceNow, timerStepMs } from "./timer.js";
+import { performanceNow, timerResolutionMs } from "./timer.js";
 
 /** The run fails when the body's mean per call is below this multiple of the empty body's. */
-const MIN_EMPTY_RATIO = 1.42;
+const MIN_RATIO_TO_EMPTY_BODY = 1.42;
 
 /** `detail.kind` of a Node `gc` performance entry for a scavenge (`NODE_PERFORMANCE_GC_MINOR`). */
 const GC_MINOR = 1;
@@ -46,23 +46,23 @@ const DEFAULT_SAMPLES = 64;
 export type NoInline = typeof import("bun:jsc").noInline;
 
 /**
- * A benchmark: how to build its context, the body to time, and how to release the context.
+ * A benchmark: how to build its state, the body to time, and how to release the state.
  *
- * A `sharedContext` benchmark builds one context and times every body call on it; a `perCall` one
- * builds a fresh context for every body call. The body must be synchronous.
+ * A `sharedState` benchmark builds one state and times every body call on it; a `perCall` one
+ * builds a fresh state for every body call. The body must be synchronous.
  */
-export interface Case<Context> {
+export interface Case<State> {
   readonly kind: Lifecycle;
-  readonly setup: () => Context;
-  readonly fn: (context: Context) => unknown;
-  /** Releases a context; absent means nothing to release. */
-  readonly teardown?: (context: Context) => void;
+  readonly setup: () => State;
+  readonly fn: (state: State) => unknown;
+  /** Releases a state; absent means nothing to release. */
+  readonly teardown?: (state: State) => void;
 }
 
 export interface MeasureOptions {
   /** Calls per sample to run instead of calibrating one, for the empty body and the body alike. */
   readonly callsPerSample?: number;
-  /** Replaces the engine's `noInline`: `bun:jsc`'s under Bun, none on Node. */
+  /** Replaces the runtime's `noInline`: `bun:jsc`'s under Bun, none on Node. */
   readonly noInline?: NoInline;
   /** The clock, in milliseconds; defaults to `performance.now()`. */
   readonly now?: () => number;
@@ -70,12 +70,12 @@ export interface MeasureOptions {
    * The time, in milliseconds, the body's timed samples span at least; defaults to 1000. Not
    * validated: the caller passes a finite number of 0 or more.
    */
-  readonly time?: number;
+  readonly minTime?: number;
   /**
    * The fewest timed samples the body runs; defaults to 64. Not validated: the caller passes an
    * integer of 1 or more.
    */
-  readonly samples?: number;
+  readonly minSamples?: number;
 }
 
 /** The collections a `gc` performance observer saw while the body's samples were timed. */
@@ -88,31 +88,31 @@ export interface GcDuringTiming {
 }
 
 export interface Measurement extends Statistics {
-  readonly timerStepNs: number;
+  readonly timerResolutionNs: number;
   readonly callsPerSample: number;
   /** Whether `callsPerSample` was given rather than calibrated by warmup. */
-  readonly countFixed: boolean;
+  readonly callsPerSampleFixed: boolean;
   /** Whether a collection ran between warmup and timing. */
   readonly collected: boolean;
   /** The body's mean per call divided by the empty body's. */
-  readonly emptyRatio: number;
-  /** Present only where the engine delivers `gc` performance entries, as Node does. */
+  readonly ratioToEmptyBody: number;
+  /** Present only where the runtime delivers `gc` performance entries, as Node does. */
   readonly gcDuringTiming?: GcDuringTiming;
-  /** How many timing runs the body's sampler took, the kept one included. */
-  readonly timingRuns: number;
-  /** The body's samples before its kept run: warmup's, plus every discarded timing run's. */
+  /** How many timing attempts the body's sampler took, the kept one included. */
+  readonly timingAttempts: number;
+  /** The body's samples before its kept run: warmup's, plus every discarded timing attempt's. */
   readonly warmupSamples: number;
-  /** The body's kept timing run's length on the clock, in milliseconds. */
+  /** The body's kept timing attempt's length on the clock, in milliseconds. */
   readonly timingMs: number;
 }
 
 /**
  * Where a case failed: `setup`, `fn` or `teardown` threw (`fn` also for a first call that returned
- * a thenable); `check`, the body is too close to the empty body to tell apart; `budget`, a count
- * passed the cap or a third timing run was discarded; `process`, the engine lacks what measuring
+ * a thenable); `optimized-away`, the body is too close to the empty body to tell apart; `calibration`, a count
+ * passed the cap or a third timing attempt was discarded; `child`, the runtime lacks what measuring
  * needs.
  */
-export type Phase = "setup" | "fn" | "teardown" | "check" | "budget" | "process";
+export type Phase = "setup" | "fn" | "teardown" | "optimized-away" | "calibration" | "child";
 
 /**
  * A failure of `measure`: the phase it failed in, and as `cause` the value a callback, the loader or
@@ -174,40 +174,40 @@ interface TimingWindow {
  *
  * @param benchmark - The benchmark to measure.
  * @param options - A fixed count, an injected `noInline`, a clock to read, and the `time` and
- *   `samples` the body's timing runs until, 1000 ms and 64 when absent; the empty body always
+ *   `samples` the body's timing attempts until, 1000 ms and 64 when absent; the empty body always
  *   takes 64 timed samples.
  * @returns The body's per-call statistics in nanoseconds and how they were taken.
- * @throws MeasureError in phase `process` when no garbage collector is exposed, or when Bun is
+ * @throws MeasureError in phase `child` when no garbage collector is exposed, or when Bun is
  *   running but `bun:jsc` cannot be loaded, with the loader's value as cause, before anything runs;
- *   and when a collection throws, with the collector's value as cause, after every context left
+ *   and when the forced GC throws, with the collector's value as cause, after every state left
  *   alive is torn down.
  * @throws MeasureError in phase `fn` when the body's first call returns a thenable, after its
- *   context is torn down.
+ *   state is torn down.
  * @throws MeasureError in phase `setup`, `fn` or `teardown` when that callback throws, with the
- *   thrown value unchanged as cause, after every context left alive is torn down; a teardown error
- *   during that cleanup is discarded, and a per-call context whose teardown threw is not torn down
+ *   thrown value unchanged as cause, after every state left alive is torn down; a teardown error
+ *   during that cleanup is discarded, and a per-call state whose teardown threw is not torn down
  *   again.
- * @throws MeasureError in phase `budget` when warmup's or a grown count would pass the cap (the
+ * @throws MeasureError in phase `calibration` when warmup's or a grown count would pass the cap (the
  *   body's or the empty run's warmup count, or a count grown after a discarded body run), or when a
- *   sharedContext body's third timing run is discarded too, naming the count a fourth would need.
- * @throws MeasureError in phase `check` when the body's mean per call is below 1.42 times the empty
+ *   sharedState body's third timing attempt is discarded too, naming the count a fourth would need.
+ * @throws MeasureError in phase `optimized-away` when the body's mean per call is below 1.42 times the empty
  *   body's, naming both.
  */
-export async function measure<Context>(
-  benchmark: Case<Context>,
+export async function measure<State>(
+  benchmark: Case<State>,
   options: MeasureOptions = {},
 ): Promise<Measurement> {
   const gc = exposedGc();
-  const noInline = options.noInline ?? (await engineNoInline());
+  const noInline = options.noInline ?? (await runtimeNoInline());
   noInline?.(benchmark.fn);
   noInline?.(empty);
 
   const now = options.now ?? performanceNow;
-  const stepMs = timerStepMs(now);
+  const resolutionMs = timerResolutionMs(now);
   const timing: TimingWindow = { startMs: 0, endMs: 0 };
   const sampling: Sampling = {
     now,
-    stepMs,
+    resolutionMs,
     callsPerSample: options.callsPerSample,
     collect: () => {
       collectGarbage(gc);
@@ -222,8 +222,8 @@ export async function measure<Context>(
   let gcDuringTiming: GcDuringTiming | undefined;
   try {
     run =
-      benchmark.kind === "sharedContext"
-        ? measureSharedContext(benchmark, bodySampling, timing)
+      benchmark.kind === "sharedState"
+        ? measureSharedState(benchmark, bodySampling, timing)
         : measurePerCall(benchmark, bodySampling, timing);
     if (observer !== undefined) {
       gcDuringTiming = await observer.during(timing);
@@ -232,9 +232,9 @@ export async function measure<Context>(
     observer?.disconnect();
   }
 
-  const statistics = summarize(run.spans, run.samples, run.callsPerSample);
+  const statistics = summarize(run.spans, run.sampleCount, run.callsPerSample);
   // The body's timing window has closed, so the empty run's collection only collects.
-  const emptyRatio = checkedEmptyRatio(statistics.mean, benchmark.kind, {
+  const ratioToEmptyBody = checkedRatioToEmptyBody(statistics.mean, benchmark.kind, {
     ...sampling,
     collect: () => {
       collectGarbage(gc);
@@ -242,26 +242,29 @@ export async function measure<Context>(
   });
   return {
     ...statistics,
-    timerStepNs: stepMs * NS_PER_MS,
+    timerResolutionNs: resolutionMs * NS_PER_MS,
     callsPerSample: run.callsPerSample,
-    countFixed: options.callsPerSample !== undefined,
+    callsPerSampleFixed: options.callsPerSample !== undefined,
     collected: true,
-    emptyRatio,
+    ratioToEmptyBody,
     ...(gcDuringTiming === undefined ? {} : { gcDuringTiming }),
-    timingRuns: run.timingRuns,
+    timingAttempts: run.timingAttempts,
     warmupSamples: run.warmupSamples,
     timingMs: run.timingMs,
   };
 }
 
 /**
- * The `time` and `samples` the body's timing runs until.
+ * The `time` and `samples` the body's timing attempts until.
  *
  * @param options - The options `measure` was given.
  * @returns The given `time` and `samples`, 1000 ms and 64 when absent.
  */
 function timedMinimums(options: MeasureOptions): TimedMinimums {
-  return { time: options.time ?? DEFAULT_TIME_MS, samples: options.samples ?? DEFAULT_SAMPLES };
+  return {
+    minTime: options.minTime ?? DEFAULT_TIME_MS,
+    minSamples: options.minSamples ?? DEFAULT_SAMPLES,
+  };
 }
 
 /**
@@ -269,28 +272,28 @@ function timedMinimums(options: MeasureOptions): TimedMinimums {
  *
  * @param bodyMeanNs - The body's mean per call, in nanoseconds.
  * @param kind - The benchmark's lifecycle.
- * @param sampling - The clock, its step, the collection, and the fixed count if one was given.
+ * @param sampling - The clock, its resolution, the forced GC, and the fixed count if one was given.
  * @returns The body's mean per call divided by the empty body's.
- * @throws MeasureError in phase `budget` when the empty run's warmup count would pass its cap.
- * @throws MeasureError in phase `process` when the collection throws.
- * @throws MeasureError in phase `check` when the ratio is below 1.42, naming both means.
+ * @throws MeasureError in phase `calibration` when the empty run's warmup count would pass its cap.
+ * @throws MeasureError in phase `child` when the forced GC throws.
+ * @throws MeasureError in phase `optimized-away` when the ratio is below 1.42, naming both means.
  */
-function checkedEmptyRatio(bodyMeanNs: number, kind: Lifecycle, sampling: Sampling): number {
+function checkedRatioToEmptyBody(bodyMeanNs: number, kind: Lifecycle, sampling: Sampling): number {
   let emptyRun: EmptyResult;
   try {
     emptyRun = sampleEmpty({ kind, ...sampling });
   } catch (error) {
-    // The empty body is repset's own: past the cap, only the collection is left to throw, and it
+    // The empty body is repset's own: past the cap, only the forced GC is left to throw, and it
     // throws a MeasureError of its own.
-    throw failedIn(error instanceof BudgetError ? "budget" : "process", error);
+    throw failedIn(error instanceof CalibrationError ? "calibration" : "child", error);
   }
-  const emptyMeanNs = summarize(emptyRun.spans, emptyRun.samples, emptyRun.callsPerSample).mean;
+  const emptyMeanNs = summarize(emptyRun.spans, emptyRun.sampleCount, emptyRun.callsPerSample).mean;
   const ratio = bodyMeanNs / emptyMeanNs;
-  if (!(ratio >= MIN_EMPTY_RATIO)) {
+  if (!(ratio >= MIN_RATIO_TO_EMPTY_BODY)) {
     throw new MeasureError(
-      "check",
+      "optimized-away",
       new Error(
-        `the body reads ${formatNs(bodyMeanNs)} ns per call, under ${String(MIN_EMPTY_RATIO)} times the empty body's ${formatNs(emptyMeanNs)} ns: the benchmark times too little work to tell apart from the loop`,
+        `the body reads ${formatNs(bodyMeanNs)} ns per call, under ${String(MIN_RATIO_TO_EMPTY_BODY)} times the empty body's ${formatNs(emptyMeanNs)} ns: the benchmark times too little work to tell apart from the loop`,
       ),
     );
   }
@@ -300,14 +303,14 @@ function checkedEmptyRatio(bodyMeanNs: number, kind: Lifecycle, sampling: Sampli
 /**
  * Runs the exposed collector, outside every timed sample.
  *
- * @param gc - The collector `measure` read from the engine.
- * @throws MeasureError in phase `process` when the collector throws, with its value as cause.
+ * @param gc - The collector `measure` read from the runtime.
+ * @throws MeasureError in phase `child` when the collector throws, with its value as cause.
  */
 function collectGarbage(gc: NonNullable<typeof globalThis.gc>): void {
   try {
     gc();
   } catch (error) {
-    throw new MeasureError("process", error);
+    throw new MeasureError("child", error);
   }
 }
 
@@ -324,16 +327,16 @@ function failedIn(phase: Phase, error: unknown): MeasureError {
 }
 
 /**
- * Reads the garbage collector the engine exposes.
+ * Reads the garbage collector the runtime exposes.
  *
  * @returns `globalThis.gc`.
- * @throws MeasureError in phase `process` when no collector is exposed.
+ * @throws MeasureError in phase `child` when no collector is exposed.
  */
 function exposedGc(): NonNullable<typeof globalThis.gc> {
   const gc = globalThis.gc;
   if (typeof gc !== "function") {
     throw new MeasureError(
-      "process",
+      "child",
       new Error("measuring requires an exposed gc: run node or bun with --expose-gc"),
     );
   }
@@ -341,19 +344,19 @@ function exposedGc(): NonNullable<typeof globalThis.gc> {
 }
 
 /**
- * Loads the running engine's `noInline`, importing `bun:jsc` only under Bun.
+ * Loads the running runtime's `noInline`, importing `bun:jsc` only under Bun.
  *
- * @returns Bun's `noInline`, or `undefined` on any other engine.
- * @throws MeasureError in phase `process` when Bun is running but `bun:jsc` cannot be loaded,
+ * @returns Bun's `noInline`, or `undefined` on any other runtime.
+ * @throws MeasureError in phase `child` when Bun is running but `bun:jsc` cannot be loaded,
  *   with whatever the loader rejected with as cause.
  */
-async function engineNoInline(): Promise<NoInline | undefined> {
-  if (runningEngine() !== "bun") return undefined;
+async function runtimeNoInline(): Promise<NoInline | undefined> {
+  if (runningRuntime() !== "bun") return undefined;
   try {
     const { noInline } = await import("bun:jsc");
     return noInline;
   } catch (error) {
-    throw new MeasureError("process", error);
+    throw new MeasureError("child", error);
   }
 }
 
@@ -362,53 +365,53 @@ async function engineNoInline(): Promise<NoInline | undefined> {
 // ---------------------------------------------------------------------------
 
 /**
- * Runs a shared-context benchmark: builds one context, checks the body is synchronous, samples it,
- * then tears the context down.
+ * Runs a shared-state benchmark: builds one state, checks the body is synchronous, samples it,
+ * then tears the state down.
  *
  * @param benchmark - The benchmark.
- * @param sampling - The clock, its step, the collection, the fixed count if one was given, and the
- *   `time` and `samples` timing runs until.
- * @param timing - Receives the end of each timing run's samples, before the sampler checks the run;
- *   the collection before each run records their start.
+ * @param sampling - The clock, its resolution, the forced GC, the fixed count if one was given, and the
+ *   `time` and `samples` timing attempts until.
+ * @param timing - Receives the end of each timing attempt's samples, before the sampler checks the run;
+ *   the forced GC before each run records their start.
  * @returns What the body's sampler returned.
  * @throws MeasureError in phase `setup` when `setup` throws, before anything else runs.
  * @throws MeasureError in phase `fn` when the body throws or its first call returns a thenable,
  *   after teardown ran; a teardown error then is discarded.
- * @throws MeasureError in phase `budget` when the sampler refuses a count or a fourth run, and in
- *   phase `process` when a collection throws, after teardown ran; a teardown error then is
+ * @throws MeasureError in phase `calibration` when the sampler refuses a count or a fourth run, and in
+ *   phase `child` when the forced GC throws, after teardown ran; a teardown error then is
  *   discarded.
  * @throws MeasureError in phase `teardown` when `teardown` throws and the body succeeded.
  */
-function measureSharedContext<Context>(
-  benchmark: Case<Context>,
+function measureSharedState<State>(
+  benchmark: Case<State>,
   sampling: BodySampling,
   timing: TimingWindow,
 ): SamplerResult {
   const { setup, fn } = benchmark;
   const teardown = benchmark.teardown ?? keep;
-  let context: Context;
+  let state: State;
   try {
-    context = setup();
+    state = setup();
   } catch (error) {
     throw new MeasureError("setup", error);
   }
   let run: SamplerResult;
   try {
-    requireSynchronous(fn(context));
-    run = sampleSharedContext({
+    requireSynchronous(fn(state));
+    run = sampleSharedState({
       ...sampling,
       fn,
-      context,
+      state,
       afterTiming: () => {
         timing.endMs = performance.now();
       },
     });
   } catch (error) {
-    tearDownDiscarding(teardown, context);
-    throw failedIn(error instanceof BudgetError ? "budget" : "fn", error);
+    tearDownDiscarding(teardown, state);
+    throw failedIn(error instanceof CalibrationError ? "calibration" : "fn", error);
   }
   try {
-    teardown(context);
+    teardown(state);
   } catch (error) {
     throw new MeasureError("teardown", error);
   }
@@ -416,39 +419,39 @@ function measureSharedContext<Context>(
 }
 
 /**
- * Runs a per-call benchmark: checks the body is synchronous on one built context, then samples it,
- * tearing down every context left alive when anything throws.
+ * Runs a per-call benchmark: checks the body is synchronous on one built state, then samples it,
+ * tearing down every state left alive when anything throws.
  *
  * @param benchmark - The benchmark.
- * @param sampling - The clock, its step, the collection, the fixed count if one was given, and the
- *   `time` and `samples` timing runs until.
- * @param timing - Receives the end of the timed samples; the collection records their start.
+ * @param sampling - The clock, its resolution, the forced GC, the fixed count if one was given, and the
+ *   `time` and `samples` timing attempts until.
+ * @param timing - Receives the end of the timed samples; the forced GC records their start.
  * @returns What the body's sampler returned.
  * @throws MeasureError in phase `setup`, `fn` or `teardown` when that callback throws, `fn` also
- *   when the body's first call returns a thenable, `budget` when the sampler refuses a count, and
- *   `process` when the collection throws, after every context built and not torn down is torn down, save the one whose teardown threw; a
+ *   when the body's first call returns a thenable, `calibration` when the sampler refuses a count, and
+ *   `process` when the forced GC throws, after every state built and not torn down is torn down, save the one whose teardown threw; a
  *   teardown error during that cleanup is discarded.
  */
-function measurePerCall<Context>(
-  benchmark: Case<Context>,
+function measurePerCall<State>(
+  benchmark: Case<State>,
   sampling: BodySampling,
   timing: TimingWindow,
 ): SamplerResult {
   const { setup, fn, teardown: caseTeardown } = benchmark;
   const release = caseTeardown ?? keep;
   // Set only while the case's teardown runs: a throw that leaves it set came from the teardown.
-  // The wrapper holds no `try` and keeps no reference to the context, and runs outside every body
+  // The wrapper holds no `try` and keeps no reference to the state, and runs outside every body
   // call's pair of clock reads: only the wall time warmup and timing count includes it.
   let tearingDown = false;
   const teardown =
     caseTeardown === undefined
       ? keep
-      : (context: Context): void => {
+      : (state: State): void => {
           tearingDown = true;
-          caseTeardown(context);
+          caseTeardown(state);
           tearingDown = false;
         };
-  const slots: (Context | undefined)[] = [];
+  const slots: (State | undefined)[] = [];
   try {
     const checked = setup();
     slots[0] = checked;
@@ -460,11 +463,11 @@ function measurePerCall<Context>(
     return run;
   } catch (error) {
     const phase = perCallPhase(error, slots[0] !== undefined, tearingDown);
-    // The sampler holds its one context in flight in slot 0: when its teardown threw, it is left
+    // The sampler holds its one state in flight in slot 0: when its teardown threw, it is left
     // alone rather than torn down a second time.
-    for (const [slot, context] of slots.entries()) {
-      if (context !== undefined && !(phase === "teardown" && slot === 0)) {
-        tearDownDiscarding(release, context);
+    for (const [slot, state] of slots.entries()) {
+      if (state !== undefined && !(phase === "teardown" && slot === 0)) {
+        tearDownDiscarding(release, state);
       }
     }
     throw failedIn(phase, error);
@@ -476,13 +479,13 @@ function measurePerCall<Context>(
  * `measure`.
  *
  * @param error - The thrown value.
- * @param inFlight - Whether a context was built and not torn down.
+ * @param inFlight - Whether a state was built and not torn down.
  * @param tearingDown - Whether the case's teardown had started and not returned.
- * @returns `budget` for the sampler's own refusal; otherwise `setup` with no context in flight,
+ * @returns `calibration` for the sampler's own refusal; otherwise `setup` with no state in flight,
  *   `teardown` while one was being torn down, and `fn` for the rest.
  */
 function perCallPhase(error: unknown, inFlight: boolean, tearingDown: boolean): Phase {
-  if (error instanceof BudgetError) return "budget";
+  if (error instanceof CalibrationError) return "calibration";
   if (!inFlight) return "setup";
   return tearingDown ? "teardown" : "fn";
 }
@@ -504,15 +507,15 @@ function requireSynchronous(returned: unknown): void {
 }
 
 /**
- * Tears `context` down while an error is already in flight: that error wins, so the teardown's
+ * Tears `state` down while an error is already in flight: that error wins, so the teardown's
  * own error is dropped rather than replacing it, which a `finally` would do.
  *
  * @param teardown - The benchmark's teardown.
- * @param context - The context to release.
+ * @param state - The state to release.
  */
-function tearDownDiscarding<Context>(teardown: (context: Context) => void, context: Context): void {
+function tearDownDiscarding<State>(teardown: (state: State) => void, state: State): void {
   try {
-    teardown(context);
+    teardown(state);
   } catch {
     // The error already propagating is the one the caller sees.
   }
@@ -529,9 +532,9 @@ interface CollectionObserver {
 }
 
 /**
- * Starts observing `gc` performance entries, where the engine delivers them.
+ * Starts observing `gc` performance entries, where the runtime delivers them.
  *
- * @returns The observer, or `undefined` where the engine has no `gc` entry type, as on Bun or in a
+ * @returns The observer, or `undefined` where the runtime has no `gc` entry type, as on Bun or in a
  *   browser.
  */
 function observeCollections(): CollectionObserver | undefined {
@@ -599,7 +602,7 @@ function summarizeCollections(entries: readonly PerformanceEntry[]): GcDuringTim
 }
 
 /**
- * Reads the collection kind Node records in a `gc` entry's `detail`.
+ * Reads the forced GC kind Node records in a `gc` entry's `detail`.
  *
  * @param entry - A `gc` performance entry.
  * @returns The entry's `detail.kind`, or `undefined` when it carries none.

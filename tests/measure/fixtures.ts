@@ -1,5 +1,5 @@
-/** A timer step fine enough that 100 ms samples span far more than 200 steps. */
-export const FINE_STEP = 2 ** -10;
+/** A timer resolution fine enough that 100 ms samples span far more than 200 times the resolution. */
+export const FINE_RESOLUTION = 2 ** -10;
 
-/** A timer step coarse enough that short samples span few steps or none. */
-export const COARSE_STEP = 2 ** -4;
+/** A timer resolution coarse enough that short samples span few multiples of the resolution or none. */
+export const COARSE_RESOLUTION = 2 ** -4;

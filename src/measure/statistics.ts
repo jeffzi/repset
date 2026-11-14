@@ -9,7 +9,7 @@ export interface Statistics {
   readonly p99: number;
   readonly max: number;
   readonly mean: number;
-  readonly samples: number;
+  readonly sampleCount: number;
 }
 
 /**
@@ -50,7 +50,7 @@ function quantile(sorted: Float64Array, q: number): number {
  *
  * The spans may be stored in any order; the store itself is left untouched.
  *
- * @param spansMs - The sampler's span store: each timed sample's span in milliseconds, for
+ * @param spansMs - The sampler's sample buffer: each timed sample's span in milliseconds, for
  *   `callsPerSample` body calls. Only its first `stored` slots are read.
  * @param stored - How many spans the sampler stored.
  * @param callsPerSample - How many body calls each span timed.
@@ -78,6 +78,6 @@ export function summarize(
     p99: quantile(sorted, 0.99),
     max: quantile(sorted, 1),
     mean: total / sorted.length,
-    samples: sorted.length,
+    sampleCount: sorted.length,
   };
 }

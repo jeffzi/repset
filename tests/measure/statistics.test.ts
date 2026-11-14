@@ -17,7 +17,7 @@ describe("summarize", () => {
         p99: expect.closeTo(3_970_000, 3),
         max: 4_000_000,
         mean: 2_500_000,
-        samples: 4,
+        sampleCount: 4,
       });
     });
   });
@@ -47,7 +47,7 @@ describe("summarize", () => {
         p99: expect.closeTo(2_980_000, 3),
         max: 3_000_000,
         mean: 2_000_000,
-        samples: 3,
+        sampleCount: 3,
       });
     });
   });
@@ -66,7 +66,7 @@ describe("summarize", () => {
         p99: 2_500_000,
         max: 2_500_000,
         mean: 2_500_000,
-        samples: 1,
+        sampleCount: 1,
       });
     });
   });

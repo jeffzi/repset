@@ -2,7 +2,6 @@
 min_version = "2026.11.1"
 
 [tools]
-# Same major as @types/node in package.json.
 "aqua:evilmartians/lefthook" = "2"
 "aqua:gitleaks/gitleaks" = "8"
 "aqua:go-task/task" = "3"
@@ -10,4 +9,5 @@ min_version = "2026.11.1"
 "aqua:rhysd/actionlint" = "1"
 "aqua:zizmorcore/zizmor" = "1"
 bun = "1"
+# Same major as @types/node in package.json.
 node = "26"

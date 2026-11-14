@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
   "entry": ["src/index.ts"],
-  "supportEntry": ["scripts/*.ts"],
+  "supportEntry": ["scripts/*.ts", "scripts/overhead-check/plain-child.ts"],
   "ignoreExportsUsedInFile": true,
   "ignoreDependencies": [
     "@arethetypeswrong/cli",

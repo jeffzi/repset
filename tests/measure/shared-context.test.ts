@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { sampleSharedContext, type SamplerResult } from "../../src/measure/shared-context.js";
-import { COARSE_STEP, FINE_STEP, SETTLED_CASES } from "./fixtures.js";
+import {
+  BudgetError,
+  sampleSharedContext,
+  type SamplerResult,
+} from "../../src/measure/shared-context.js";
+import { COARSE_STEP, FINE_STEP } from "./fixtures.js";
 
 interface World {
   readonly name: string;
@@ -72,9 +76,11 @@ function harness(costMs: CostMs): Harness {
 interface RunOptions {
   readonly callsPerSample?: number;
   readonly afterTiming?: boolean;
+  readonly time?: number;
+  readonly samples?: number;
 }
 
-/** Runs the sampler on a harness with a fresh context. */
+/** Runs the sampler on a harness with a fresh context, for 1000 ms and 64 samples unless given. */
 function run(fake: Harness, stepMs: number, options: RunOptions = {}): SamplerResult {
   const context: World = { name: "world" };
   return sampleSharedContext({
@@ -83,6 +89,8 @@ function run(fake: Harness, stepMs: number, options: RunOptions = {}): SamplerRe
     fn: fake.fn,
     context,
     collect: fake.collect,
+    time: options.time ?? 1000,
+    samples: options.samples ?? 64,
     ...(options.callsPerSample === undefined ? {} : { callsPerSample: options.callsPerSample }),
     ...(options.afterTiming === true ? { afterTiming: fake.afterTiming } : {}),
   });
@@ -128,6 +136,21 @@ function shortRuns(runs: readonly { calls: number; shortSteps: number }[]): Cost
 /** Costs 40 coarse steps a call in warmup, then halves per timing run so every run spans 100 steps. */
 function fasterEveryRun(_sample: number, _timed: boolean, timingRun: number): number {
   return timingRun === 0 ? coarse(40) : coarse(20 / 2 ** (timingRun - 1));
+}
+
+/**
+ * Costs 100 ms a call outside the first timing run, so warmup runs 16 samples of one call; in the
+ * first run, 50 ms on every third sample and 10 fine steps on the rest, so its 64 samples are
+ * discarded and the count grows to 20 for a kept second run of 64 samples of 2000 ms.
+ */
+function discardedFirstRun(sample: number, _timed: boolean, timingRun: number): number {
+  if (timingRun !== 1) return 100;
+  return sample % 3 === 0 ? 50 : 10 * FINE_STEP;
+}
+
+/** Warmup spans of 0 ms (no step read), 30 and then 50: the shortest that read a step is 30. */
+function warmupSpanMs(sample: number): number {
+  return [0, 30][sample] ?? 50;
 }
 
 /** Returns the Error a call throws, failing the test when it throws nothing or a non-Error. */
@@ -262,16 +285,67 @@ describe("sampleSharedContext", () => {
       expect(fake.collectsAt).toHaveLength(1);
     });
 
-    describe("when the store fills before 1000 ms have passed", () => {
-      it("stops at the store's size, the time minimum in 200-step samples plus 64", () => {
-        const fake = harness((_sample, timed) => (timed ? 0.75 : 50));
+    it("runs until `time` and `samples` have passed when its samples are as long as warmup's", () => {
+      const fake = harness(() => 0.75);
 
-        const result = run(fake, 0.1875, { callsPerSample: 1 });
+      const result = run(fake, 0.1875, { callsPerSample: 1, time: 500, samples: 10 });
 
-        expect(result.spans).toBeInstanceOf(Float64Array);
-        expect(result.spans).toHaveLength(91);
-        expect(result.samples).toBe(91);
+      expect(result.samples).toBe(667);
+    });
+
+    describe("when its samples get shorter than warmup's", () => {
+      it.each([
+        {
+          rule: "the shortest warmup sample that read a step",
+          stepMs: 0.1875,
+          warmupMs: warmupSpanMs,
+          expected: 27,
+        },
+        {
+          rule: "one step when no warmup sample read one",
+          stepMs: 100,
+          warmupMs: () => 25,
+          expected: 15,
+        },
+      ])(
+        "stops at the store's size, `time` in samples of $rule, rounded up, plus `samples`",
+        ({ stepMs, warmupMs, expected }) => {
+          const fake = harness((sample, timed) => (timed ? 0.75 : warmupMs(sample)));
+
+          const result = run(fake, stepMs, { callsPerSample: 1, time: 500, samples: 10 });
+
+          expect(result.spans).toBeInstanceOf(Float64Array);
+          expect(result.spans).toHaveLength(expected);
+          expect(result.samples).toBe(expected);
+        },
+      );
+
+      it("reports the run's length when it fills its store before `time` has passed", () => {
+        const fake = harness((sample, timed) => (timed ? 0.75 : warmupSpanMs(sample)));
+
+        const result = run(fake, 0.1875, { callsPerSample: 1, time: 500, samples: 10 });
+
+        expect(result.timingMs).toBe(20.25);
       });
+    });
+  });
+
+  describe("when calibrating the count", () => {
+    it("sizes the store to `time` in 200-step samples, rounded up, plus `samples`", () => {
+      const fake = harness(() => 100);
+
+      const result = run(fake, FINE_STEP, { time: 100.1, samples: 10 });
+
+      expect(result.spans).toHaveLength(523);
+    });
+
+    it("keeps a run of exactly `samples` samples at `time` 0 whose median spans 200 steps", () => {
+      const fake = harness(() => coarse(40));
+
+      const result = run(fake, COARSE_STEP, { time: 0, samples: 10 });
+
+      expect(result.samples).toBe(10);
+      expect(result.timingRuns).toBe(1);
     });
   });
 
@@ -466,6 +540,57 @@ describe("sampleSharedContext", () => {
       });
     });
 
+    it.each([
+      { when: "warmup's count passes the cap", costMs: () => 0, stepMs: CAPPED_STEP },
+      {
+        when: "a grown count passes the cap",
+        costMs: shortRuns([{ calls: 200, shortSteps: 1 }]),
+        stepMs: CAPPED_STEP,
+      },
+      {
+        when: "the third run is discarded within the cap",
+        costMs: fasterEveryRun,
+        stepMs: COARSE_STEP,
+      },
+    ])("fails with a BudgetError when $when", ({ costMs, stepMs }) => {
+      const fake = harness(costMs);
+
+      const error = errorOf(() => run(fake, stepMs));
+
+      expect(error).toBeInstanceOf(BudgetError);
+    });
+
+    describe("when a run is discarded", () => {
+      it("counts the discarded run's samples among warmup's", () => {
+        const fake = harness(discardedFirstRun);
+
+        const result = run(fake, FINE_STEP);
+
+        expect(result.warmupSamples).toBe(80);
+      });
+
+      it("counts the samples of every discarded run among warmup's", () => {
+        const fake = harness((_sample, _timed, timingRun) => {
+          if (timingRun === 0) return coarse(40);
+          if (timingRun === 1) return coarse(10);
+          return timingRun === 2 ? coarse(7.5) : coarse(10);
+        });
+
+        const result = run(fake, COARSE_STEP);
+
+        expect(result.timingRuns).toBe(3);
+        expect(result.warmupSamples).toBe(fake.collectsAt[2]);
+      });
+
+      it("reports the kept run's length alone", () => {
+        const fake = harness(discardedFirstRun);
+
+        const result = run(fake, FINE_STEP);
+
+        expect(result.timingMs).toBe(128_000);
+      });
+    });
+
     describe("afterTiming", () => {
       it("runs after each run's last sample, before the next collection", () => {
         const fake = harness(slowerAfterFirstRun(shortestFirstRun));
@@ -496,20 +621,11 @@ describe("sampleSharedContext", () => {
       fn: fake.fn,
       context,
       collect: fake.collect,
+      time: 1000,
+      samples: 64,
     });
 
     expect(fake.contexts).toStrictEqual(new Set([context]));
-  });
-
-  describe("settled flag", () => {
-    it.each(SETTLED_CASES)("is $expected when $when", ({ costMs, expected }) => {
-      const fake = harness((sample, timed) => (timed ? 100 : costMs(sample)));
-
-      const result = run(fake, FINE_STEP);
-
-      expect(fake.collectsAt).toStrictEqual([16]);
-      expect(result.settled).toBe(expected);
-    });
   });
 
   describe("when given no clock or step", () => {
@@ -525,6 +641,8 @@ describe("sampleSharedContext", () => {
         collect: () => {
           collections += 1;
         },
+        time: 1000,
+        samples: 64,
       });
 
       expect(collections).toBe(result.timingRuns);

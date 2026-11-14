@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { samplePerCall } from "../../src/measure/per-call.js";
 import type { SamplerResult } from "../../src/measure/shared-context.js";
-import { COARSE_STEP, FINE_STEP, SETTLED_CASES } from "./fixtures.js";
+import { COARSE_STEP, FINE_STEP } from "./fixtures.js";
 
 interface World {
   readonly id: number;
@@ -104,11 +104,16 @@ function harness(costs: Costs): Harness {
 
 interface RunOptions {
   readonly stepMs: number;
-  readonly callsPerSample?: number;
+  readonly callsPerSample?: number | undefined;
   readonly slots?: (World | undefined)[];
+  readonly time?: number;
+  readonly samples?: number;
 }
 
-/** Runs the sampler on a harness, forwarding `callsPerSample` and `slots` only when set. */
+/**
+ * Runs the sampler on a harness for 1000 ms and 64 samples unless given, forwarding
+ * `callsPerSample` and `slots` only when set.
+ */
 function run(fake: Harness, options: RunOptions): SamplerResult {
   return samplePerCall({
     now: fake.now,
@@ -117,6 +122,8 @@ function run(fake: Harness, options: RunOptions): SamplerResult {
     fn: fake.fn,
     teardown: fake.teardown,
     collect: fake.collect,
+    time: options.time ?? 1000,
+    samples: options.samples ?? 64,
     ...(options.callsPerSample === undefined ? {} : { callsPerSample: options.callsPerSample }),
     ...(options.slots === undefined ? {} : { slots: options.slots }),
   });
@@ -162,6 +169,14 @@ describe("samplePerCall", () => {
       );
     });
 
+    it("reports the run's length, every setup and teardown in it included", () => {
+      const fake = harness({ bodyMs: () => 100, buildMs: 50, teardownMs: 50 });
+
+      const result = run(fake, { stepMs: FINE_STEP, callsPerSample: 3 });
+
+      expect(result.timingMs).toBe(38_400);
+    });
+
     it("runs without a teardown", () => {
       const fake = harness({ bodyMs: () => 200 });
 
@@ -171,6 +186,8 @@ describe("samplePerCall", () => {
         setup: fake.setup,
         fn: fake.fn,
         collect: fake.collect,
+        time: 1000,
+        samples: 64,
       });
 
       expect(result.samples).toBe(64);
@@ -185,6 +202,14 @@ describe("samplePerCall", () => {
         run(fake, { stepMs: FINE_STEP });
 
         expect(fake.collectsAt).toStrictEqual([16]);
+      });
+
+      it("reports warmup's samples, leaving out the collection's call", () => {
+        const fake = harness({ bodyMs: () => 200 });
+
+        const result = run(fake, { stepMs: FINE_STEP });
+
+        expect(result.warmupSamples).toBe(16);
       });
 
       it("runs 64 timed samples", () => {
@@ -224,15 +249,21 @@ describe("samplePerCall", () => {
         expect(fake.collectsAt).toStrictEqual([1000]);
       });
 
-      it("stops timing at 2000 samples, the store's size", () => {
-        const fake = harness({ bodyMs: (_sample, timed) => (timed ? 0.25 : 1) });
+      it.each([
+        { count: "a calibrated", callsPerSample: undefined },
+        { count: "a fixed", callsPerSample: 1 },
+      ])(
+        "stops timing $count count at the store's size, `time` in 200-step samples, rounded up, plus `samples`",
+        ({ callsPerSample }) => {
+          const fake = harness({ bodyMs: (_sample, timed) => (timed ? 0.125 : 1) });
 
-        const result = run(fake, { stepMs: FINE_STEP });
+          const result = run(fake, { stepMs: FINE_STEP, callsPerSample, time: 100.1, samples: 10 });
 
-        expect(result.spans).toBeInstanceOf(Float64Array);
-        expect(result.spans).toHaveLength(2000);
-        expect(result.samples).toBe(2000);
-      });
+          expect(result.spans).toBeInstanceOf(Float64Array);
+          expect(result.spans).toHaveLength(523);
+          expect(result.samples).toBe(523);
+        },
+      );
     });
   });
 
@@ -315,23 +346,6 @@ describe("samplePerCall", () => {
     });
   });
 
-  describe("settled flag", () => {
-    it.each(SETTLED_CASES.filter(({ when }) => !when.includes("within 5 %")))(
-      "is $expected when $when",
-      ({ costMs, expected }) => {
-        const fake = harness({
-          bodyMs: (sample, timed) => (timed ? 100 : costMs(sample)),
-          buildMs: 200,
-        });
-
-        const result = run(fake, { stepMs: FINE_STEP });
-
-        expect(fake.collectsAt).toStrictEqual([16]);
-        expect(result.settled).toBe(expected);
-      },
-    );
-  });
-
   describe("contexts reachable for cleanup", () => {
     it.each([
       { when: "the body throws mid-sample", throwAt: 4, samplesBefore: 1, liveCount: 1 },
@@ -381,6 +395,8 @@ describe("samplePerCall", () => {
         collect: () => {
           collections += 1;
         },
+        time: 1000,
+        samples: 64,
       });
 
       expect(collections).toBe(1);

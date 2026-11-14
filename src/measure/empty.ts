@@ -11,11 +11,13 @@
 
 import {
   cappedCount,
-  TIMED_MIN_SAMPLES,
   WARMUP_MIN_SAMPLES,
   type SamplerResult,
   type Sampling,
 } from "./shared-context.js";
+
+/** The empty run's timed samples, whatever `time` and `samples` the body ran on. */
+const TIMED_SAMPLES = 64;
 
 /** The empty body the body's reading is compared against. */
 export function empty(): void {
@@ -37,12 +39,15 @@ export interface EmptyOptions extends Sampling {
 // as theirs do.
 interface Timed {
   readonly now: () => number;
-  readonly fn: () => void;
+  readonly fn: () => unknown;
 }
 
+/** Holds what the batched loop's last empty call returned, as the shared-context sampler does. */
+const consumed: { value: unknown } = { value: undefined };
+
 /**
- * Times `count` consecutive empty calls between one pair of clock reads, as a shared-context sample
- * does.
+ * Times `count` consecutive empty calls between one pair of clock reads, then keeps what the last
+ * call returned, as a shared-context sample does.
  *
  * @param timed - The clock and the empty body.
  * @param count - Calls in this sample.
@@ -50,11 +55,14 @@ interface Timed {
  */
 function batched(timed: Timed, count: number): number {
   const { now, fn } = timed;
+  let last: unknown;
   const started = now();
   for (let call = 0; call < count; call++) {
-    fn();
+    last = fn();
   }
-  return now() - started;
+  const spanMs = now() - started;
+  consumed.value = last;
+  return spanMs;
 }
 
 /**
@@ -83,7 +91,7 @@ function summed(timed: Timed, count: number): number {
  * @param options - The lifecycle to time it in, the clock, its step, the collection, and the fixed
  *   count if one was given.
  * @returns The 64 timed spans and the calls per sample they ran.
- * @throws Whatever `collect` throws, and Error when warmup's count would pass
+ * @throws Whatever `collect` throws, and BudgetError when warmup's count would pass
  *   `ceil(200 × step / 0.1 ns)`, naming the count asked for and the cap.
  */
 export function sampleEmpty(options: EmptyOptions): EmptyResult {
@@ -97,7 +105,7 @@ export function sampleEmpty(options: EmptyOptions): EmptyResult {
       count = cappedCount(count, spanMs, stepMs);
     }
   }
-  const spans = new Float64Array(TIMED_MIN_SAMPLES);
+  const spans = new Float64Array(TIMED_SAMPLES);
   collect();
   for (let stored = 0; stored < spans.length; stored++) {
     spans[stored] = span(timed, count);

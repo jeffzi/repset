@@ -40,7 +40,7 @@ jobs:
       - uses: ./.github/actions/setup-mise # zizmor: ignore[self-repository] -- actionlint 1.7.12 rejects the $/ form
         with:
           install_args: >-
-            --locked node aqua:go-task/task ${{ runner.os == 'Linux' && 'aqua:rhysd/actionlint
+            --locked node bun aqua:go-task/task ${{ runner.os == 'Linux' && 'aqua:rhysd/actionlint
             aqua:zizmorcore/zizmor aqua:gitleaks/gitleaks aqua:lycheeverse/lychee' || '' }}
 
       - name: Test

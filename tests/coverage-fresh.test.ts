@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -49,7 +49,7 @@ function createProject(
   for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
     if (entry.isDirectory()) {
       const path = join(entry.parentPath, entry.name);
-      const mtime = directories[relative(dir, path)] ?? OLDER;
+      const mtime = directories[relative(dir, path).replaceAll(sep, "/")] ?? OLDER;
       utimesSync(path, mtime, mtime);
     }
   }

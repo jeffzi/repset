@@ -18,8 +18,8 @@ this file. It is gitignored for personal, machine-specific preferences and never
   candidates never fail the run: verify each before reporting it.
 - `task fix` — auto-fix, then delete unused exports, dependencies and enum members. Review the diff.
 - `task build` — compile `src/` to `dist/`
-- `task check-package` — pack the package, install it in an empty app and import every entry. The
-  publish workflow runs it.
+- `task check-package` — pack the package, install it in an empty app and import every entry. CI
+  runs it.
 
 ## Tools (mise)
 

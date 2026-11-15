@@ -20,16 +20,19 @@ declare global {
 /** How long warmup runs before timing starts, repset's warmup length. */
 const WARMUP_MS = 250;
 
+/** The fewest warmup batches before timing starts, repset's warmup floor. */
+const WARMUP_MIN_BATCHES = 16;
+
 const NS_PER_MS = 1e6;
+
+const MEDIAN_QUANTILE = 0.5;
 
 const [name = "", callsArg = "", samplesArg = ""] = process.argv.slice(2);
 const calls = Number(callsArg);
 const samples = Number(samplesArg);
 if (!isBodyName(name)) throw new Error(`unknown body '${name}': expected ${BODY_NAMES.join(", ")}`);
-if (!Number.isSafeInteger(calls) || calls < 1)
-  throw new Error(`bad calls per sample '${callsArg}'`);
-if (!Number.isSafeInteger(samples) || samples < 1)
-  throw new Error(`bad sample count '${samplesArg}'`);
+if (!isPositiveInteger(calls)) throw new Error(`bad calls per sample '${callsArg}'`);
+if (!isPositiveInteger(samples)) throw new Error(`bad sample count '${samplesArg}'`);
 const collect = globalThis.gc;
 if (typeof collect !== "function") throw new Error("run with --expose-gc");
 
@@ -40,8 +43,29 @@ function isBodyName(value: string): value is BodyName {
   return BODY_NAMES.some((known) => known === value);
 }
 
+function isPositiveInteger(value: number): boolean {
+  return Number.isSafeInteger(value) && value >= 1;
+}
+
 /**
- * Warms the body with the timed loop's own batches, collects once, then times `samples` batches.
+ * Reads one rank of the ascending per-call times.
+ *
+ * @param sorted - The per-call times, ascending.
+ * @param rank - The zero-based rank to read.
+ * @returns The time at that rank.
+ * @throws RangeError when no time is stored at that rank.
+ */
+function timeAt(sorted: Float64Array, rank: number): number {
+  const time = sorted[rank];
+  if (time === undefined) {
+    throw new RangeError(`no timed batch at rank ${String(rank)}: ${String(sorted.length)} timed`);
+  }
+  return time;
+}
+
+/**
+ * Warms the body with the timed loop's own batches until both 250 ms and 16 batches have passed,
+ * collects once, then times `samples` batches.
  *
  * The loops live in a function: top-level loops run several times slower on Node. Both stay
  * inline here, since this function is the control: a helper around the inner loop changes the code
@@ -54,7 +78,11 @@ function isBodyName(value: string): value is BodyName {
 // fallow-ignore-next-line complexity -- the control's loops stay inline; see the doc comment
 function run(state: Points, gc: NodeJS.GCFunction): Float64Array {
   const warmEnd = performance.now() + WARMUP_MS;
-  while (performance.now() < warmEnd) for (let call = 0; call < calls; call++) body(state);
+  let warmed = 0;
+  while (warmed < WARMUP_MIN_BATCHES || performance.now() < warmEnd) {
+    for (let call = 0; call < calls; call++) body(state);
+    warmed += 1;
+  }
   gc();
   const perCall = new Float64Array(samples);
   for (let sample = 0; sample < samples; sample++) {
@@ -68,9 +96,9 @@ function run(state: Points, gc: NodeJS.GCFunction): Float64Array {
 const state = buildPoints();
 const perCall = run(state, collect);
 globalThis.benchSink = positionSum(state);
-const rank = (samples - 1) * 0.5;
-const low = perCall[Math.floor(rank)] ?? Number.NaN;
-const high = perCall[Math.ceil(rank)] ?? Number.NaN;
-process.stdout.write(
-  `${JSON.stringify({ median: low + (high - low) * (rank - Math.floor(rank)) })}\n`,
-);
+const rank = (samples - 1) * MEDIAN_QUANTILE;
+const lowerRank = Math.floor(rank);
+const low = timeAt(perCall, lowerRank);
+const high = timeAt(perCall, Math.ceil(rank));
+const median = low + (high - low) * (rank - lowerRank);
+process.stdout.write(`${JSON.stringify({ median })}\n`);

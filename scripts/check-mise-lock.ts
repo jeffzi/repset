@@ -1,5 +1,4 @@
-import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
 
 import { parse } from "smol-toml";
 
@@ -67,11 +66,6 @@ export function checkMiseLock(text: string): void {
   }
 }
 
-const entry = process.argv[1];
-if (
-  entry !== undefined &&
-  existsSync(entry) &&
-  realpathSync(entry) === fileURLToPath(import.meta.url)
-) {
+if (import.meta.main) {
   checkMiseLock(readFileSync(LOCKFILE, "utf8"));
 }

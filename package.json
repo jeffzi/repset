@@ -8,6 +8,12 @@
     "dist"
   ],
   "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.0",
     "@commitlint/cli": "^21.2.0",

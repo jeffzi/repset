@@ -17,8 +17,13 @@ export interface Points {
   readonly points: readonly Point[];
 }
 
-/** How many points a state holds. */
 const SIZE = 1000;
+
+/** How many distinct velocities the points cycle through. */
+const VELOCITY_LEVELS = 7;
+
+/** The velocity difference between neighboring levels. */
+const VELOCITY_STEP = 0.001;
 
 export const BODY_NAMES = ["each", "inlined"] as const;
 
@@ -31,7 +36,8 @@ export type BodyName = (typeof BODY_NAMES)[number];
  */
 export function buildPoints(): Points {
   const points: Point[] = [];
-  for (let index = 0; index < SIZE; index++) points.push({ x: 0, vx: (index % 7) * 0.001 });
+  for (let index = 0; index < SIZE; index++)
+    points.push({ x: 0, vx: (index % VELOCITY_LEVELS) * VELOCITY_STEP });
   return { points };
 }
 
@@ -48,11 +54,6 @@ function each(points: readonly Point[], visit: (point: Point) => void): void {
   }
 }
 
-/**
- * Moves `point` one step.
- *
- * @param point - The point to move.
- */
 function move(point: Point): void {
   point.x += point.vx;
 }

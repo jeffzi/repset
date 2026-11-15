@@ -21,7 +21,7 @@ describe("exportSubpaths", () => {
   });
 
   describe("when exports is undefined", () => {
-    it("throws that the package has no exports", () => {
+    it("throws", () => {
       expect(() => exportSubpaths(undefined)).toThrow(Error);
     });
   });

@@ -93,7 +93,7 @@ tasks:
     internal: true
     deps: [_deps]
     cmds:
-      - "{{.MISE}} npx tsx scripts/check-mise-lock.ts"
+      - "{{.MISE}} node scripts/check-mise-lock.ts"
 
   _lint:
     internal: true
@@ -174,7 +174,7 @@ tasks:
     internal: true
     deps: [_deps]
     cmds:
-      - "{{.MISE}} npx tsx scripts/check-coverage-fresh.ts"
+      - "{{.MISE}} node scripts/check-coverage-fresh.ts"
       - "{{.MISE}} npx fallow --fail-on-issues --quiet"
 
   _security:

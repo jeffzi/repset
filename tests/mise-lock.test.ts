@@ -21,8 +21,12 @@ function asset(platform: Platform): Asset {
 }
 
 /**
- * One locked version of a tool, complete on every platform unless overridden (`null` omits the
- * platform table).
+ * One locked version of a tool, complete on every platform unless overridden.
+ *
+ * @param version - The locked version.
+ * @param overrides - The asset to lock per platform in place of the complete one; `null` omits that
+ *   platform's table.
+ * @returns The tool's lock entry.
  */
 function entry(
   version: string,

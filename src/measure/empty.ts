@@ -10,13 +10,14 @@
  */
 
 import {
-  cappedCount,
+  recordWarmup,
+  startWarmup,
   WARMUP_MIN_SAMPLES,
   type SamplerResult,
   type Sampling,
 } from "./shared-state.js";
 
-/** The empty run's timed samples, whatever `time` and `samples` the body ran on. */
+/** The empty run's timed samples, whatever `minTime` and `minSamples` the body ran on. */
 const TIMED_SAMPLES = 64;
 
 /** The empty body the body's reading is compared against. */
@@ -98,13 +99,11 @@ export function sampleEmpty(options: EmptyOptions): EmptyResult {
   const { kind, now, resolutionMs, collect, callsPerSample } = options;
   const span = kind === "sharedState" ? batched : summed;
   const timed: Timed = { now, fn: empty };
-  let count = callsPerSample ?? 1;
-  for (let samples = 0; samples < WARMUP_MIN_SAMPLES; samples++) {
-    const spanMs = span(timed, count);
-    if (callsPerSample === undefined) {
-      count = cappedCount(count, spanMs, resolutionMs);
-    }
+  const progress = startWarmup(resolutionMs, callsPerSample);
+  while (progress.samples < WARMUP_MIN_SAMPLES) {
+    recordWarmup(progress, span(timed, progress.count));
   }
+  const count = progress.count;
   const spans = new Float64Array(TIMED_SAMPLES);
   collect();
   for (let stored = 0; stored < spans.length; stored++) {

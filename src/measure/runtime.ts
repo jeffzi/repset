@@ -1,4 +1,3 @@
-/** The runtimes `measure` runs on. */
 export type Runtime = "node" | "bun";
 
 /**

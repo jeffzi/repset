@@ -10,7 +10,7 @@
  * `catch`, `finally`, `async` function, generator or Promise encloses the timed calls or the loops
  * around them (VISION #1), since any of those changes how the engine compiles the loop. Error
  * handling and teardown on a throw belong to the caller, which finds the state in flight in
- * `slots`.
+ * `inFlight`.
  *
  * The module imports only sibling `measure` modules and reads no Node builtin, so it loads in a
  * browser page.
@@ -19,6 +19,7 @@
 import {
   calibratedSampleMs,
   recordWarmup,
+  resolvedClock,
   sampleBuffer,
   startWarmup,
   warmedUp,
@@ -29,10 +30,21 @@ import {
   type TimedMinimums,
   type WarmupResult,
 } from "./shared-state.js";
-import { performanceNow, timerResolutionMs } from "./timer.js";
 
 const WARMUP_MIN_MS = 3000;
 const WARMUP_MAX_SAMPLES = 1000;
+
+/**
+ * The state a per-call run built and has not torn down. The sampler sets `state` and then `held`
+ * on setup, and clears both once its teardown returned, so a caller that catches a throw from the
+ * sampler can tear down the state left in flight. `held`, not `state`, says whether one is: a
+ * setup may return `undefined`.
+ */
+export interface InFlight<State> {
+  /** Whether a state was built and not yet torn down; while it is, `state` is that state. */
+  held: boolean;
+  state: State | undefined;
+}
 
 /** `now` defaults to `performance.now()`, and `resolutionMs` to a probe of `now`. */
 export interface PerCallOptions<State>
@@ -43,12 +55,8 @@ export interface PerCallOptions<State>
   readonly fn: (state: State) => void;
   /** Tears down a state once its body call returned; defaults to doing nothing. */
   readonly teardown?: (state: State) => void;
-  /**
-   * Holds every state built and not yet torn down: the sampler sets an entry on setup and
-   * clears it to `undefined` on teardown, so a caller that catches a throw from the sampler can
-   * tear down whatever is left.
-   */
-  readonly slots?: (State | undefined)[];
+  /** Receives the state in flight; no two states are ever alive at once. */
+  readonly inFlight?: InFlight<State>;
 }
 
 interface PerCall<State> {
@@ -56,7 +64,7 @@ interface PerCall<State> {
   readonly setup: () => State;
   readonly fn: (state: State) => void;
   readonly teardown: (state: State) => void;
-  readonly slots: (State | undefined)[];
+  readonly inFlight: InFlight<State>;
 }
 
 /** The teardown of a benchmark that gives none. */
@@ -68,23 +76,25 @@ export function keep(): void {
  * Times `count` body calls, each on a state built just before its clock reads and torn down
  * just after.
  *
- * @param perCall - The clock, the lifecycle, and the slots that hold the state in flight.
+ * @param perCall - The clock, the lifecycle, and the holder of the state in flight.
  * @param count - Calls in this sample.
  * @returns The sum of the calls' spans, in milliseconds.
  * @throws Whatever `setup`, `fn` or `teardown` throws, leaving the state in flight in
- *   `perCall.slots`.
+ *   `perCall.inFlight`.
  */
 function sample<State>(perCall: PerCall<State>, count: number): number {
-  const { now, setup, fn, teardown, slots } = perCall;
+  const { now, setup, fn, teardown, inFlight } = perCall;
   let summed = 0;
   for (let call = 0; call < count; call++) {
     const state = setup();
-    slots[0] = state;
+    inFlight.state = state;
+    inFlight.held = true;
     const started = now();
     fn(state);
     summed += now() - started;
     teardown(state);
-    slots[0] = undefined;
+    inFlight.held = false;
+    inFlight.state = undefined;
   }
   return summed;
 }
@@ -93,7 +103,7 @@ function sample<State>(perCall: PerCall<State>, count: number): number {
  * Runs warmup samples until 1000 have run, or until both 3000 ms of wall time, every setup and
  * teardown included, and 16 samples have passed, calibrating the count unless one was fixed.
  *
- * @param perCall - The clock, the lifecycle, and the slots.
+ * @param perCall - The clock, the lifecycle, and the holder of the state in flight.
  * @param resolutionMs - The timer resolution, in milliseconds.
  * @param fixed - The fixed calls per sample, or `undefined` to calibrate one.
  * @returns The count warmup ended on, and the samples it ran.
@@ -122,10 +132,10 @@ function warmup<State>(
 }
 
 /**
- * Fills `spans` with timed samples until it is full, or until both `time` of wall time, every
- * setup and teardown included, and `samples` have passed.
+ * Fills `spans` with timed samples until it is full, or until both `minTime` of wall time, every
+ * setup and teardown included, and `minSamples` have passed.
  *
- * @param perCall - The clock, the lifecycle, and the slots.
+ * @param perCall - The clock, the lifecycle, and the holder of the state in flight.
  * @param count - Calls per sample.
  * @param spans - Preallocated storage for the spans, in milliseconds.
  * @param minimums - The wall time and the samples the run must pass.
@@ -157,35 +167,38 @@ function timeSamples<State>(
  * Warms a perCall body up, collects once, then times every sample, each call on a fresh state.
  *
  * The forced GC builds one state, runs the body on it outside any clock read, calls `collect`
- * while it is alive, then tears it down. Timing takes samples until both `time`, in wall time with
- * every setup and teardown, and `samples` have passed, or the sample buffer is full; a run that fills
- * the store is returned as it is. The store holds `time` filled with samples of 200 times the resolution, rounded up,
- * plus `samples`, whether or not the count was fixed, and is allocated before the forced GC, so
- * its allocation never lands in a timed sample. No two states are ever alive at once.
+ * while it is alive, then tears it down. Timing takes samples until both `minTime`, in wall time
+ * with every setup and teardown, and `minSamples` have passed, or the sample buffer is full; a run
+ * that fills the store is returned as it is. The store holds `minTime` filled with samples of 200
+ * times the resolution, rounded up, plus `minSamples`, whether or not the count was fixed, and is
+ * allocated before the forced GC, so its allocation never lands in a timed sample. No two states
+ * are ever alive at once.
  *
- * @param options - The lifecycle, the forced GC, the slots, `time` and `samples`, and the clock.
+ * @param options - The lifecycle, the forced GC, the holder of the state in flight, `minTime` and
+ *   `minSamples`, and the clock.
  * @returns The timed spans, the calls per sample, `timingAttempts` of 1 (this sampler never checks a
  *   timing attempt or times again), warmup's samples without the forced GC's call, and the
  *   timed run's wall time, every setup and teardown in it included.
- * @throws Whatever `setup`, `fn`, `teardown` or `collect` throws, leaving every state built and
- *   not torn down in `options.slots`; and CalibrationError when warmup's calibrated count would pass
+ * @throws Whatever `setup`, `fn`, `teardown` or `collect` throws, leaving the state built and not
+ *   torn down, if any, in `options.inFlight`; and CalibrationError when warmup's calibrated count would pass
  *   `ceil(200 × resolution / 0.1 ns)`, naming the count asked for and the cap, before any sample runs it.
  */
 export function samplePerCall<State>(options: PerCallOptions<State>): SamplerResult {
   const { setup, fn, collect, callsPerSample } = options;
-  const now = options.now ?? performanceNow;
-  const resolutionMs = options.resolutionMs ?? timerResolutionMs(now);
+  const { now, resolutionMs } = resolvedClock(options);
   const teardown = options.teardown ?? keep;
-  const slots = options.slots ?? [];
-  const perCall: PerCall<State> = { now, setup, fn, teardown, slots };
+  const inFlight = options.inFlight ?? { held: false, state: undefined };
+  const perCall: PerCall<State> = { now, setup, fn, teardown, inFlight };
   const warmed = warmup(perCall, resolutionMs, callsPerSample);
   const spans = sampleBuffer(options, calibratedSampleMs(resolutionMs));
   const held = setup();
-  slots[0] = held;
+  inFlight.state = held;
+  inFlight.held = true;
   fn(held);
   collect();
   teardown(held);
-  slots[0] = undefined;
+  inFlight.held = false;
+  inFlight.state = undefined;
   const { sampleCount, timingMs } = timeSamples(perCall, warmed.callsPerSample, spans, options);
   return {
     spans,

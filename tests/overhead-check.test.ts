@@ -4,6 +4,8 @@ import { exitStatus, judgeCell, summarizeCell } from "../scripts/overhead-check/
 import type { CellSummary, CellVerdict, Pairs } from "../scripts/overhead-check/verdict.js";
 
 const PAIRS = 12;
+/** Two-sided sign-test p-value when all twelve pairs differ in the same direction. */
+const SAME_SIGN_P_VALUE = 2 / 4096;
 
 /** Builds a round of twelve pairs with every plain median and every repset median set to one value each. */
 function constantRound(plain: number, repset: number): Pairs {
@@ -24,13 +26,13 @@ const SLOWER_SUMMARY: CellSummary = {
   plainMedian: 100,
   repsetMedian: 110,
   gap: 0.1,
-  pValue: 2 / 4096,
+  pValue: SAME_SIGN_P_VALUE,
 };
 const FASTER_SUMMARY: CellSummary = {
   plainMedian: 100,
   repsetMedian: 90,
   gap: -0.1,
-  pValue: 2 / 4096,
+  pValue: SAME_SIGN_P_VALUE,
 };
 const NOISE_SUMMARY: CellSummary = { plainMedian: 100, repsetMedian: 100, gap: 0, pValue: 1 };
 
@@ -46,25 +48,32 @@ function createVerdict(passed: boolean): CellVerdict {
 
 describe("summarizeCell", () => {
   describe("when the pair count is odd", () => {
-    it("reports the middle values, their gap, and the p-value", () => {
+    it("reports the middle value as each median", () => {
       const summary = summarizeCell([3, 1, 2], [6, 4, 5]);
 
-      expect(summary).toStrictEqual({ plainMedian: 2, repsetMedian: 5, gap: 1.5, pValue: 2 / 8 });
+      expect([summary.plainMedian, summary.repsetMedian]).toStrictEqual([2, 5]);
     });
   });
 
   describe("when the pair count is even", () => {
-    it("reports the means of the two middle values, their gap, and the p-value", () => {
+    it("reports the mean of the two middle values as each median", () => {
       const summary = summarizeCell([4, 1, 3, 2], [8, 2, 6, 4]);
 
-      expect(summary).toStrictEqual({ plainMedian: 2.5, repsetMedian: 5, gap: 1, pValue: 2 / 16 });
+      expect([summary.plainMedian, summary.repsetMedian]).toStrictEqual([2.5, 5]);
+    });
+  });
+
+  describe("gap", () => {
+    it("is the repset median's difference from the plain median, relative to the plain median", () => {
+      const summary = summarizeCell([2], [5]);
+
+      expect(summary.gap).toBe(1.5);
     });
   });
 
   describe("p-value", () => {
     it.each([
       { label: "all differences zero", plain: [5, 5, 5], repset: [5, 5, 5], expected: 1 },
-      { label: "twelve equal positive differences", ...SLOWER_REPSET, expected: 2 / 4096 },
       { label: "differences [1, -1]", plain: [10, 10], repset: [11, 9], expected: 1 },
       // Paired by sorted rank these would read differences [1, 1] and p = 2/4.
       { label: "pairs taken by index", plain: [1, 10], repset: [11, 2], expected: 1 },

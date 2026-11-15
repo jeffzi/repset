@@ -7,10 +7,10 @@
  * around them (VISION #1), since any of those changes how the engine compiles the loop. Error
  * handling and teardown belong to the caller.
  *
- * The module imports only `./timer.js` and reads no Node builtin, so it loads in a browser page.
+ * The module imports only `../utils.js` and reads no Node builtin, so it loads in a browser page.
  */
 
-import { performanceNow, timerResolutionMs } from "./timer.js";
+import { performanceNow, timerResolutionMs } from "../utils.js";
 
 /** Every sample spans at least this many multiples of the timer resolution once warmup calibrates its count. */
 const MIN_RESOLUTIONS_PER_SAMPLE = 200;
@@ -27,7 +27,11 @@ const WARMUP_MIN_MS = 250;
 export const WARMUP_MIN_SAMPLES = 16;
 
 /** The most timing attempts a calibrated count takes before the sampler gives up. */
-const MAX_TIMING_RUNS = 3;
+const MAX_TIMING_ATTEMPTS = 3;
+
+// ---------------------------------------------------------------------------
+// Sampler contract
+// ---------------------------------------------------------------------------
 
 /**
  * A sampler's refusal to time a body within its calibration: a count past the cap, or a third timing attempt
@@ -59,6 +63,22 @@ export interface Sampling {
 export type SamplerClock = Partial<Pick<Sampling, "now" | "resolutionMs">>;
 
 /**
+ * Fills in a sampler's clock and resolution where it gave none.
+ *
+ * @param clock - The sampler's own clock and resolution, each optional.
+ * @returns The given clock, or `performance.now()` when absent, and the given resolution, or a
+ *   probe of that clock when absent.
+ */
+export function resolvedClock(clock: SamplerClock): {
+  readonly now: () => number;
+  readonly resolutionMs: number;
+} {
+  const now = clock.now ?? performanceNow;
+  const resolutionMs = clock.resolutionMs ?? timerResolutionMs(now);
+  return { now, resolutionMs };
+}
+
+/**
  * What a body sampler's timing attempt must pass before it stops: both, unless the sample buffer fills
  * first. The empty run takes neither.
  */
@@ -84,7 +104,7 @@ export interface SharedStateOptions<State>
 }
 
 export interface SamplerResult {
-  /** The kept run's spans, in milliseconds; only the first `samples` entries are filled. */
+  /** The kept run's spans, in milliseconds; only the first `sampleCount` entries are filled. */
   readonly spans: Float64Array;
   /** How many entries of `spans` are filled. */
   readonly sampleCount: number;
@@ -107,6 +127,10 @@ export interface SamplerResult {
 
 export type WarmupResult = Pick<SamplerResult, "callsPerSample" | "warmupSamples">;
 
+// ---------------------------------------------------------------------------
+// Count calibration
+// ---------------------------------------------------------------------------
+
 /**
  * The span, in milliseconds, of a sample at the 200 times the resolution a calibrated count reaches.
  *
@@ -118,8 +142,8 @@ export function calibratedSampleMs(resolutionMs: number): number {
 }
 
 /**
- * Allocates a sample buffer that holds `time` filled with samples of `sampleMs`, rounded up, plus
- * `samples`, so a run whose samples span `sampleMs` or more passes both minimums before it fills.
+ * Allocates a sample buffer that holds `minTime` filled with samples of `sampleMs`, rounded up, plus
+ * `minSamples`, so a run whose samples span `sampleMs` or more passes both minimums before it fills.
  *
  * @param minimums - The timed time and sample minimums.
  * @param sampleMs - The span, in milliseconds, each sample is expected to reach.
@@ -198,7 +222,7 @@ export function cappedCount(count: number, spanMs: number, resolutionMs: number)
  * @throws CalibrationError when `next` passes the cap, naming the count asked for and the cap.
  */
 function withinCap(next: number, resolutionMs: number): number {
-  const cap = Math.ceil((MIN_RESOLUTIONS_PER_SAMPLE * resolutionMs) / SHORTEST_BODY_MS);
+  const cap = Math.ceil(calibratedSampleMs(resolutionMs) / SHORTEST_BODY_MS);
   if (next > cap) {
     throw new CalibrationError(
       `warmup asked for ${String(next)} calls per sample, above the cap of ${String(cap)}`,
@@ -206,6 +230,10 @@ function withinCap(next: number, resolutionMs: number): number {
   }
   return next;
 }
+
+// ---------------------------------------------------------------------------
+// Warmup bookkeeping
+// ---------------------------------------------------------------------------
 
 /**
  * Either sampler's warmup bookkeeping between samples. Each sampler keeps its own loop, stop rule
@@ -256,6 +284,10 @@ export function recordWarmup(progress: WarmupProgress, spanMs: number): void {
 export function warmedUp(progress: WarmupProgress): WarmupResult {
   return { callsPerSample: progress.count, warmupSamples: progress.samples };
 }
+
+// ---------------------------------------------------------------------------
+// Shared-state timing loop
+// ---------------------------------------------------------------------------
 
 interface Timed<State> {
   readonly now: () => number;
@@ -332,14 +364,14 @@ function warmup<State>(
 interface TimedAttempt {
   /** How many entries of the sample buffer the run filled. */
   readonly stored: number;
-  /** Whether the store filled before both `time` and `samples` had passed. */
+  /** Whether the store filled before both `minTime` and `minSamples` had passed. */
   readonly cutShort: boolean;
   /** The run's length on the sampler's clock, in milliseconds. */
   readonly lengthMs: number;
 }
 
 /**
- * Fills `spans` with timed samples until both `time` and `samples` have passed, or `spans` is
+ * Fills `spans` with timed samples until both `minTime` and `minSamples` have passed, or `spans` is
  * full, then reads the run's length once, after its last sample, so the loop takes no extra read.
  *
  * @param timed - The clock, the body, and its state.
@@ -398,7 +430,7 @@ function timingAttempt<State>(
 }
 
 /**
- * Whether a timing attempt keeps its spans: it passed `time` and `samples` before filling the store,
+ * Whether a timing attempt keeps its spans: it passed `minTime` and `minSamples` before filling the store,
  * and its median sample (the upper median for an even count) spans at least 200 times the resolution, counted as
  * warmup counts them.
  *
@@ -444,19 +476,19 @@ function grownCount(count: number, spans: Float64Array, resolutionMs: number): n
  * Warms the body up, then times samples on the caller's one state in timing attempts, collecting
  * before each.
  *
- * A run takes samples until both `time`, on the sampler's clock, and `samples` have passed, or the
- * sample buffer is full. Unless the count was fixed, a run whose median sample spans under 200 times the resolution,
+ * A run takes samples until both `minTime`, on the sampler's clock, and `minSamples` have passed, or
+ * the sample buffer is full. Unless the count was fixed, a run whose median sample spans under 200 times the resolution,
  * or that filled the store first, is discarded: the count grows from its shortest sample and the
  * sampler times again, at most three runs in all. The check runs after `timeSamples` returns, never
  * inside the timing loop. A fixed-count run that fills the store is returned as it is.
  *
- * The sample buffer holds `time` filled with samples of 200 times the resolution for a calibrated count, or of
+ * The sample buffer holds `minTime` filled with samples of 200 times the resolution for a calibrated count, or of
  * warmup's shortest sample that read a clock change for a fixed one (one resolution when none did), rounded up,
- * plus `samples`. It is allocated before the first collection, so its allocation never lands in a
+ * plus `minSamples`. It is allocated before the first collection, so its allocation never lands in a
  * timed sample. Every run refills it from the start.
  *
- * @param options - The body, its state, the forced GC, the callback after each run, `time` and
- *   `samples`, and the clock.
+ * @param options - The body, its state, the forced GC, the callback after each run, `minTime` and
+ *   `minSamples`, and the clock.
  * @returns The kept run's spans and calls per sample, the timing attempts taken, warmup's samples plus
  *   every discarded run's, and the kept run's length on the sampler's clock.
  * @throws Whatever `fn`, `collect` or `afterTiming` throws; CalibrationError when warmup's or a grown
@@ -466,8 +498,7 @@ function grownCount(count: number, spans: Float64Array, resolutionMs: number): n
  */
 export function sampleSharedState<State>(options: SharedStateOptions<State>): SamplerResult {
   const { fn, state, callsPerSample } = options;
-  const now = options.now ?? performanceNow;
-  const resolutionMs = options.resolutionMs ?? timerResolutionMs(now);
+  const { now, resolutionMs } = resolvedClock(options);
   const timed: Timed<State> = { now, fn, state };
   const warmed = warmup(timed, resolutionMs, callsPerSample);
   const spans = sampleBuffer(
@@ -478,18 +509,26 @@ export function sampleSharedState<State>(options: SharedStateOptions<State>): Sa
   let warmupSamples = warmed.warmupSamples;
   let timingAttempts = 1;
   let run = timingAttempt(timed, calls, spans, options);
-  if (callsPerSample === undefined) {
-    while (!isKept(spans, run, resolutionMs)) {
-      calls = grownCount(calls, spans.subarray(0, run.stored), resolutionMs);
-      if (timingAttempts === MAX_TIMING_RUNS) {
-        throw new CalibrationError(
-          `${String(timingAttempts)} timing attempts were discarded; the next would need ${String(calls)} calls per sample`,
-        );
-      }
-      warmupSamples += run.stored;
-      run = timingAttempt(timed, calls, spans, options);
-      timingAttempts += 1;
+  if (callsPerSample !== undefined) {
+    return {
+      spans,
+      sampleCount: run.stored,
+      callsPerSample: calls,
+      timingAttempts,
+      warmupSamples,
+      timingMs: run.lengthMs,
+    };
+  }
+  while (!isKept(spans, run, resolutionMs)) {
+    calls = grownCount(calls, spans.subarray(0, run.stored), resolutionMs);
+    if (timingAttempts === MAX_TIMING_ATTEMPTS) {
+      throw new CalibrationError(
+        `${String(timingAttempts)} timing attempts were discarded; the next would need ${String(calls)} calls per sample`,
+      );
     }
+    warmupSamples += run.stored;
+    run = timingAttempt(timed, calls, spans, options);
+    timingAttempts += 1;
   }
   return {
     spans,

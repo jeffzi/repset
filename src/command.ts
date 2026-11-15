@@ -77,6 +77,9 @@ const EXCLUSIVE: readonly (readonly [string, string])[] = [
 /** Decimal digits with an optional fraction: `Number` alone reads `""` as 0 and accepts `1e3`. */
 const DECIMAL = /^\d+(?:\.\d+)?$/;
 
+/** The environment variable that fixes the calls per sample of every measuring child of a run. */
+const CALLS_PER_SAMPLE = "REPSET_CALLS_PER_SAMPLE";
+
 const USAGE = `Usage: repset [options] [file...]
 
 Measures the benchmark cases in the given files, or in the files the config's include matches.
@@ -103,6 +106,8 @@ interface Command {
   /** The `--out` value as written: a file relative to the working directory, or `-` for stdout. */
   readonly out: string | undefined;
   readonly metricLines: boolean;
+  /** The calls per sample `REPSET_CALLS_PER_SAMPLE` fixes for a run, or `undefined` when unset. */
+  readonly callsPerSample: number | undefined;
 }
 
 /** The command's streams, working directory, stop signal and child functions, defaults applied. */
@@ -130,6 +135,25 @@ function decimal(flag: string, text: string | undefined): number | undefined {
   return Number(text);
 }
 
+/**
+ * The calls per sample the environment fixes. Only an unset variable leaves the count to each
+ * measuring child; the empty string is a bad value.
+ *
+ * @param text - The value of `REPSET_CALLS_PER_SAMPLE`, or `undefined` when it is unset.
+ * @returns The count, or `undefined` when the variable is unset.
+ * @throws {ConfigError} When the value is not decimal digits naming a safe integer of 1 or more.
+ */
+function fixedCallsPerSample(text: string | undefined): number | undefined {
+  if (text === undefined) return undefined;
+  const count = /^\d+$/.test(text) ? Number(text) : Number.NaN;
+  if (!Number.isSafeInteger(count) || count < 1) {
+    throw new ConfigError(
+      `${CALLS_PER_SAMPLE} must be a whole number of 1 or more, got ${JSON.stringify(text)}`,
+    );
+  }
+  return count;
+}
+
 /** The runtimes of a `--runtime` list, or `undefined` when it is absent. */
 function runtimeList(text: string | undefined): Runtime[] | undefined {
   if (text === undefined) return undefined;
@@ -142,12 +166,13 @@ function runtimeList(text: string | undefined): Runtime[] | undefined {
 }
 
 /**
- * Reads the command line, past `--help` and `--version`.
+ * Reads the command line and `REPSET_CALLS_PER_SAMPLE`, past `--help` and `--version`.
  *
  * @param args - The command's arguments.
- * @returns What the command line asks for.
+ * @returns What the command line and the environment ask for.
  * @throws {ConfigError} When a flag is unknown, given twice, missing its value or holding a value
- *   that is not a decimal number where one is due, or when two flags conflict.
+ *   that is not a decimal number where one is due, when two flags conflict, or when
+ *   `REPSET_CALLS_PER_SAMPLE` holds a bad value.
  */
 function parseCommand(args: readonly string[]): Command {
   let parsed;
@@ -187,6 +212,7 @@ function parseCommand(args: readonly string[]): Command {
     },
     out: values.out,
     metricLines: values["metric-lines"] === true,
+    callsPerSample: fixedCallsPerSample(process.env[CALLS_PER_SAMPLE]),
   };
 }
 
@@ -281,6 +307,7 @@ async function measure(command: Command, context: Context): Promise<number> {
   const report = await run({
     ...command.input,
     ...childInput(context),
+    callsPerSample: command.callsPerSample,
     onSelected: writes?.onSelected,
     onResult: (result: Result) => {
       const line = command.metricLines ? metricLine(result) : undefined;

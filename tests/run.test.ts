@@ -299,6 +299,28 @@ describe("run", () => {
         ["node", "a.bench.ts", "node a.bench.ts a.bench.ts 7 64"],
       ]);
     });
+
+    it.each([
+      { why: "the count it is given", callsPerSample: 5, asked: ["5", "5"] },
+      { why: "no count when it is given none", callsPerSample: undefined, asked: ["none", "none"] },
+    ])("asks each one for $why", async ({ callsPerSample, asked }) => {
+      const echoCount = starter((_runtime, request) =>
+        failedOutcome(
+          "fn",
+          request.mode === "measure" && "callsPerSample" in request
+            ? String(request.callsPerSample)
+            : "none",
+        ),
+      );
+
+      const report = await runHere({
+        files: ["zeta.bench.ts", "a.bench.ts"],
+        startChild: echoCount,
+        ...(callsPerSample === undefined ? {} : { callsPerSample }),
+      });
+
+      expect(report.results.map((result) => result.error?.message)).toStrictEqual(asked);
+    });
   });
 
   describe("when a case fails", () => {

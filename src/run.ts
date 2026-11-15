@@ -218,6 +218,8 @@ export interface RunInput extends OnceInput {
   readonly onSelected?: ((report: Report) => void) | undefined;
   /** Lists the host's logical CPUs; `os.cpus` by default. */
   readonly cpus?: (() => readonly { readonly model: string }[]) | undefined;
+  /** The calls per sample every measuring child times its case at; absent means each calibrates one. */
+  readonly callsPerSample?: number | undefined;
   /** The `package.json` whose version the report records; the package's own by default. */
   readonly packageJson?: string | undefined;
 }
@@ -403,8 +405,9 @@ function reportOptions(input: OnceInput, options: ResolvedOptions): ReportOption
  * starts.
  *
  * @param input - The caller's options, the positional files, the stop signal, the result and
- *   selection callbacks, and the functions that look a runtime up, start a child, list the CPUs and
- *   name the `package.json` to read the version from, the real ones by default.
+ *   selection callbacks, the calls per sample to fix, and the functions that look a runtime up,
+ *   start a child, list the CPUs and name the `package.json` to read the version from, the real
+ *   ones by default.
  * @returns The report of the results that finished, with `interrupted` set when the stop signal
  *   ended the run.
  * @throws {Error} The error reading the package's `package.json`, before any child starts; what
@@ -418,6 +421,7 @@ export async function run(input: RunInput): Promise<Report> {
   const repset = await packageVersion(input.packageJson ?? PACKAGE_JSON);
   const machine = machineOf(input.cpus ?? realCpus);
   const results: Result[] = [];
+  const { callsPerSample } = input;
   const reportOf = (options: ResolvedOptions, interrupted: boolean): Report => ({
     schema: 1,
     repset,
@@ -436,6 +440,7 @@ export async function run(input: RunInput): Promise<Report> {
       id: selected.id,
       minTime: resolved.minTime,
       minSamples: resolved.minSamples,
+      ...(callsPerSample === undefined ? {} : { callsPerSample }),
     }),
     (runtime, selected, outcome) => {
       const result = measuredResult(selected, runtime, outcome);

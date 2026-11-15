@@ -54,3 +54,7 @@ jobs:
           task check || status=$?
           git diff --exit-code
           exit "$status"
+
+      - name: Package
+        if: runner.os == 'Linux'
+        run: task check-package

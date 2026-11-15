@@ -211,6 +211,11 @@ export interface OnceInput extends OptionsInput {
 export interface RunInput extends OnceInput {
   /** Receives each result when it finishes, before the next child starts. */
   readonly onResult?: ((result: Result) => void) | undefined;
+  /**
+   * Receives the report with no result once listing has passed, before the first measuring child
+   * starts; what it throws ends the run with no measuring child started.
+   */
+  readonly onSelected?: ((report: Report) => void) | undefined;
   /** Lists the host's logical CPUs; `os.cpus` by default. */
   readonly cpus?: (() => readonly { readonly model: string }[]) | undefined;
   /** The `package.json` whose version the report records; the package's own by default. */
@@ -259,12 +264,12 @@ const FAILED_PROCESSES: readonly Process[] = [
 /**
  * Reads the version a `package.json` holds.
  *
- * @param path - The `package.json` to read.
+ * @param path - The `package.json` to read; the package's own by default.
  * @returns Its `version`.
  * @throws {Error} The read or parse error as it is, or a plain `Error` when the file holds no
  *   version string.
  */
-async function packageVersion(path: string): Promise<string> {
+export async function packageVersion(path: string = PACKAGE_JSON): Promise<string> {
   const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
   const version: unknown =
     typeof parsed === "object" && parsed !== null ? Reflect.get(parsed, "version") : undefined;
@@ -280,15 +285,19 @@ async function packageVersion(path: string): Promise<string> {
  *   functions.
  * @param request - The request of one case's child, from the resolved options.
  * @param finished - Receives each child's outcome before the next child starts.
+ * @param passed - Called with the resolved options once the selection passed, before the first
+ *   child of a case starts.
  * @returns The resolved options, and whether the stop signal ended the run before every child ran:
  *   during listing, before the next child, or by stopping the running one.
  * @throws {ConfigError} When the options are invalid or the selection fails, before any child but
  *   the listing children starts.
+ * @throws {Error} What `passed` or `finished` throws, or what starting a child throws.
  */
 async function startEach(
   input: OnceInput,
   request: (options: ResolvedOptions, selected: SelectedCase) => ChildRequest,
   finished: (runtime: FoundRuntime, selected: SelectedCase, outcome: Finished) => void,
+  passed?: (options: ResolvedOptions) => void,
 ): Promise<{ options: ResolvedOptions; interrupted: boolean }> {
   const options = await resolveOptions(input);
   const { signal, startChild = realStartChild } = input;
@@ -301,6 +310,7 @@ async function startEach(
     startChild,
   });
   if (selection.status === "stopped") return { options, interrupted: true };
+  passed?.(options);
   const startOptions = {
     timeout: options.timeout,
     nodeImport: options.nodeImport?.resolved,
@@ -392,19 +402,32 @@ function reportOptions(input: OnceInput, options: ResolvedOptions): ReportOption
  * stop signal fires, the running child is killed, its case gets no result, and no further child
  * starts.
  *
- * @param input - The caller's options, the positional files, the stop signal, the result callback,
- *   and the functions that look a runtime up, start a child, list the CPUs and name the
- *   `package.json` to read the version from, the real ones by default.
+ * @param input - The caller's options, the positional files, the stop signal, the result and
+ *   selection callbacks, and the functions that look a runtime up, start a child, list the CPUs and
+ *   name the `package.json` to read the version from, the real ones by default.
  * @returns The report of the results that finished, with `interrupted` set when the stop signal
  *   ended the run.
- * @throws {Error} The error reading the package's `package.json`, before any child starts.
+ * @throws {Error} The error reading the package's `package.json`, before any child starts; what
+ *   `onSelected` throws, before any measuring child starts; or what `onResult` throws, once a child
+ *   has finished.
  * @throws {ConfigError} When the options are invalid or the selection fails, before any measuring
  *   child starts.
  */
 export async function run(input: RunInput): Promise<Report> {
   const startedAt = new Date().toISOString();
   const repset = await packageVersion(input.packageJson ?? PACKAGE_JSON);
+  const machine = machineOf(input.cpus ?? realCpus);
   const results: Result[] = [];
+  const reportOf = (options: ResolvedOptions, interrupted: boolean): Report => ({
+    schema: 1,
+    repset,
+    startedAt,
+    interrupted,
+    options: reportOptions(input, options),
+    machine,
+    results: [...results],
+    contests: [],
+  });
   const { options, interrupted } = await startEach(
     input,
     (resolved, selected) => ({
@@ -419,17 +442,9 @@ export async function run(input: RunInput): Promise<Report> {
       results.push(result);
       input.onResult?.(result);
     },
+    (resolved) => input.onSelected?.(reportOf(resolved, false)),
   );
-  return {
-    schema: 1,
-    repset,
-    startedAt,
-    interrupted,
-    options: reportOptions(input, options),
-    machine: machineOf(input.cpus ?? realCpus),
-    results,
-    contests: [],
-  };
+  return reportOf(options, interrupted);
 }
 
 /**

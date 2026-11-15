@@ -153,7 +153,8 @@ function checkedInclude(value: unknown): readonly string[] {
   return globs.filter((glob) => typeof glob === "string");
 }
 
-function isRuntime(value: unknown): value is Runtime {
+/** Whether `value` names a runtime repset runs on. */
+export function isRuntime(value: unknown): value is Runtime {
   return typeof value === "string" && RUNTIMES.has(value);
 }
 

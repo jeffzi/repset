@@ -13,7 +13,7 @@ import type {
   startChild,
 } from "../src/children.js";
 import { ConfigError } from "../src/options.js";
-import type { Result } from "../src/report.js";
+import type { Report, Result } from "../src/report.js";
 import { run, runOnce } from "../src/run.js";
 
 const DISCOVERY = fileURLToPath(new URL("fixtures/discovery", import.meta.url));
@@ -364,6 +364,52 @@ describe("run", () => {
 
       expect(report.results.map((result) => result.median)).toStrictEqual([0, 1, 2, 3]);
       expect(received).toStrictEqual(report.results);
+    });
+  });
+
+  describe("onSelected", () => {
+    it("receives the report with no result once listing passed, before the first measuring child", async () => {
+      let selected: Report | undefined;
+      const seesSelected = starter(() => measuredOutcome(selected === undefined ? 0 : 1));
+
+      const report = await runHere({
+        startChild: seesSelected,
+        onSelected: (head) => {
+          selected = head;
+        },
+      });
+
+      expect(report.results.map((result) => result.median)).toStrictEqual([1]);
+      expect(selected).toStrictEqual({ ...report, results: [] });
+    });
+
+    it("rejects with what it throws, starting no measuring child", async () => {
+      const result = runHere({
+        startChild: startsNoChild,
+        onSelected: () => {
+          throw new Error("pear");
+        },
+      });
+
+      await expect(result).rejects.toThrow("pear");
+    });
+
+    it("is not called when the stop signal fires during listing", async () => {
+      const controller = new AbortController();
+      const stopping: StartChild = async () => {
+        controller.abort();
+        return stopped;
+      };
+
+      const report = await runHere({
+        signal: controller.signal,
+        startChild: stopping,
+        onSelected: () => {
+          throw new Error("pear");
+        },
+      });
+
+      expect(report.interrupted).toBe(true);
     });
   });
 

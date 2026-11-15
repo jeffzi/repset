@@ -1,9 +1,8 @@
-import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { copyFileSync, existsSync } from "node:fs";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { ChildRequest } from "../src/child.js";
 import {
@@ -17,6 +16,7 @@ import {
 import { ConfigError } from "../src/options.js";
 import { errorOf } from "./measure/fixtures.js";
 import { requiresRealBunHere } from "./real-bun.js";
+import { suiteTemporaryDir, temporaryDir } from "./temporary-dir.js";
 
 const FIXTURES = fileURLToPath(new URL("fixtures/children/", import.meta.url));
 
@@ -107,21 +107,16 @@ describe("findRuntime", () => {
   describe("when the runtime is the other one", () => {
     describe("when PATH holds an executable for it", () => {
       /** A directory holding a copy of this Node executable named `bun`, which Windows can run. */
-      let dir: string;
+      const dir = suiteTemporaryDir("repset-bun-");
       let bun: string;
 
       beforeAll(() => {
-        dir = mkdtempSync(join(tmpdir(), "repset-bun-"));
-        bun = join(dir, `bun${extname(process.execPath)}`);
+        bun = join(dir.path, `bun${extname(process.execPath)}`);
         copyFileSync(process.execPath, bun);
       });
 
-      afterAll(() => {
-        rmSync(dir, { recursive: true, force: true });
-      });
-
       it("returns that executable and its version without a leading v", async () => {
-        vi.stubEnv("PATH", dir);
+        vi.stubEnv("PATH", dir.path);
 
         const found = await findRuntime("bun");
 
@@ -132,16 +127,43 @@ describe("findRuntime", () => {
         });
       });
 
-      it("throws a ConfigError naming the executable and the exit status of a failed probe", async () => {
-        vi.stubEnv("PATH", dir);
-        // Node refuses an unknown option in NODE_OPTIONS with exit status 9, before `--version`.
-        vi.stubEnv("NODE_OPTIONS", "--banana");
+      describe("when its probe fails", () => {
+        it("throws a ConfigError naming the executable's exit status when its probe exits non-zero", async () => {
+          vi.stubEnv("PATH", dir.path);
+          // Node refuses an unknown option in NODE_OPTIONS with exit status 9, before `--version`.
+          vi.stubEnv("NODE_OPTIONS", "--banana");
 
-        const found = findRuntime("bun");
+          const found = findRuntime("bun");
 
-        await expect(found).rejects.toThrow(ConfigError);
-        await expect(found).rejects.toThrow(bun);
-        await expect(found).rejects.toThrow(/\b9\b/);
+          await expect(found).rejects.toThrow(ConfigError);
+          await expect(found).rejects.toThrow(bun);
+          await expect(found).rejects.toThrow(/\b9\b/);
+        });
+
+        it.runIf(POSIX)(
+          "throws a ConfigError naming the executable's signal when its probe dies on one",
+          async () => {
+            vi.stubEnv("PATH", fixture("bin/killed"));
+
+            const found = findRuntime("bun");
+
+            await expect(found).rejects.toThrow(ConfigError);
+            await expect(found).rejects.toThrow(fixture("bin/killed/bun"));
+            await expect(found).rejects.toThrow(/SIGKILL/);
+          },
+        );
+
+        it.runIf(POSIX)(
+          "throws a ConfigError naming the executable when its probe prints nothing",
+          async () => {
+            vi.stubEnv("PATH", fixture("bin/silent"));
+
+            const found = findRuntime("bun");
+
+            await expect(found).rejects.toThrow(ConfigError);
+            await expect(found).rejects.toThrow(fixture("bin/silent/bun"));
+          },
+        );
       });
     });
 
@@ -152,26 +174,6 @@ describe("findRuntime", () => {
 
       await expect(found).rejects.toThrow(ConfigError);
       await expect(found).rejects.toThrow(/\bbun\b/);
-    });
-
-    it.runIf(POSIX).each([
-      { why: "dies on a signal", dir: "killed" },
-      { why: "prints nothing", dir: "silent" },
-    ])("throws a ConfigError naming the executable when its probe $why", async ({ dir }) => {
-      vi.stubEnv("PATH", fixture(`bin/${dir}`));
-
-      const found = findRuntime("bun");
-
-      await expect(found).rejects.toThrow(ConfigError);
-      await expect(found).rejects.toThrow(fixture(`bin/${dir}/bun`));
-    });
-
-    it.runIf(POSIX)("names the signal of a probe that dies on one", async () => {
-      vi.stubEnv("PATH", fixture("bin/killed"));
-
-      const found = findRuntime("bun");
-
-      await expect(found).rejects.toThrow(/SIGKILL/);
     });
   });
 });
@@ -391,10 +393,7 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
 
   describe("when the caller's stop signal fires after the child wrote its result", () => {
     it("ends as stopped", async () => {
-      const dir = mkdtempSync(join(tmpdir(), "repset-children-"));
-      onTestFinished(() => {
-        rmSync(dir, { recursive: true, force: true });
-      });
+      const dir = temporaryDir("repset-children-");
       const marker = join(dir, "written");
       const controller = new AbortController();
       const abortOnceWritten = setInterval(() => {

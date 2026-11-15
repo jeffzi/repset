@@ -1,12 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import { ConfigError, resolveOptions, type OptionsInput } from "../src/options.js";
+import { suiteTemporaryDir } from "./temporary-dir.js";
 
 const FIXTURES = fileURLToPath(new URL("fixtures/config", import.meta.url));
 
@@ -116,16 +116,14 @@ describe("resolveOptions", () => {
   });
 
   describe("when the config file cannot be imported", () => {
-    let broken = "";
+    const broken = suiteTemporaryDir("repset-config-");
 
     beforeAll(() => {
-      broken = mkdtempSync(join(tmpdir(), "repset-config-"));
-      writeFileSync(join(broken, "syntax-error.ts"), "export default {\n");
-      writeFileSync(join(broken, "unresolved.ts"), 'import "./nowhere.js";\nexport default {};\n');
-    });
-
-    afterAll(() => {
-      rmSync(broken, { recursive: true, force: true });
+      writeFileSync(join(broken.path, "syntax-error.ts"), "export default {\n");
+      writeFileSync(
+        join(broken.path, "unresolved.ts"),
+        'import "./nowhere.js";\nexport default {};\n',
+      );
     });
 
     it("rejects a top-level throw, naming the file and carrying its message", async () => {
@@ -137,7 +135,7 @@ describe("resolveOptions", () => {
     it.each([{ name: "syntax-error.ts" }, { name: "unresolved.ts" }])(
       "rejects $name, naming the file",
       async ({ name }) => {
-        const result = resolveOptions({ cwd: broken, config: name });
+        const result = resolveOptions({ cwd: broken.path, config: name });
 
         await expectConfigError(result, [name]);
       },

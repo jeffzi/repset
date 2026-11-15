@@ -1,15 +1,15 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { type Case, measure, MeasureError, type NoInline } from "../../src/measure/measure.js";
 import { runningRuntime } from "../../src/measure/runtime.js";
 import { CalibrationError, cappedCount } from "../../src/measure/shared-state.js";
 import { requiresRealBunHere } from "../real-bun.js";
+import { temporaryDir } from "../temporary-dir.js";
 import { exposedGc } from "./fixtures.js";
 
 // ---------------------------------------------------------------------------
@@ -870,10 +870,7 @@ function bunTestWithNoInlineMock(
   body: string,
   bunJsc = "() => ({ noInline: (fn) => { received.push(fn); } })",
 ): BunTestRun {
-  const dir = mkdtempSync(join(tmpdir(), "repset-bun-"));
-  onTestFinished(() => {
-    rmSync(dir, { recursive: true, force: true });
-  });
+  const dir = temporaryDir("repset-bun-");
   const file = join(dir, "no-inline.test.ts");
   writeFileSync(
     file,

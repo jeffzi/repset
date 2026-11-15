@@ -1,19 +1,10 @@
 import { spawn } from "node:child_process";
 import { EventEmitter, once } from "node:events";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it, onTestFinished } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import type { ChildPhase, Measured, MeasureRequest, OnceRequest } from "../src/child.js";
 import type {
@@ -27,6 +18,7 @@ import { main } from "../src/command.js";
 import type { Report } from "../src/report.js";
 import { formatTable, metricLine } from "../src/table.js";
 import { requiresRealBunHere } from "./real-bun.js";
+import { temporaryDir } from "./temporary-dir.js";
 
 type StartChild = typeof startChild;
 type FindRuntime = typeof findRuntime;
@@ -145,15 +137,6 @@ function captured(): Captured {
     },
   };
   return stream;
-}
-
-/** A fresh directory named from `prefix`, removed when the test ends. */
-function temporaryDir(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
-  onTestFinished(() => {
-    rmSync(dir, { recursive: true, force: true });
-  });
-  return dir;
 }
 
 /** A fresh working directory holding the empty benchmark files, removed when the test ends. */

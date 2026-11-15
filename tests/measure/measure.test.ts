@@ -3,8 +3,6 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { setFlagsFromString } from "node:v8";
-import { runInNewContext } from "node:vm";
 
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 
@@ -12,6 +10,7 @@ import { type Case, measure, MeasureError, type NoInline } from "../../src/measu
 import { runningRuntime } from "../../src/measure/runtime.js";
 import { CalibrationError, cappedCount } from "../../src/measure/shared-state.js";
 import { requiresRealBunHere } from "../real-bun.js";
+import { exposedGc } from "./fixtures.js";
 
 // ---------------------------------------------------------------------------
 // Scripted clocks and benchmark builders
@@ -328,16 +327,6 @@ function emptyBodyFasterAfter250Ms(): Scripted {
       followsRead = true;
       return time;
     },
-  };
-}
-
-/** V8's garbage collector, exposed through a flag set at run time. */
-function exposedGc(...args: unknown[]): () => void {
-  setFlagsFromString("--expose-gc");
-  const gc: unknown = runInNewContext("gc");
-  if (typeof gc !== "function") throw new Error("V8 exposed no gc function");
-  return () => {
-    Reflect.apply(gc, undefined, args);
   };
 }
 

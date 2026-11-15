@@ -10,7 +10,7 @@
  * under Bun.
  */
 
-import { performanceNow, timerResolutionMs } from "../utils.js";
+import { performanceNow, thrownMessage, timerResolutionMs } from "../utils.js";
 import { empty, type EmptyResult, type Lifecycle, sampleEmpty } from "./empty.js";
 import { type InFlight, keep, samplePerCall } from "./per-call.js";
 import { runningRuntime } from "./runtime.js";
@@ -145,24 +145,8 @@ export class MeasureError extends Error {
    *   kept as it is.
    */
   constructor(phase: Phase, cause: unknown) {
-    super(cause instanceof Error ? cause.message : stringForm(cause), { cause });
+    super(thrownMessage(cause), { cause });
     this.phase = phase;
-  }
-}
-
-/**
- * Reads a thrown value's string form for an error message, without letting the conversion throw in
- * place of the failure it describes.
- *
- * @param value - The thrown value.
- * @returns `String(value)`, or `"a value with no string form"` when that conversion throws, as it
- *   does for a null-prototype object.
- */
-function stringForm(value: unknown): string {
-  try {
-    return String(value);
-  } catch {
-    return "a value with no string form";
   }
 }
 
@@ -523,7 +507,7 @@ function perCallPhase(error: unknown, inFlight: boolean, tearingDown: boolean): 
  * @param returned - What the body's first call returned.
  * @throws Error when `returned` has a callable `then`.
  */
-function requireSynchronous(returned: unknown): void {
+export function requireSynchronous(returned: unknown): void {
   if (
     (typeof returned === "object" || typeof returned === "function") &&
     returned !== null &&
@@ -540,7 +524,7 @@ function requireSynchronous(returned: unknown): void {
  * @param teardown - The benchmark's teardown.
  * @param state - The state to release.
  */
-function tearDownDiscarding<State>(teardown: (state: State) => void, state: State): void {
+export function tearDownDiscarding<State>(teardown: (state: State) => void, state: State): void {
   try {
     teardown(state);
   } catch {

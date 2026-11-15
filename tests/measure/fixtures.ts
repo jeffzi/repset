@@ -1,8 +1,21 @@
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
+
 /** A timer resolution fine enough that 100 ms samples span far more than 200 times the resolution. */
 export const FINE_RESOLUTION = 2 ** -10;
 
 /** A timer resolution coarse enough that short samples span few multiples of the resolution or none. */
 export const COARSE_RESOLUTION = 2 ** -4;
+
+/** V8's garbage collector, exposed through a flag set at run time; `args` go to every call of it. */
+export function exposedGc(...args: unknown[]): () => void {
+  setFlagsFromString("--expose-gc");
+  const gc: unknown = runInNewContext("gc");
+  if (typeof gc !== "function") throw new Error("V8 exposed no gc function");
+  return () => {
+    Reflect.apply(gc, undefined, args);
+  };
+}
 
 /** Returns the Error a call throws, failing the test when it throws nothing or a non-Error. */
 export function errorOf(call: () => unknown): Error {

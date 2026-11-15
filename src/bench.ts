@@ -244,8 +244,8 @@ export function bench<State = NoParams>(
   checkName(name);
   // `caseOf` takes `unknown`: a case's state only ever flows from its own setup to its own fn and
   // teardown, so the registry erases State, and the checks cannot trust the compile-time type.
-  const registered = caseOf(name, benchmark);
-  registry().push({ id: name, case: registered });
+  const benchmarkCase = caseOf(name, benchmark);
+  registry().push({ id: name, case: benchmarkCase });
 }
 
 /**

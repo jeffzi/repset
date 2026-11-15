@@ -1,3 +1,9 @@
+/**
+ * Generic helpers: code that names no project type and would make sense in any repository.
+ *
+ * The `measure` modules import it and load in a browser page, so it reads no Node builtin.
+ */
+
 const TRANSITIONS_PER_PASS = 2000;
 
 /**

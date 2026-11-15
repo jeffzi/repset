@@ -5,14 +5,12 @@
  * `node:` module and nothing at run time. Loading and checking a config belong to the parent.
  */
 
-/** The runtimes a run can use. */
-type Runtime = "node" | "bun";
+import type { Runtime } from "./measure/runtime.js";
 
 /** The options a config file stores. Each is optional; `undefined` counts as absent. */
 export interface Config {
   /** Globs for benchmark files, relative to the config file. `node_modules` is never searched. */
   readonly include?: readonly string[] | undefined;
-  /** The runtimes a run uses. */
   readonly runtimes?: readonly Runtime[] | undefined;
   /** Timing lasts at least this many milliseconds. */
   readonly minTime?: number | undefined;

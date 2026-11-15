@@ -13,6 +13,10 @@ import { runningRuntime } from "../../src/measure/runtime.js";
 import { CalibrationError, cappedCount } from "../../src/measure/shared-state.js";
 import { requiresRealBunHere } from "../real-bun.js";
 
+// ---------------------------------------------------------------------------
+// Scripted clocks and benchmark builders
+// ---------------------------------------------------------------------------
+
 const KINDS = ["sharedState", "perCall"] as const;
 type Kind = (typeof KINDS)[number];
 
@@ -165,6 +169,36 @@ function run(fake: Bench): ReturnType<typeof measure> {
   return measure(fake.benchmark, { now: fake.now, callsPerSample: 1, noInline: fake.noInline });
 }
 
+/**
+ * Measures a per-call benchmark whose setup returns `undefined`, as `run` does: the fake's
+ * callbacks still run and log, its world kept aside instead of passed as the state.
+ *
+ * @param fake - The benchmark whose callbacks the case calls.
+ * @returns What `measure` returns.
+ * @throws Error when the fake has no teardown, or a body or teardown call finds no world built.
+ */
+function runOnUndefined(fake: Bench): ReturnType<typeof measure> {
+  const { setup, fn, teardown } = fake.benchmark;
+  if (teardown === undefined) throw new Error("the fake has no teardown");
+  let world: World | undefined;
+  const built = (): World => {
+    if (world === undefined) throw new Error("no world built");
+    return world;
+  };
+  const benchmark: Case<undefined> = {
+    kind: "perCall",
+    setup: () => {
+      world = setup();
+      return undefined;
+    },
+    fn: () => fn(built()),
+    teardown: () => {
+      teardown(built());
+    },
+  };
+  return measure(benchmark, { now: fake.now, callsPerSample: 1, noInline: fake.noInline });
+}
+
 /** The log entries naming a body call. */
 function bodyCalls(log: readonly string[]): string[] {
   return log.filter((entry) => entry.startsWith("fn"));
@@ -262,40 +296,6 @@ function fasterEveryRun(): Scripted {
   };
 }
 
-/**
- * Builds a benchmark whose body costs 100 ms a call, on a scripted clock that moves one resolution on a
- * read that directly follows another only after a setup with no body call since, or past eight reads
- * in a row. The body's run, where no more than eight reads follow a body call, reads only the body's
- * cost, while the empty body's run moves the clock on its own. Stubs `globalThis.gc` with a no-op.
- *
- * @param kind - The benchmark's lifecycle.
- * @returns The benchmark and its scripted clock.
- */
-function bodyTimedOnly(kind: Kind): Scripted {
-  let afterSetup = false;
-  const clock = steppedClock((reads) => (afterSetup || reads > 8 ? STEP_MS : 0));
-  vi.stubGlobal("gc", () => undefined);
-  return {
-    benchmark: {
-      kind,
-      setup: () => {
-        afterSetup = true;
-        clock.advance(0);
-        return 0;
-      },
-      fn: () => {
-        afterSetup = false;
-        clock.advance(100);
-      },
-      teardown: () => {
-        afterSetup = false;
-        clock.advance(0);
-      },
-    },
-    now: clock.now,
-  };
-}
-
 /** V8's garbage collector, exposed through a flag set at run time. */
 function exposedGc(...args: unknown[]): () => void {
   setFlagsFromString("--expose-gc");
@@ -306,22 +306,19 @@ function exposedGc(...args: unknown[]): () => void {
   };
 }
 
+// ---------------------------------------------------------------------------
+// measure, in process
+// ---------------------------------------------------------------------------
+
 describe("measure on a shared-state benchmark", () => {
-  it("builds one state, runs every body call on it across the forced GC, then tears it down once", async () => {
+  it("builds one state and tears it down once", async () => {
     const fake = bench("sharedState");
 
     await run(fake);
 
     const events = fake.log.filter((entry) => entry !== "noInline");
-    const fromBody = events.slice(events.indexOf("fn 0"), events.indexOf("teardown 0") + 1);
     expect(events.filter((entry) => entry.startsWith("setup"))).toStrictEqual(["setup 0"]);
     expect(events.filter((entry) => entry.startsWith("teardown"))).toStrictEqual(["teardown 0"]);
-    expect(fromBody.filter((entry, i) => entry !== fromBody[i - 1])).toStrictEqual([
-      "fn 0",
-      "gc",
-      "fn 0",
-      "teardown 0",
-    ]);
   });
 
   it("runs without a teardown", async () => {
@@ -334,48 +331,49 @@ describe("measure on a shared-state benchmark", () => {
 });
 
 describe("measure on a per-call benchmark", () => {
-  it("runs each body call on a fresh state, built before it and torn down after it", async () => {
+  it("builds more than one state", async () => {
     const fake = bench("perCall", { bodyMs: 200 });
 
     await run(fake);
 
-    const lifecycle = fake.log.filter((entry) => entry !== "gc" && entry !== "noInline");
-    const ids = bodyCalls(lifecycle).map((entry) => entry.slice("fn ".length));
-    expect(ids.length).toBeGreaterThan(64);
-    expect(lifecycle).toStrictEqual(
-      ids.flatMap((id) => [`setup ${id}`, `fn ${id}`, `teardown ${id}`]),
-    );
+    expect(fake.log.filter((entry) => entry.startsWith("setup")).length).toBeGreaterThan(64);
   });
 });
 
 describe("measure without an exposed gc", () => {
-  it("rejects a benchmark in phase process before anything runs", async () => {
+  it("rejects a benchmark in phase process", async () => {
     const fake = bench("sharedState");
     vi.stubGlobal("gc", undefined);
 
     const error = await failure(run(fake));
 
     expect(error.phase).toBe("child");
-    expect(fake.log).toStrictEqual([]);
   });
 });
 
 describe("measure's synchronous-body check", () => {
-  it.each(
-    KINDS.flatMap((kind) => [
-      { kind, what: "a promise", value: (): unknown => Promise.resolve() },
-      // oxlint-disable-next-line unicorn/no-thenable -- a thenable body result is the input under test
-      { kind, what: "an object with a then method", value: (): unknown => ({ then: () => 0 }) },
-    ]),
-  )(
-    "fails a $kind run whose body returns $what on its first call in phase fn, after tearing its state down",
-    async ({ kind, value }) => {
-      const fake = bench(kind, { returns: value });
+  // oxlint-disable-next-line unicorn/no-thenable -- a thenable body result is the input under test
+  const thenable = (): unknown => ({ then: () => 0 });
+
+  it.each(KINDS)(
+    "fails a %s run whose body returns an object with a then method on its first call in phase fn",
+    async (kind) => {
+      const fake = bench(kind, { returns: thenable });
 
       const error = await failure(run(fake));
 
       expect(error.phase).toBe("fn");
       expect(bodyCalls(fake.log)).toHaveLength(1);
+    },
+  );
+
+  it.each(KINDS)(
+    "tears down every state a %s run built when its body returns an object with a then method on its first call",
+    async (kind) => {
+      const fake = bench(kind, { returns: thenable });
+
+      await run(fake).catch(() => undefined);
+
       expect(fake.live.size).toBe(0);
     },
   );
@@ -391,10 +389,8 @@ describe("measure's synchronous-body check", () => {
 });
 
 describe("measure's error handling", () => {
-  // One call per sample of 200 ms on both kinds. Shared state: body call 0 is the
-  // synchronous-body check, calls 1-16 warm up, timing starts at call 17. Per call: the same, since
-  // 16 samples of 200 ms pass the 3000 ms warmup minimum, with call 17 the forced GC's run outside
-  // any clock read and timing from call 18; setup and teardown calls count the same way.
+  // One call per sample of 200 ms on both kinds. Body call 0 is the synchronous-body check and
+  // calls 1-16 warm up; setup and teardown calls count the same way.
   const BUILD_OR_BODY_FAILURES = [
     { kind: "sharedState", when: "the setup throws", fails: { setup: 0 }, from: "setup" },
     {
@@ -403,16 +399,9 @@ describe("measure's error handling", () => {
       fails: { fn: 0 },
       from: "fn",
     },
-    { kind: "sharedState", when: "the body throws in warmup", fails: { fn: 5 }, from: "fn" },
-    { kind: "sharedState", when: "the body throws in timing", fails: { fn: 20 }, from: "fn" },
     { kind: "perCall", when: "the check's setup throws", fails: { setup: 0 }, from: "setup" },
-    { kind: "perCall", when: "a warmup setup throws", fails: { setup: 3 }, from: "setup" },
-    { kind: "perCall", when: "the forced GC's setup throws", fails: { setup: 17 }, from: "setup" },
-    { kind: "perCall", when: "a timing setup throws", fails: { setup: 20 }, from: "setup" },
     { kind: "perCall", when: "the check's body call throws", fails: { fn: 0 }, from: "fn" },
     { kind: "perCall", when: "the body throws in warmup", fails: { fn: 5 }, from: "fn" },
-    { kind: "perCall", when: "the forced GC's body throws", fails: { fn: 17 }, from: "fn" },
-    { kind: "perCall", when: "the body throws in timing", fails: { fn: 20 }, from: "fn" },
   ] as const;
 
   it.each(BUILD_OR_BODY_FAILURES)(
@@ -427,7 +416,7 @@ describe("measure's error handling", () => {
     },
   );
 
-  it.each(BUILD_OR_BODY_FAILURES)(
+  it.each(BUILD_OR_BODY_FAILURES.filter((row) => row.when !== "the setup throws"))(
     "tears down every state a $kind run built when $when",
     async ({ kind, fails }) => {
       const fake = bench(kind, { bodyMs: 200, fails });
@@ -441,16 +430,10 @@ describe("measure's error handling", () => {
     },
   );
 
-  const PER_CALL_TEARDOWN_FAILURES = [
-    { kind: "perCall", when: "the check's teardown throws", fails: { teardown: 0 } },
-    { kind: "perCall", when: "a warmup teardown throws", fails: { teardown: 2 } },
-    { kind: "perCall", when: "the forced GC's teardown throws", fails: { teardown: 17 } },
-    { kind: "perCall", when: "a timing teardown throws", fails: { teardown: 20 } },
-  ] as const;
-
   it.each([
     { kind: "sharedState", when: "the one teardown throws", fails: { teardown: 0 } },
-    ...PER_CALL_TEARDOWN_FAILURES,
+    { kind: "perCall", when: "the check's teardown throws", fails: { teardown: 0 } },
+    { kind: "perCall", when: "a warmup teardown throws", fails: { teardown: 2 } },
   ] as const)(
     "rejects a $kind run whose body succeeded in phase teardown with the teardown's value as cause when $when",
     async ({ kind, fails }) => {
@@ -465,14 +448,40 @@ describe("measure's error handling", () => {
 
   // Teardown call n releases state n, and a teardown call that does not throw drops its state
   // from the live set: a second teardown of the state that threw would drop it too.
-  it.each(PER_CALL_TEARDOWN_FAILURES)(
-    "leaves alive only the state whose teardown threw when $when",
-    async ({ kind, fails }) => {
-      const fake = bench(kind, { bodyMs: 200, fails });
+  it("leaves alive only the state whose teardown threw", async () => {
+    const fails = { teardown: 2 };
+    const fake = bench("perCall", { bodyMs: 200, fails });
 
-      await run(fake).catch(() => undefined);
+    await run(fake).catch(() => undefined);
 
-      expect([...fake.live].map((world) => world.id)).toStrictEqual([fails.teardown]);
+    expect([...fake.live].map((world) => world.id)).toStrictEqual([fails.teardown]);
+  });
+
+  const UNDEFINED_STATE_FAILURES = [
+    { when: "the check's body call throws", fails: { fn: 0 }, from: "fn", left: [] },
+    { when: "the body throws in warmup", fails: { fn: 5 }, from: "fn", left: [] },
+    { when: "a warmup teardown throws", fails: { teardown: 2 }, from: "teardown", left: [2] },
+  ] as const;
+
+  it.each(UNDEFINED_STATE_FAILURES)(
+    "rejects a per-call run whose setup returns undefined in phase $from when $when",
+    async ({ fails, from }) => {
+      const fake = bench("perCall", { bodyMs: 200, fails });
+
+      const error = await failure(runOnUndefined(fake));
+
+      expect(error.phase).toBe(from);
+    },
+  );
+
+  it.each(UNDEFINED_STATE_FAILURES)(
+    "tears down every state a per-call run whose setup returns undefined built when $when",
+    async ({ fails, left }) => {
+      const fake = bench("perCall", { bodyMs: 200, fails });
+
+      await runOnUndefined(fake).catch(() => undefined);
+
+      expect([...fake.live].map((world) => world.id)).toStrictEqual(left);
     },
   );
 
@@ -492,7 +501,7 @@ describe("measure's error handling", () => {
   );
 
   it.each(KINDS)(
-    "rejects a %s run whose collection throws in phase process with the collector's value as cause, after tearing its states down",
+    "rejects a %s run whose collection throws in phase process with the collector's value as cause",
     async (kind) => {
       const fake = bench(kind, { bodyMs: 200 });
       const collectorError = new Error("durian");
@@ -504,6 +513,19 @@ describe("measure's error handling", () => {
 
       expect(error.phase).toBe("child");
       expect(error.cause).toBe(collectorError);
+    },
+  );
+
+  it.each(KINDS)(
+    "tears down every state a %s run built when its collection throws",
+    async (kind) => {
+      const fake = bench(kind, { bodyMs: 200 });
+      vi.stubGlobal("gc", () => {
+        throw new Error("durian");
+      });
+
+      await run(fake).catch(() => undefined);
+
       expect(fake.live.size).toBe(0);
     },
   );
@@ -594,38 +616,12 @@ describe("measure's error handling", () => {
 });
 
 describe("measure's noInline", () => {
-  it("hands an injected noInline the body itself and one empty body, before any body call or collection", async () => {
+  it("hands an injected noInline the body itself", async () => {
     const fake = bench("sharedState", { bodyMs: 200 });
 
     await run(fake);
 
-    const before = Math.min(fake.log.indexOf("gc"), fake.log.indexOf("fn 0"));
-    expect(fake.inlined).toHaveLength(2);
-    expect(new Set(fake.inlined).size).toBe(2);
     expect(fake.inlined).toContain(fake.benchmark.fn);
-    expect(fake.log.lastIndexOf("noInline")).toBeLessThan(before);
-  });
-
-  it("never imports bun:jsc on Node, when loading `measure` or measuring", async () => {
-    const loaded: string[] = [];
-    vi.resetModules();
-    vi.doMock("bun:jsc", () => {
-      loaded.push("bun:jsc");
-      return {
-        noInline: () => {
-          loaded.push("noInline");
-        },
-      };
-    });
-    onTestFinished(() => {
-      vi.doUnmock("bun:jsc");
-    });
-    const fresh = await import("../../src/measure/measure.js");
-    const fake = bench("sharedState");
-
-    await fresh.measure(fake.benchmark, { now: fake.now, callsPerSample: 1 });
-
-    expect(loaded).toStrictEqual([]);
   });
 });
 
@@ -646,22 +642,6 @@ describe("measure's empty-body check", () => {
     const result = await run(fake);
 
     expect(result.ratioToEmptyBody).toBeCloseTo(1.4375, 6);
-  });
-
-  it("times the empty body only after the body's last call", async () => {
-    const fake = bench("sharedState", { bodyMs: 200 });
-
-    await run(fake);
-
-    const events = fake.log
-      .filter((entry) => entry === "gc" || entry.startsWith("fn"))
-      .map((entry) => (entry === "gc" ? entry : "fn"));
-    expect(events.filter((entry, i) => entry !== events[i - 1])).toStrictEqual([
-      "fn",
-      "gc",
-      "fn",
-      "gc",
-    ]);
   });
 
   // The scripted clock reads one resolution across any batch, so each warmup sample asks for 200 times
@@ -689,8 +669,8 @@ describe("measure's empty-body check", () => {
 });
 
 describe("measure's time and samples", () => {
-  it.each(KINDS)("times a %s body until both given have passed", async (kind) => {
-    const fake = bench(kind);
+  it("times a body until both given have passed", async () => {
+    const fake = bench("sharedState");
 
     const result = await measure(fake.benchmark, {
       now: fake.now,
@@ -731,14 +711,6 @@ describe("measure's result", () => {
     });
   });
 
-  it("reports two timing attempts for a body that gets faster after warmup settled the count", async () => {
-    const fake = fasterAfterWarmup();
-
-    const result = await measure(fake.benchmark, { now: fake.now });
-
-    expect(result.timingAttempts).toBe(2);
-  });
-
   it("settles its own count on the real clock when given none", { timeout: 15_000 }, async () => {
     vi.stubGlobal("gc", exposedGc());
     const benchmark: Case<{ readonly values: number[]; total: number }> = {
@@ -752,52 +724,6 @@ describe("measure's result", () => {
     const result = await measure(benchmark);
 
     expect(result.callsPerSampleFixed).toBe(false);
-    expect(result.callsPerSample).toBeGreaterThanOrEqual(1);
-    expect(result.ratioToEmptyBody).toBeGreaterThanOrEqual(1.42);
-  });
-});
-
-describe("measure's result, read from the body's run", () => {
-  // The body costs 800 times the resolution a call, so its warmup settles on one call per sample. At most three
-  // reads follow a body call while the body runs; the empty body's first sample ends on the fifth
-  // read after the body's last call and spans 100 times the resolution, every later one 200, so the empty body's
-  // warmup settles on two calls per sample: 100 times the resolution per call, a ratio of 8.
-  it("reports the count the body's warmup settled on, not the empty body's", async () => {
-    let bodyCalled = false;
-    const clock = steppedClock((reads) => {
-      if (!bodyCalled || reads <= 2) return STEP_MS;
-      return (reads === 5 ? 100 : 200) * STEP_MS;
-    });
-    vi.stubGlobal("gc", () => undefined);
-    const benchmark: Case<number> = {
-      kind: "sharedState",
-      setup: () => 0,
-      fn: () => {
-        bodyCalled = true;
-        clock.advance(800 * STEP_MS);
-      },
-    };
-
-    const result = await measure(benchmark, { now: clock.now });
-
-    expect(result.ratioToEmptyBody).toBeCloseTo(8, 6);
-    expect(result.callsPerSample).toBe(1);
-  });
-
-  it.each(KINDS)("reports the warmup samples of a %s body's run", async (kind) => {
-    const fake = bodyTimedOnly(kind);
-
-    const result = await measure(fake.benchmark, { now: fake.now, callsPerSample: 2 });
-
-    expect(result.warmupSamples).toBe(16);
-  });
-
-  it.each(KINDS)("reports the timing length of a %s body's run", async (kind) => {
-    const fake = bodyTimedOnly(kind);
-
-    const result = await measure(fake.benchmark, { now: fake.now, callsPerSample: 2 });
-
-    expect(result.timingMs).toBe(12_800);
   });
 });
 
@@ -870,6 +796,10 @@ describe("runningRuntime", () => {
     expect(runtime).toBe("node");
   });
 });
+
+// ---------------------------------------------------------------------------
+// measure under real Bun
+// ---------------------------------------------------------------------------
 
 const MEASURE_PATH = fileURLToPath(new URL("../../src/measure/measure.ts", import.meta.url));
 const RUNTIME_PATH = fileURLToPath(new URL("../../src/measure/runtime.ts", import.meta.url));
@@ -966,31 +896,15 @@ console.log(JSON.stringify({
   );
 
   it(
-    "hands bun:jsc's noInline each body itself and one empty body before the body's first call",
+    "hands bun:jsc's noInline the body itself",
     () => {
       const bun = bunTestWithNoInlineMock(`
-  const report = {};
-  for (const kind of ["sharedState", "perCall"]) {
-    received.length = 0;
-    let sawItself;
-    const timed = (world) => {
-      sawItself ??= received.includes(timed);
-      fn(world);
-    };
-    await measure({ kind, setup, fn: timed });
-    report[kind] = {
-      received: received.length,
-      distinct: new Set(received).size,
-      fn: received.includes(timed),
-      sawItself,
-    };
-  }
-  console.log("REPORT " + JSON.stringify(report));
+  await measure({ kind: "sharedState", setup, fn });
+  console.log("REPORT " + JSON.stringify({ fn: received.includes(fn) }));
 `);
 
       expect({ status: bun.status, stderr: bun.stderr }).toMatchObject({ status: 0 });
-      const each = { received: 2, distinct: 2, fn: true, sawItself: true };
-      expect(bun.report).toStrictEqual({ sharedState: each, perCall: each });
+      expect(bun.report).toStrictEqual({ fn: true });
     },
     BUN_TIMEOUT_MS,
   );

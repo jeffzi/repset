@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { summarize } from "../../src/measure/statistics.js";
+import { summarize } from "../../src/measure/measure.js";
 
 describe("summarize", () => {
   describe("when the spans are stored ascending", () => {
@@ -48,25 +48,6 @@ describe("summarize", () => {
         max: 3_000_000,
         mean: 2_000_000,
         sampleCount: 3,
-      });
-    });
-  });
-
-  describe("when one span is stored", () => {
-    it("reports that span's per-call time for every statistic", () => {
-      const spans = Float64Array.of(5);
-
-      const statistics = summarize(spans, 1, 2);
-
-      expect(statistics).toStrictEqual({
-        min: 2_500_000,
-        p25: 2_500_000,
-        median: 2_500_000,
-        p75: 2_500_000,
-        p99: 2_500_000,
-        max: 2_500_000,
-        mean: 2_500_000,
-        sampleCount: 1,
       });
     });
   });

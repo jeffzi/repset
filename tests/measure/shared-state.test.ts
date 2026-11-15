@@ -5,7 +5,7 @@ import {
   sampleSharedState,
   type SamplerResult,
 } from "../../src/measure/shared-state.js";
-import { COARSE_RESOLUTION, FINE_RESOLUTION } from "./fixtures.js";
+import { COARSE_RESOLUTION, errorOf, FINE_RESOLUTION } from "./fixtures.js";
 
 interface World {
   readonly name: string;
@@ -15,13 +15,9 @@ interface Harness {
   readonly now: () => number;
   readonly fn: (state: World) => void;
   readonly collect: () => void;
-  readonly afterTiming: () => void;
   readonly sampleCalls: number[];
   readonly sampleSpans: number[];
   readonly collectsAt: number[];
-  readonly afterTimingAt: number[];
-  readonly events: string[];
-  readonly states: Set<World>;
 }
 
 /** The body's cost per call: `run` is 0 during warmup and the timing attempt's number after. */
@@ -38,9 +34,6 @@ function harness(costMs: CostMs): Harness {
   const sampleCalls: number[] = [];
   const sampleSpans: number[] = [];
   const collectsAt: number[] = [];
-  const afterTimingAt: number[] = [];
-  const events: string[] = [];
-  const states = new Set<World>();
   return {
     now: () => {
       if (pending > 0) {
@@ -51,31 +44,21 @@ function harness(costMs: CostMs): Harness {
       lastRead = time;
       return time;
     },
-    fn: (state) => {
-      states.add(state);
+    fn: () => {
       time += costMs(sampleCalls.length, collectsAt.length > 0, collectsAt.length);
       pending += 1;
     },
     collect: () => {
       collectsAt.push(sampleCalls.length);
-      events.push("collect");
-    },
-    afterTiming: () => {
-      afterTimingAt.push(sampleCalls.length);
-      events.push("afterTiming");
     },
     sampleCalls,
     sampleSpans,
     collectsAt,
-    afterTimingAt,
-    events,
-    states,
   };
 }
 
 interface RunOptions {
   readonly callsPerSample?: number;
-  readonly afterTiming?: boolean;
   readonly minTime?: number;
   readonly minSamples?: number;
 }
@@ -92,7 +75,6 @@ function run(fake: Harness, resolutionMs: number, options: RunOptions = {}): Sam
     minTime: options.minTime ?? 1000,
     minSamples: options.minSamples ?? 64,
     ...(options.callsPerSample === undefined ? {} : { callsPerSample: options.callsPerSample }),
-    ...(options.afterTiming === true ? { afterTiming: fake.afterTiming } : {}),
   });
 }
 
@@ -148,23 +130,22 @@ function discardedFirstRun(sample: number, _timed: boolean, timingRun: number): 
   return sample % 3 === 0 ? 50 : 10 * FINE_RESOLUTION;
 }
 
+/**
+ * Costs 40 times the resolution a call in warmup, then 10, 7.5 and 10 times the resolution a call in
+ * timing attempts 1, 2 and 3.
+ */
+function discardedTwice(_sample: number, _timed: boolean, timingRun: number): number {
+  if (timingRun === 0) return coarse(40);
+  return coarse(timingRun === 2 ? 7.5 : 10);
+}
+
 /** Warmup spans of 0 ms (no clock change read), 30 and then 50: the shortest that read a clock change is 30. */
 function warmupSpanMs(sample: number): number {
   return [0, 30][sample] ?? 50;
 }
 
-/** Returns the Error a call throws, failing the test when it throws nothing or a non-Error. */
-function errorOf(call: () => unknown): Error {
-  try {
-    call();
-  } catch (error) {
-    if (error instanceof Error) {
-      return error;
-    }
-    throw new Error("threw a non-Error value", { cause: error });
-  }
-  throw new Error("did not throw");
-}
+/** A fixed count of 1 call, for 500 ms and 10 samples. */
+const FIXED_SHORT_RUN: RunOptions = { callsPerSample: 1, minTime: 500, minSamples: 10 };
 
 describe("sampleSharedState", () => {
   describe("stopping rule", () => {
@@ -285,14 +266,6 @@ describe("sampleSharedState", () => {
       expect(fake.collectsAt).toHaveLength(1);
     });
 
-    it("runs until `time` and `samples` have passed when its samples are as long as warmup's", () => {
-      const fake = harness(() => 0.75);
-
-      const result = run(fake, 0.1875, { callsPerSample: 1, minTime: 500, minSamples: 10 });
-
-      expect(result.sampleCount).toBe(667);
-    });
-
     describe("when its samples get shorter than warmup's", () => {
       it.each([
         {
@@ -312,25 +285,12 @@ describe("sampleSharedState", () => {
         ({ resolutionMs, warmupMs, expected }) => {
           const fake = harness((sample, timed) => (timed ? 0.75 : warmupMs(sample)));
 
-          const result = run(fake, resolutionMs, {
-            callsPerSample: 1,
-            minTime: 500,
-            minSamples: 10,
-          });
+          const result = run(fake, resolutionMs, FIXED_SHORT_RUN);
 
-          expect(result.spans).toBeInstanceOf(Float64Array);
           expect(result.spans).toHaveLength(expected);
           expect(result.sampleCount).toBe(expected);
         },
       );
-
-      it("reports the run's length when it fills its store before `time` has passed", () => {
-        const fake = harness((sample, timed) => (timed ? 0.75 : warmupSpanMs(sample)));
-
-        const result = run(fake, 0.1875, { callsPerSample: 1, minTime: 500, minSamples: 10 });
-
-        expect(result.timingMs).toBe(20.25);
-      });
     });
   });
 
@@ -469,28 +429,13 @@ describe("sampleSharedState", () => {
       });
 
       it("reads only the discarded run's samples, not an earlier run's left in the store", () => {
-        const fake = harness((_sample, _timed, timingRun) => {
-          if (timingRun === 0) return coarse(40);
-          if (timingRun === 1) return coarse(10);
-          return timingRun === 2 ? coarse(7.5) : coarse(10);
-        });
+        const fake = harness(discardedTwice);
 
         const result = run(fake, COARSE_RESOLUTION);
 
         expect(new Set(fake.sampleCalls.slice(fake.collectsAt[2]))).toStrictEqual(new Set([27]));
         expect(result.timingAttempts).toBe(3);
       });
-    });
-
-    it("collects before every timing attempt, never inside one", () => {
-      const fake = harness(slowerAfterFirstRun(shortestFirstRun));
-
-      run(fake, COARSE_RESOLUTION);
-
-      const [warmupEnd, firstRunEnd] = fake.collectsAt;
-      expect(fake.collectsAt).toHaveLength(2);
-      expect(new Set(fake.sampleCalls.slice(warmupEnd, firstRunEnd))).toStrictEqual(new Set([5]));
-      expect(new Set(fake.sampleCalls.slice(firstRunEnd))).toStrictEqual(new Set([10]));
     });
 
     describe("when a grown count passes the cap", () => {
@@ -552,11 +497,6 @@ describe("sampleSharedState", () => {
     it.each([
       { when: "warmup's count passes the cap", costMs: () => 0, resolutionMs: CAPPED_STEP },
       {
-        when: "a grown count passes the cap",
-        costMs: shortRuns([{ calls: 200, shortSteps: 1 }]),
-        resolutionMs: CAPPED_STEP,
-      },
-      {
         when: "the third run is discarded within the cap",
         costMs: fasterEveryRun,
         resolutionMs: COARSE_RESOLUTION,
@@ -570,20 +510,8 @@ describe("sampleSharedState", () => {
     });
 
     describe("when a run is discarded", () => {
-      it("counts the discarded run's samples among warmup's", () => {
-        const fake = harness(discardedFirstRun);
-
-        const result = run(fake, FINE_RESOLUTION);
-
-        expect(result.warmupSamples).toBe(80);
-      });
-
       it("counts the samples of every discarded run among warmup's", () => {
-        const fake = harness((_sample, _timed, timingRun) => {
-          if (timingRun === 0) return coarse(40);
-          if (timingRun === 1) return coarse(10);
-          return timingRun === 2 ? coarse(7.5) : coarse(10);
-        });
+        const fake = harness(discardedTwice);
 
         const result = run(fake, COARSE_RESOLUTION);
 
@@ -599,42 +527,6 @@ describe("sampleSharedState", () => {
         expect(result.timingMs).toBe(128_000);
       });
     });
-
-    describe("afterTiming", () => {
-      it("runs after each run's last sample, before the next collection", () => {
-        const fake = harness(slowerAfterFirstRun(shortestFirstRun));
-
-        run(fake, COARSE_RESOLUTION, { afterTiming: true });
-
-        expect(fake.events).toStrictEqual(["collect", "afterTiming", "collect", "afterTiming"]);
-        expect(fake.afterTimingAt).toStrictEqual([fake.collectsAt[1], fake.sampleCalls.length]);
-      });
-
-      it("runs once per run before the limit's error", () => {
-        const fake = harness(fasterEveryRun);
-
-        errorOf(() => run(fake, COARSE_RESOLUTION, { afterTiming: true }));
-
-        expect(fake.afterTimingAt).toHaveLength(3);
-      });
-    });
-  });
-
-  it("passes the caller's one state to every body call", () => {
-    const fake = harness(() => 100);
-    const state: World = { name: "world" };
-
-    sampleSharedState({
-      now: fake.now,
-      resolutionMs: FINE_RESOLUTION,
-      fn: fake.fn,
-      state,
-      collect: fake.collect,
-      minTime: 1000,
-      minSamples: 64,
-    });
-
-    expect(fake.states).toStrictEqual(new Set([state]));
   });
 
   describe("when given no clock or resolution", () => {

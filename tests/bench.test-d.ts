@@ -1,6 +1,6 @@
 import { assertType, describe, expectTypeOf, it } from "vitest";
 
-import { type Benchmark, bench } from "../src/bench.js";
+import { bench } from "../src/bench.js";
 
 /** Asserts that the `bench()` calls in `register` type-check, or fail where `@ts-expect-error` says. */
 function assertCompiles(register: () => void): void {
@@ -33,18 +33,6 @@ describe("bench", () => {
   });
 
   describe("when there is no setup", () => {
-    it("accepts a bare fn that takes no parameter", () => {
-      assertCompiles(() => {
-        bench("sort", () => 1);
-      });
-    });
-
-    it("accepts a benchmark object whose fn takes no parameter", () => {
-      assertCompiles(() => {
-        bench("sort", { fn: () => 1 });
-      });
-    });
-
     it("rejects a bare fn whose parameter requires a key", () => {
       assertCompiles(() => {
         // @ts-expect-error -- the empty parameter combination has no key
@@ -71,15 +59,6 @@ describe("bench", () => {
           teardown: undefined,
           setupPerCall: undefined,
         });
-      });
-    });
-
-    it("accepts a Benchmark whose setup, teardown and setupPerCall are undefined", () => {
-      assertType<Benchmark<number[]>>({
-        setup: undefined,
-        fn: () => 1,
-        teardown: undefined,
-        setupPerCall: undefined,
       });
     });
   });

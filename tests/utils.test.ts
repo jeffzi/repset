@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { timerResolutionMs } from "../../src/measure/timer.js";
+import { timerResolutionMs } from "../src/utils.js";
 
 const RESOLUTION = 0.125;
 const COARSE_TRANSITIONS = 2000;

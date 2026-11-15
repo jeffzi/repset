@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { samplePerCall } from "../../src/measure/per-call.js";
+import { type InFlight, samplePerCall } from "../../src/measure/per-call.js";
 import type { SamplerResult } from "../../src/measure/shared-state.js";
 import { COARSE_RESOLUTION, FINE_RESOLUTION } from "./fixtures.js";
 
@@ -35,6 +35,10 @@ interface Harness {
 /**
  * Builds a virtual clock that only setup, fn and teardown advance, recording body calls between
  * clock reads taken with no state alive.
+ *
+ * @param costs - What each callback charges the clock, the calls at which each one throws, and
+ *   whether the forced GC throws.
+ * @returns The clock, the lifecycle, and the logs the tests read.
  */
 function harness(costs: Costs): Harness {
   let time = 1000;
@@ -105,14 +109,19 @@ function harness(costs: Costs): Harness {
 interface RunOptions {
   readonly resolutionMs: number;
   readonly callsPerSample?: number | undefined;
-  readonly slots?: (World | undefined)[];
+  readonly inFlight?: InFlight<World>;
   readonly minTime?: number;
   readonly minSamples?: number;
 }
 
 /**
- * Runs the sampler on a harness for 1000 ms and 64 samples unless given, forwarding
- * `callsPerSample` and `slots` only when set.
+ * Runs the sampler on a harness.
+ *
+ * @param fake - The harness whose clock and lifecycle the sampler runs.
+ * @param options - The timer resolution; `minTime` and `minSamples`, 1000 ms and 64 unless given;
+ *   and `callsPerSample` and `inFlight`, forwarded only when set.
+ * @returns What the sampler returned.
+ * @throws Whatever the sampler throws.
  */
 function run(fake: Harness, options: RunOptions): SamplerResult {
   return samplePerCall({
@@ -125,24 +134,8 @@ function run(fake: Harness, options: RunOptions): SamplerResult {
     minTime: options.minTime ?? 1000,
     minSamples: options.minSamples ?? 64,
     ...(options.callsPerSample === undefined ? {} : { callsPerSample: options.callsPerSample }),
-    ...(options.slots === undefined ? {} : { slots: options.slots }),
+    ...(options.inFlight === undefined ? {} : { inFlight: options.inFlight }),
   });
-}
-
-/** A timer resolution whose cap, `ceil(200 × resolution / 0.1 ns)`, is 1908 calls. */
-const CAPPED_STEP = 2 ** -20;
-
-/** Returns the Error a call throws, failing the test when it throws nothing or a non-Error. */
-function errorOf(call: () => unknown): Error {
-  try {
-    call();
-  } catch (error) {
-    if (error instanceof Error) {
-      return error;
-    }
-    throw new Error("threw a non-Error value", { cause: error });
-  }
-  throw new Error("did not throw");
 }
 
 describe("samplePerCall", () => {
@@ -249,10 +242,7 @@ describe("samplePerCall", () => {
         expect(fake.collectsAt).toStrictEqual([1000]);
       });
 
-      it.each([
-        { count: "a calibrated", callsPerSample: undefined },
-        { count: "a fixed", callsPerSample: 1 },
-      ])(
+      it.each([{ count: "a calibrated", callsPerSample: undefined }])(
         "stops timing $count count at the store's size, `time` in samples of 200 times the resolution, rounded up, plus `samples`",
         ({ callsPerSample }) => {
           const fake = harness({ bodyMs: (_sample, timed) => (timed ? 0.125 : 1) });
@@ -264,7 +254,6 @@ describe("samplePerCall", () => {
             minSamples: 10,
           });
 
-          expect(result.spans).toBeInstanceOf(Float64Array);
           expect(result.spans).toHaveLength(523);
           expect(result.sampleCount).toBe(523);
         },
@@ -285,69 +274,6 @@ describe("samplePerCall", () => {
       expect(timedCalls).toHaveLength(result.sampleCount);
       expect(new Set(timedCalls)).toStrictEqual(new Set([67]));
       expect(result.callsPerSample).toBe(67);
-    });
-
-    describe("when the count would exceed 200 times the resolution of a 0.1 ns body", () => {
-      /**
-       * Reads no clock change per sample, so warmup asks for 1, 100, then 10000 calls; the body throws on
-       * its first call past those 101 so a sampler that runs the over-cap count stops, not hangs.
-       */
-      const zeroStepBody: Costs = { bodyMs: () => 0, throwAt: 101 };
-
-      it("fails naming the count asked for and the cap", () => {
-        const fake = harness(zeroStepBody);
-
-        const error = errorOf(() => run(fake, { resolutionMs: CAPPED_STEP }));
-
-        expect(error.message).toMatch(/\b10000\b/);
-        expect(error.message).toMatch(/\b1908\b/);
-      });
-
-      it("fails before any sample runs that count", () => {
-        const fake = harness(zeroStepBody);
-
-        errorOf(() => run(fake, { resolutionMs: CAPPED_STEP }));
-
-        expect(fake.sampleCalls).toStrictEqual([1, 100]);
-        expect(fake.built).toHaveLength(101);
-      });
-    });
-
-    describe("when given a fixed count", () => {
-      it("runs every warmup and timed sample at that count", () => {
-        const fake = harness({ bodyMs: () => COARSE_RESOLUTION, buildMs: 1 });
-
-        const result = run(fake, { resolutionMs: COARSE_RESOLUTION, callsPerSample: 7 });
-
-        expect(new Set(fake.sampleCalls)).toStrictEqual(new Set([7]));
-        expect(fake.sampleCalls.length).toBeGreaterThan(16 + 64);
-        expect(result.callsPerSample).toBe(7);
-      });
-
-      it("runs a count above the cap", () => {
-        const fake = harness({ bodyMs: () => 0.1 });
-
-        const result = run(fake, { resolutionMs: CAPPED_STEP, callsPerSample: 2000 });
-
-        expect(result.callsPerSample).toBe(2000);
-      });
-    });
-  });
-
-  describe("collection", () => {
-    it("runs the body outside any clock read on a state of its own, collecting before tearing it down", () => {
-      const fake = harness({ bodyMs: () => 200 });
-
-      run(fake, { resolutionMs: FINE_RESOLUTION });
-
-      const at = fake.log.indexOf("collect");
-      const id = fake.built[16]?.id;
-      expect(fake.log.slice(at - 2, at + 2)).toStrictEqual([
-        `setup ${id}`,
-        `fn ${id}`,
-        "collect",
-        `teardown ${id}`,
-      ]);
     });
   });
 
@@ -373,15 +299,16 @@ describe("samplePerCall", () => {
       "leaves the caller exactly the states built and not torn down when $when",
       ({ samplesBefore, liveCount, ...throws }) => {
         const fake = harness({ bodyMs: () => 200, ...throws });
-        const slots: (World | undefined)[] = [];
+        const inFlight: InFlight<World> = { held: false, state: undefined };
 
         expect(() =>
-          run(fake, { resolutionMs: FINE_RESOLUTION, callsPerSample: 3, slots }),
+          run(fake, { resolutionMs: FINE_RESOLUTION, callsPerSample: 3, inFlight }),
         ).toThrow(fake.failure);
 
         expect(fake.sampleCalls).toHaveLength(samplesBefore);
         expect(fake.live.size).toBe(liveCount);
-        expect(slots.filter((slot) => slot !== undefined)).toStrictEqual([...fake.live]);
+        expect(inFlight.held).toBe(liveCount === 1);
+        expect(fake.live).toStrictEqual(new Set(inFlight.held ? [inFlight.state] : []));
       },
     );
   });

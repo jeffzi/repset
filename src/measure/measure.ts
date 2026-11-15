@@ -10,7 +10,7 @@
  * under Bun.
  */
 
-import { performanceNow, timerResolutionMs } from "../utils.js";
+import { performanceNow, thrownMessage, timerResolutionMs } from "../utils.js";
 import { empty, type EmptyResult, type Lifecycle, sampleEmpty } from "./empty.js";
 import { type InFlight, keep, samplePerCall } from "./per-call.js";
 import { runningRuntime } from "./runtime.js";
@@ -145,24 +145,8 @@ export class MeasureError extends Error {
    *   kept as it is.
    */
   constructor(phase: Phase, cause: unknown) {
-    super(cause instanceof Error ? cause.message : stringForm(cause), { cause });
+    super(thrownMessage(cause), { cause });
     this.phase = phase;
-  }
-}
-
-/**
- * Reads a thrown value's string form for an error message, without letting the conversion throw in
- * place of the failure it describes.
- *
- * @param value - The thrown value.
- * @returns `String(value)`, or `"a value with no string form"` when that conversion throws, as it
- *   does for a null-prototype object.
- */
-function stringForm(value: unknown): string {
-  try {
-    return String(value);
-  } catch {
-    return "a value with no string form";
   }
 }
 
@@ -382,6 +366,51 @@ async function runtimeNoInline(): Promise<NoInline | undefined> {
 // ---------------------------------------------------------------------------
 
 /**
+ * Builds one state of a benchmark, checks the body is synchronous on it, hands it to `use`, then
+ * tears it down.
+ *
+ * Every `try` of the shared-state lifecycle lives here, so `use` holds none above its timed calls.
+ *
+ * @param benchmark - The benchmark whose `setup`, `fn` and `teardown` run.
+ * @param use - Runs on the state once the body's first call has returned without a thenable.
+ * @returns What `use` returned.
+ * @throws MeasureError in phase `setup` when `setup` throws, before anything else runs.
+ * @throws MeasureError in phase `fn` when the body throws or its first call returns a thenable,
+ *   after teardown ran; a teardown error then is discarded.
+ * @throws MeasureError in phase `calibration` when `use` throws a `CalibrationError`, in the phase
+ *   of any `MeasureError` it throws, otherwise in phase `fn`, after teardown ran; a teardown error
+ *   then is discarded.
+ * @throws MeasureError in phase `teardown` when `teardown` throws and the body succeeded.
+ */
+export function withCaseState<State, Result>(
+  benchmark: Case<State>,
+  use: (state: State) => Result,
+): Result {
+  const { setup, fn } = benchmark;
+  const teardown = benchmark.teardown ?? keep;
+  let state: State;
+  try {
+    state = setup();
+  } catch (error) {
+    throw new MeasureError("setup", error);
+  }
+  let result: Result;
+  try {
+    requireSynchronous(fn(state));
+    result = use(state);
+  } catch (error) {
+    tearDownDiscarding(teardown, state);
+    throw failedIn("fn", error);
+  }
+  try {
+    teardown(state);
+  } catch (error) {
+    throw new MeasureError("teardown", error);
+  }
+  return result;
+}
+
+/**
  * Runs a shared-state benchmark: builds one state, checks the body is synchronous, samples it,
  * then tears the state down.
  *
@@ -404,35 +433,16 @@ function measureSharedState<State>(
   sampling: BodySampling,
   timing: TimingWindow,
 ): SamplerResult {
-  const { setup, fn } = benchmark;
-  const teardown = benchmark.teardown ?? keep;
-  let state: State;
-  try {
-    state = setup();
-  } catch (error) {
-    throw new MeasureError("setup", error);
-  }
-  let run: SamplerResult;
-  try {
-    requireSynchronous(fn(state));
-    run = sampleSharedState({
+  return withCaseState(benchmark, (state) =>
+    sampleSharedState({
       ...sampling,
-      fn,
+      fn: benchmark.fn,
       state,
       afterTiming: () => {
         timing.endMs = performance.now();
       },
-    });
-  } catch (error) {
-    tearDownDiscarding(teardown, state);
-    throw failedIn("fn", error);
-  }
-  try {
-    teardown(state);
-  } catch (error) {
-    throw new MeasureError("teardown", error);
-  }
-  return run;
+    }),
+  );
 }
 
 /**

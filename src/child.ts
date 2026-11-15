@@ -1,0 +1,397 @@
+/**
+ * The child entry: a process the parent starts on Node or Bun to load one benchmark file and list
+ * its cases, measure one case, or run one case once.
+ *
+ * A measuring child loads this module beside the benchmark, so it imports only `bench`, the
+ * `measure` modules, the generic helpers in `utils` and Node builtins: under Bun, module code a
+ * child loads slows the timed calls even when it never runs.
+ */
+import { existsSync, realpathSync, writeSync } from "node:fs";
+import { isAbsolute } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+import { type RegisteredCase, registeredCases } from "./bench.js";
+import {
+  type Case,
+  type GcDuringTiming,
+  measure,
+  MeasureError,
+  type Measurement,
+  type Phase,
+  type Statistics,
+  withCaseState,
+} from "./measure/measure.js";
+import { describe, thrownMessage } from "./utils.js";
+
+/**
+ * The file descriptor the result goes to, so that what a benchmark file prints on stdout and stderr
+ * never mixes into it.
+ */
+const RESULT_FD = 3;
+
+/** Lists the cases a benchmark file registers. */
+export interface ListRequest {
+  readonly mode: "list";
+  readonly file: string;
+}
+
+/** Measures one case of a benchmark file. */
+export interface MeasureRequest {
+  readonly mode: "measure";
+  readonly file: string;
+  readonly id: string;
+  readonly minTime: number;
+  readonly minSamples: number;
+}
+
+/** Runs one case of a benchmark file once, with no timing. */
+export interface OnceRequest {
+  readonly mode: "once";
+  readonly file: string;
+  readonly id: string;
+}
+
+/** What the parent asks a child to do; `file` is an absolute path. */
+export type ChildRequest = ListRequest | MeasureRequest | OnceRequest;
+
+/** Where a child's work failed: a phase of `measure`, or `load` for the benchmark file. */
+export type ChildPhase = Phase | "load";
+
+export interface ChildError {
+  readonly phase: ChildPhase;
+  readonly message: string;
+  /** The stack of the thrown `Error`, or `null` when the value was not one or had no string stack. */
+  readonly stack: string | null;
+}
+
+export interface Failed {
+  readonly status: "failed";
+  readonly error: ChildError;
+}
+
+export interface ListedCase {
+  readonly id: string;
+  readonly setupPerCall: boolean;
+}
+
+export interface Listed {
+  readonly status: "ok";
+  readonly cases: ListedCase[];
+}
+
+/** How a measuring child's samples were taken, under the report's names. */
+export type SamplingReport = Pick<
+  Measurement,
+  | "timerResolutionNs"
+  | "callsPerSample"
+  | "callsPerSampleFixed"
+  | "warmupSamples"
+  | "timingAttempts"
+  | "timingMs"
+>;
+
+/** A measuring child's result: the report's per-process fields the child knows. */
+export interface Measured {
+  readonly status: "ok";
+  readonly stats: Statistics;
+  readonly sampling: SamplingReport;
+  readonly checks: { readonly ratioToEmptyBody: number };
+  /** The collections seen during timing, or `null` where the runtime delivers no `gc` entries. */
+  readonly gc: GcDuringTiming | null;
+}
+
+/** A once child's result: the case ran, and nothing was timed. */
+export interface Ran {
+  readonly status: "ok";
+}
+
+export type ChildResult = Listed | Measured | Ran | Failed;
+
+/**
+ * Reads a string field of the request.
+ *
+ * @param request - The parsed request.
+ * @param name - The field to read.
+ * @returns The field's value.
+ * @throws TypeError when the field is absent or not a string.
+ */
+function stringField(request: object, name: string): string {
+  const value: unknown = Reflect.get(request, name);
+  if (typeof value !== "string") {
+    throw new TypeError(`the request's ${name} must be a string, got ${describe(value)}`);
+  }
+  return value;
+}
+
+/**
+ * Reads a number field of the request.
+ *
+ * @param request - The parsed request.
+ * @param name - The field to read.
+ * @returns The field's value.
+ * @throws TypeError when the field is absent or not a number.
+ */
+function numberField(request: object, name: string): number {
+  const value: unknown = Reflect.get(request, name);
+  if (typeof value !== "number") {
+    throw new TypeError(`the request's ${name} must be a number, got ${describe(value)}`);
+  }
+  return value;
+}
+
+/**
+ * Parses the child's request argument, before anything loads.
+ *
+ * @param argument - The request as JSON: `mode` and an absolute `file` always, `id` for `measure`
+ *   and `once`, `minTime` and `minSamples` for `measure`.
+ * @returns The request, holding only the fields its mode reads.
+ * @throws SyntaxError when `argument` is not JSON.
+ * @throws TypeError when the request is not an object, names an unknown mode, lacks a field its
+ *   mode needs, holds a field of the wrong type, or names a relative file.
+ */
+export function parseRequest(argument: string): ChildRequest {
+  const request: unknown = JSON.parse(argument);
+  if (typeof request !== "object" || request === null) {
+    throw new TypeError(`the request must be a JSON object, got ${describe(request)}`);
+  }
+  const mode: unknown = Reflect.get(request, "mode");
+  const file = stringField(request, "file");
+  if (!isAbsolute(file)) {
+    throw new TypeError(`the request's file must be an absolute path, got ${describe(file)}`);
+  }
+  switch (mode) {
+    case "list":
+      return { mode, file };
+    case "once":
+      return { mode, file, id: stringField(request, "id") };
+    case "measure":
+      return {
+        mode,
+        file,
+        id: stringField(request, "id"),
+        minTime: numberField(request, "minTime"),
+        minSamples: numberField(request, "minSamples"),
+      };
+    default:
+      throw new TypeError(
+        `the request's mode must be list, measure or once, got ${describe(mode)}`,
+      );
+  }
+}
+
+/**
+ * Encodes a failure as a result.
+ *
+ * @param phase - Where the work failed; a `MeasureError` carries its own phase instead.
+ * @param thrown - The thrown value. For a `MeasureError`, the result takes its phase and message
+ *   and the stack of its cause, since its own stack names only repset's frames.
+ * @returns The failed result: the message is an `Error`'s own or another value's string form, and
+ *   the stack `null` unless the cause is an `Error` with a string stack.
+ */
+export function failedResult(phase: ChildPhase, thrown: unknown): Failed {
+  const isMeasureError = thrown instanceof MeasureError;
+  const cause: unknown = isMeasureError ? thrown.cause : thrown;
+  return {
+    status: "failed",
+    error: {
+      phase: isMeasureError ? thrown.phase : phase,
+      message: thrownMessage(thrown),
+      stack: cause instanceof Error && typeof cause.stack === "string" ? cause.stack : null,
+    },
+  };
+}
+
+/**
+ * Lists the cases a benchmark file registers, in registration order.
+ *
+ * The file is imported by its file URL, so a Windows path loads too, and its top-level `await`
+ * finishes before the registry is read. A file imported earlier in the same process does not
+ * register again.
+ *
+ * @param file - The benchmark file's absolute path.
+ * @returns Every registered case, a twice-registered id twice, or a failure in phase `load` when the
+ *   import throws or rejects or the registry cannot be read.
+ */
+export async function listCases(file: string): Promise<Listed | Failed> {
+  try {
+    const cases = (await loadCases(file)).map(({ id, case: registered }) => ({
+      id,
+      setupPerCall: registered.kind === "perCall",
+    }));
+    return { status: "ok", cases };
+  } catch (error) {
+    return failedResult("load", error);
+  }
+}
+
+/**
+ * Measures the case `id` of a benchmark file; the file's other cases register but never run.
+ *
+ * @param file - The benchmark file's absolute path.
+ * @param id - The case to measure.
+ * @param minimums - The time in milliseconds and the sample count the body's timing must pass.
+ * @returns The report's per-process fields, or a failure: in phase `load` when the file fails to
+ *   load or `id` does not select exactly one case, otherwise in the phase `measure` failed in.
+ */
+export async function measureCase(
+  file: string,
+  id: string,
+  minimums: Pick<MeasureRequest, "minTime" | "minSamples">,
+): Promise<Measured | Failed> {
+  return withSelectedCase(file, id, async (selected) =>
+    measuredResult(
+      await measure(selected, { minTime: minimums.minTime, minSamples: minimums.minSamples }),
+    ),
+  );
+}
+
+/**
+ * Runs the case `id` of a benchmark file once: one `setup`, one `fn` call and one `teardown`, with
+ * no timing and no collector, so it runs on a runtime that cannot measure.
+ *
+ * @param file - The benchmark file's absolute path.
+ * @param id - The case to run.
+ * @returns A success, or a failure: in phase `load` when the file fails to load or `id` does not
+ *   select exactly one case, otherwise in the phase of the callback that failed.
+ */
+export async function runOnce(file: string, id: string): Promise<Ran | Failed> {
+  return withSelectedCase(file, id, (selected): Ran => {
+    withCaseState(selected, () => undefined);
+    return { status: "ok" };
+  });
+}
+
+/**
+ * Imports a benchmark file by its file URL and reads what it registered.
+ *
+ * @param file - The benchmark file's absolute path.
+ * @returns The registered cases, once the file's top-level `await` has finished.
+ * @throws The value the import threw or rejected with, or the registry's TypeError.
+ */
+async function loadCases(file: string): Promise<readonly RegisteredCase[]> {
+  await import(pathToFileURL(file).href);
+  return registeredCases();
+}
+
+/**
+ * Loads a benchmark file and picks the one case registered under `id`.
+ *
+ * @param file - The benchmark file's absolute path.
+ * @param id - The case to pick.
+ * @returns The case.
+ * @throws Error naming `id` when no case or more than one is registered under it, and what
+ *   {@link loadCases} throws.
+ */
+async function selectCase(file: string, id: string): Promise<Case<unknown>> {
+  const matches = (await loadCases(file)).filter((registered) => registered.id === id);
+  const [match] = matches;
+  if (match === undefined) {
+    throw new Error(`no benchmark is registered under the id ${id}`);
+  }
+  if (matches.length > 1) {
+    throw new Error(`the id ${id} is registered ${matches.length} times`);
+  }
+  return match.case;
+}
+
+/**
+ * Picks the case `id` of a benchmark file and runs `work` on it, encoding either failure as a result.
+ *
+ * @param file - The benchmark file's absolute path.
+ * @param id - The case to pick.
+ * @param work - Runs on the selected case; it may be asynchronous.
+ * @returns What `work` returned, or a failure: in phase `load` when the file fails to load or `id`
+ *   does not select exactly one case, otherwise in the phase `work` failed in.
+ */
+async function withSelectedCase<T>(
+  file: string,
+  id: string,
+  work: (selected: Case<unknown>) => T | Promise<T>,
+): Promise<T | Failed> {
+  let selected: Case<unknown>;
+  try {
+    selected = await selectCase(file, id);
+  } catch (error) {
+    return failedResult("load", error);
+  }
+  try {
+    return await work(selected);
+  } catch (error) {
+    // "child" is only the fallback for a value that is not a MeasureError: `work` throws
+    // MeasureErrors alone, whose own phase the result carries.
+    return failedResult("child", error);
+  }
+}
+
+/** Splits `measure`'s flat measurement into the report's per-process fields. */
+function measuredResult(measurement: Measurement): Measured {
+  return {
+    status: "ok",
+    stats: {
+      min: measurement.min,
+      p25: measurement.p25,
+      median: measurement.median,
+      p75: measurement.p75,
+      p99: measurement.p99,
+      max: measurement.max,
+      mean: measurement.mean,
+      sampleCount: measurement.sampleCount,
+    },
+    sampling: {
+      timerResolutionNs: measurement.timerResolutionNs,
+      callsPerSample: measurement.callsPerSample,
+      callsPerSampleFixed: measurement.callsPerSampleFixed,
+      warmupSamples: measurement.warmupSamples,
+      timingAttempts: measurement.timingAttempts,
+      timingMs: measurement.timingMs,
+    },
+    checks: { ratioToEmptyBody: measurement.ratioToEmptyBody },
+    gc: measurement.gcDuringTiming ?? null,
+  };
+}
+
+async function respond(request: ChildRequest): Promise<ChildResult> {
+  switch (request.mode) {
+    case "list":
+      return listCases(request.file);
+    case "measure":
+      return measureCase(request.file, request.id, request);
+    case "once":
+      return runOnce(request.file, request.id);
+    default:
+      return assertNever(request);
+  }
+}
+
+/** Fails at compile time when a `switch` misses a variant, and at run time if one gets through. */
+function assertNever(value: never): never {
+  throw new Error(`unexpected request: ${JSON.stringify(value)}`);
+}
+
+/** Resolves once everything written to `stream` before the call has been handed off. */
+async function flushed(stream: NodeJS.WriteStream): Promise<void> {
+  return new Promise((resolve) => {
+    // A write error (a parent that closed the pipe) must not turn a written result into a failed
+    // exit, so it resolves too.
+    stream.write("", () => {
+      resolve();
+    });
+  });
+}
+
+/** Whether the process was started on this module, compared as real paths so links match. */
+function startedOnThisModule(): boolean {
+  const entry = process.argv[1];
+  if (entry === undefined || !existsSync(entry)) return false;
+  return realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url));
+}
+
+// The explicit exit ends the child even when the file left a handle open; it waits for the output
+// streams first, which a piped stream on Node otherwise loses.
+if (startedOnThisModule()) {
+  const result = await respond(parseRequest(process.argv[2] ?? ""));
+  writeSync(RESULT_FD, `${JSON.stringify(result)}\n`);
+  await flushed(process.stdout);
+  await flushed(process.stderr);
+  process.exit(0);
+}

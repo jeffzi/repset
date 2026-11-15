@@ -1,8 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { bench, registeredCases } from "../src/bench.js";
-
-const REGISTRY = Symbol.for("repset.registry");
+import { REGISTRY, resetRegistry } from "./registry.js";
 
 /** Runs `act` and returns what it threw. */
 function thrownBy(act: () => unknown): unknown {
@@ -54,7 +53,7 @@ function* generator(): Generator<number> {
 }
 
 beforeEach(() => {
-  Reflect.deleteProperty(globalThis, REGISTRY);
+  resetRegistry();
 });
 
 describe("bench", () => {

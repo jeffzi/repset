@@ -42,6 +42,8 @@ export interface MeasureRequest {
   readonly id: string;
   readonly minTime: number;
   readonly minSamples: number;
+  /** The calls per sample to measure at; absent means `measure` calibrates one. */
+  readonly callsPerSample?: number;
 }
 
 /** Runs one case of a benchmark file once, with no timing. */
@@ -140,10 +142,23 @@ function numberField(request: object, name: string): number {
 }
 
 /**
+ * Reads a number field of the request that may be absent.
+ *
+ * @param request - The parsed request.
+ * @param name - The field to read.
+ * @returns The field's value, or `undefined` when the request has no such field.
+ * @throws TypeError when the field is present and not a number.
+ */
+function optionalNumberField(request: object, name: string): number | undefined {
+  return Reflect.get(request, name) === undefined ? undefined : numberField(request, name);
+}
+
+/**
  * Parses the child's request argument, before anything loads.
  *
  * @param argument - The request as JSON: `mode` and an absolute `file` always, `id` for `measure`
- *   and `once`, `minTime` and `minSamples` for `measure`.
+ *   and `once`, `minTime` and `minSamples` for `measure`, and optionally `callsPerSample` for
+ *   `measure`.
  * @returns The request, holding only the fields its mode reads.
  * @throws SyntaxError when `argument` is not JSON.
  * @throws TypeError when the request is not an object, names an unknown mode, lacks a field its
@@ -164,14 +179,17 @@ export function parseRequest(argument: string): ChildRequest {
       return { mode, file };
     case "once":
       return { mode, file, id: stringField(request, "id") };
-    case "measure":
+    case "measure": {
+      const callsPerSample = optionalNumberField(request, "callsPerSample");
       return {
         mode,
         file,
         id: stringField(request, "id"),
         minTime: numberField(request, "minTime"),
         minSamples: numberField(request, "minSamples"),
+        ...(callsPerSample === undefined ? {} : { callsPerSample }),
       };
+    }
     default:
       throw new TypeError(
         `the request's mode must be list, measure or once, got ${describe(mode)}`,
@@ -229,18 +247,24 @@ export async function listCases(file: string): Promise<Listed | Failed> {
  *
  * @param file - The benchmark file's absolute path.
  * @param id - The case to measure.
- * @param minimums - The time in milliseconds and the sample count the body's timing must pass.
+ * @param sampling - The time in milliseconds and the sample count the body's timing must pass, and
+ *   the calls per sample to measure at, calibrated when absent.
  * @returns The report's per-process fields, or a failure: in phase `load` when the file fails to
  *   load or `id` does not select exactly one case, otherwise in the phase `measure` failed in.
  */
 export async function measureCase(
   file: string,
   id: string,
-  minimums: Pick<MeasureRequest, "minTime" | "minSamples">,
+  sampling: Pick<MeasureRequest, "minTime" | "minSamples" | "callsPerSample">,
 ): Promise<Measured | Failed> {
+  const { minTime, minSamples, callsPerSample } = sampling;
   return withSelectedCase(file, id, async (selected) =>
     measuredResult(
-      await measure(selected, { minTime: minimums.minTime, minSamples: minimums.minSamples }),
+      await measure(selected, {
+        minTime,
+        minSamples,
+        ...(callsPerSample === undefined ? {} : { callsPerSample }),
+      }),
     ),
   );
 }

@@ -125,6 +125,11 @@ describe("parseRequest", () => {
         error: /\bminTime\b.*"5"/,
         argument: JSON.stringify({ ...MEASURE_REQUEST, minTime: "5" }),
       },
+      {
+        why: "a callsPerSample that is a string",
+        error: /\bcallsPerSample\b.*"200"/,
+        argument: JSON.stringify({ ...MEASURE_REQUEST, callsPerSample: "200" }),
+      },
     ])("throws a TypeError for $why", ({ argument, error }) => {
       const parse = (): unknown => parseRequest(argument);
 
@@ -508,6 +513,22 @@ describe("the child started on node", { timeout: SPAWN_TIMEOUT_MS }, () => {
     expect(resultLine(run.fd3)).toStrictEqual({
       status: "ok",
       cases: [{ id: "found", setupPerCall: false }],
+    });
+  });
+
+  describe("when a measure request fixes the calls per sample", () => {
+    it("measures at that count and reports it as fixed", async () => {
+      const run = await spawnChild("node", {
+        ...MEASURE_REQUEST,
+        file: LIFECYCLE,
+        id: "steady",
+        callsPerSample: 200,
+      });
+
+      expect(resultLine(run.fd3)).toMatchObject({
+        status: "ok",
+        sampling: { callsPerSample: 200, callsPerSampleFixed: true },
+      });
     });
   });
 

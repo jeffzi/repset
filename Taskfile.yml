@@ -53,7 +53,9 @@ tasks:
       - "{{.MISE}} npx fallow fix --yes --no-create-config"
 
   check-package:
-    desc: Build, lint the published surface, then install the packed package in an empty app
+    desc:
+      Build, lint the published surface, then install the packed package in an empty app, import
+      every entry and run its repset command once
     deps: [_deps]
     cmds:
       - task: build
@@ -72,6 +74,7 @@ tasks:
           cd "$app"
           npm install --no-audit --no-fund --install-strategy=nested ./*.tgz
           node import-exports.ts "$name"
+          npx --no-install repset --version
         '
 
   # Runs CMD on existing, non-ignored files matching PATTERN (narrowed by the files after --), and

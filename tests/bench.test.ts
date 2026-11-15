@@ -14,6 +14,43 @@ function thrownBy(act: () => unknown): unknown {
   throw new Error("expected the call to throw");
 }
 
+/** Calls `bench` with arguments its signature rejects at compile time. */
+function benchUnchecked(name: unknown, benchmark: unknown): void {
+  Reflect.apply(bench, undefined, [name, benchmark]);
+}
+
+/** Registers one case, makes a bad `bench` call, and returns its error and the ids registered. */
+function rejectionOf(name: unknown, benchmark: unknown): { error: unknown; ids: string[] } {
+  bench("before", () => 1);
+  const error = thrownBy(() => {
+    benchUnchecked(name, benchmark);
+  });
+  return { error, ids: registeredCases().map((registered) => registered.id) };
+}
+
+/** Asserts a TypeError holding every fragment, and that the call registered nothing. */
+function expectRejected(rejection: { error: unknown; ids: string[] }, fragments: string[]): void {
+  expect(rejection.error).toBeInstanceOf(TypeError);
+  for (const fragment of fragments) {
+    expect(String(rejection.error)).toContain(fragment);
+  }
+  expect(rejection.ids).toStrictEqual(["before"]);
+}
+
+const sync = (): number => 1;
+
+async function asyncFunction(): Promise<number> {
+  return 1;
+}
+
+async function* asyncGenerator(): AsyncGenerator<number> {
+  yield 1;
+}
+
+function* generator(): Generator<number> {
+  yield 1;
+}
+
 beforeEach(() => {
   Reflect.deleteProperty(globalThis, REGISTRY);
 });
@@ -93,6 +130,163 @@ describe("bench", () => {
         case: { kind: "sharedState", setup: expect.any(Function), fn },
       });
       expect(object?.case.setup()).toBe(bare?.case.setup());
+    });
+  });
+
+  describe("when given a name that is not a string", () => {
+    it("throws a TypeError holding the value and registers nothing", () => {
+      const rejection = rejectionOf(42, sync);
+
+      expectRejected(rejection, ["42"]);
+    });
+  });
+
+  describe("when given a name that breaks the name rule", () => {
+    it.each([
+      { name: "", why: "empty" },
+      { name: "/sort", why: "a leading /" },
+      { name: "sort/", why: "a trailing /" },
+      { name: "sort//fast", why: "a doubled /" },
+      { name: "sort fast", why: "a space" },
+      { name: "sort/café", why: "a letter outside ASCII" },
+    ])("throws a TypeError holding the name when it has $why", ({ name }) => {
+      const rejection = rejectionOf(name, sync);
+
+      expectRejected(rejection, [name]);
+    });
+  });
+
+  describe("when given a name of several segments that keeps the name rule", () => {
+    it("registers the case under that name", () => {
+      bench("sort/in-place_v1.2", sync);
+
+      expect(registeredCases().map((registered) => registered.id)).toStrictEqual([
+        "sort/in-place_v1.2",
+      ]);
+    });
+  });
+
+  describe("when given a second argument that is not a function or an object", () => {
+    it.each([
+      { benchmark: 42, why: "a number", fragments: ["sort", "42"] },
+      { benchmark: "banana", why: "a string", fragments: ["sort", "banana"] },
+      { benchmark: undefined, why: "undefined", fragments: ["sort", "undefined"] },
+      { benchmark: null, why: "null", fragments: ["sort", "null"] },
+      { benchmark: [sync], why: "an array", fragments: ["sort", "an array"] },
+    ])("throws a TypeError for $why", ({ benchmark, fragments }) => {
+      const rejection = rejectionOf("sort", benchmark);
+
+      expectRejected(rejection, fragments);
+    });
+  });
+
+  describe("when given a benchmark object with a field repset does not know", () => {
+    it.each([
+      { benchmark: { fn: sync, banana: 1 }, field: "banana" },
+      { benchmark: { fn: sync, params: { size: [10] } }, field: "params" },
+    ])("throws a TypeError holding the field $field", ({ benchmark, field }) => {
+      const rejection = rejectionOf("sort", benchmark);
+
+      expectRejected(rejection, ["sort", field]);
+    });
+  });
+
+  describe("when given a benchmark object with a field of the wrong type", () => {
+    it.each([
+      { benchmark: { setup: sync }, why: "fn missing", field: "fn" },
+      { benchmark: { fn: undefined }, why: "fn undefined", field: "fn" },
+      { benchmark: { fn: 42 }, why: "fn a number", field: "fn" },
+      { benchmark: { fn: { run: sync } }, why: "fn a record of functions", field: "fn" },
+      { benchmark: { fn: null }, why: "fn null", field: "fn" },
+      { benchmark: { fn: sync, setup: 42 }, why: "setup a number", field: "setup" },
+      { benchmark: { fn: sync, setup: null }, why: "setup null", field: "setup" },
+      { benchmark: { fn: sync, teardown: 42 }, why: "teardown a number", field: "teardown" },
+      { benchmark: { fn: sync, teardown: null }, why: "teardown null", field: "teardown" },
+      {
+        benchmark: { fn: sync, setupPerCall: "yes" },
+        why: "setupPerCall a string",
+        field: "setupPerCall",
+      },
+      {
+        benchmark: { fn: sync, setupPerCall: null },
+        why: "setupPerCall null",
+        field: "setupPerCall",
+      },
+    ])("throws a TypeError holding the field for $why", ({ benchmark, field }) => {
+      const rejection = rejectionOf("sort", benchmark);
+
+      expectRejected(rejection, ["sort", field]);
+    });
+
+    it("names a function given as setupPerCall without printing its source", () => {
+      const rejection = rejectionOf("sort", { fn: sync, setupPerCall: sync });
+
+      expectRejected(rejection, ["sort", "setupPerCall", "a function"]);
+      expect(String(rejection.error)).not.toContain("=>");
+    });
+  });
+
+  describe("when given an async function", () => {
+    it.each([
+      { benchmark: asyncFunction, why: "a bare async function", fragments: ["sort"] },
+      { benchmark: asyncGenerator, why: "a bare async generator", fragments: ["sort"] },
+      { benchmark: { fn: asyncFunction }, why: "an async fn", fragments: ["sort", "fn"] },
+      {
+        benchmark: { fn: asyncGenerator },
+        why: "an async generator fn",
+        fragments: ["sort", "fn"],
+      },
+      {
+        benchmark: { setup: asyncFunction, fn: sync },
+        why: "an async setup",
+        fragments: ["sort", "setup"],
+      },
+      {
+        benchmark: { setup: asyncGenerator, fn: sync },
+        why: "an async generator setup",
+        fragments: ["sort", "setup"],
+      },
+      {
+        benchmark: { fn: sync, teardown: asyncFunction },
+        why: "an async teardown",
+        fragments: ["sort", "teardown"],
+      },
+      {
+        benchmark: { fn: sync, teardown: asyncGenerator },
+        why: "an async generator teardown",
+        fragments: ["sort", "teardown"],
+      },
+    ])("throws a TypeError for $why", ({ benchmark, fragments }) => {
+      const rejection = rejectionOf("sort", benchmark);
+
+      expectRejected(rejection, fragments);
+    });
+
+    it("rejects it without calling it", () => {
+      let calls = 0;
+      const counted = async (): Promise<void> => {
+        calls += 1;
+      };
+
+      thrownBy(() => {
+        benchUnchecked("sort", counted);
+      });
+
+      expect(calls).toBe(0);
+    });
+  });
+
+  describe("when given a function that is not async", () => {
+    const returnsPromise = (): Promise<number> => Promise.resolve(1);
+
+    it.each([
+      { benchmark: generator, why: "a bare generator", fn: generator },
+      { benchmark: { fn: generator }, why: "a generator fn", fn: generator },
+      { benchmark: returnsPromise, why: "a function returning a promise", fn: returnsPromise },
+    ])("registers $why", ({ benchmark, fn }) => {
+      benchUnchecked("sort", benchmark);
+
+      expect(registeredCases().map((registered) => registered.case.fn)).toStrictEqual([fn]);
     });
   });
 

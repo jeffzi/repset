@@ -103,10 +103,10 @@ export async function judgeCell(
   }
   const fresh = await freshRound();
   const confirmation = summarizeCell(fresh.plain, fresh.repset);
-  const confirmed =
+  const differenceConfirmed =
     confirmation.pValue < SIGNIFICANCE &&
     Math.sign(confirmation.gap) === Math.sign(firstSummary.gap);
-  return { passed: !confirmed, first: firstSummary, confirmation };
+  return { passed: !differenceConfirmed, first: firstSummary, confirmation };
 }
 
 /**

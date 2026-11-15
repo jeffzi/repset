@@ -26,8 +26,15 @@ function writeFileWithMtime(path: string, content: string, mtime: number): void 
 }
 
 /**
- * Builds a throwaway project with the given files (relative path → mtime in seconds) and an
- * optional coverage report. Directories default to OLDER; `directories` creates and overrides them.
+ * Builds a throwaway project, registered for removal after the tests, with every directory's mtime
+ * set last so writing a child does not bump it.
+ *
+ * @param files - Each file's relative path, mapped to its mtime in seconds.
+ * @param coverageMtime - The coverage report's mtime in seconds, or `undefined` to write none.
+ * @param directories - Directories to create, each relative path mapped to its mtime in seconds;
+ *   every other directory gets `OLDER`.
+ * @returns The project's root directory.
+ * @throws Whatever creating the directory, writing a file or setting an mtime throws.
  */
 function createProject(
   files: Record<string, number>,

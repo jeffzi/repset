@@ -1,6 +1,5 @@
-import { readdirSync, realpathSync, statSync } from "node:fs";
+import { readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
-import { fileURLToPath } from "node:url";
 
 const COVERAGE_REPORT = "coverage/coverage-final.json";
 const VITEST_CONFIG = "vitest.config.ts";
@@ -17,6 +16,7 @@ function exists(path: string): boolean {
  * @param dir - Root to walk.
  * @returns `dir`, every directory below it, and every `.ts` source; directories count because
  * deleting or renaming a file only bumps its directory's mtime.
+ * @throws The filesystem error from `readdirSync` when `dir` is missing or unreadable.
  */
 function listInputs(dir: string): string[] {
   const entries = readdirSync(dir, { recursive: true, withFileTypes: true })
@@ -57,11 +57,6 @@ export function checkCoverageFresh(projectRoot: string): void {
   }
 }
 
-const entry = process.argv[1];
-if (
-  entry !== undefined &&
-  exists(entry) &&
-  realpathSync(entry) === fileURLToPath(import.meta.url)
-) {
+if (import.meta.main) {
   checkCoverageFresh(process.cwd());
 }

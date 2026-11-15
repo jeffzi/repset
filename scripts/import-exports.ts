@@ -1,6 +1,5 @@
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -40,12 +39,7 @@ async function importExports(name: string): Promise<void> {
   }
 }
 
-const entry = process.argv[1];
-if (
-  entry !== undefined &&
-  existsSync(entry) &&
-  realpathSync(entry) === fileURLToPath(import.meta.url)
-) {
+if (import.meta.main) {
   const name = process.argv[2];
   if (name === undefined) {
     throw new Error("usage: node import-exports.ts <package-name>");

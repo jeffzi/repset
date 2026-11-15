@@ -21,7 +21,8 @@ const ZERO_STEP_GROWTH = 100;
 /** The shortest body, in milliseconds (0.1 ns), whose sample of 200 times the resolution the cap keeps reachable. */
 const SHORTEST_BODY_MS = 1e-7;
 
-const WARMUP_MIN_MS = 250;
+/** The least time, on the sampler's clock, the shared-state and empty runs' warmups take. */
+export const WARMUP_MIN_MS = 250;
 
 /** The fewest warmup samples either sampler runs. */
 export const WARMUP_MIN_SAMPLES = 16;

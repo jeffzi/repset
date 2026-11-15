@@ -296,6 +296,41 @@ function fasterEveryRun(): Scripted {
   };
 }
 
+/**
+ * Builds a shared-state benchmark whose body costs 80 times the resolution a call, on a scripted
+ * clock where a read that directly follows another read finds the clock 8 times the resolution on
+ * for the first 250 ms after the body's last call, and one resolution on otherwise: the empty body
+ * reads slow at first, as it does when the engine compiles its loop partway through. Stubs
+ * `globalThis.gc` with a no-op.
+ *
+ * @returns The benchmark and its scripted clock.
+ */
+function emptyBodyFasterAfter250Ms(): Scripted {
+  let time = 1000;
+  let followsRead = false;
+  let lastBodyMs: number | undefined;
+  vi.stubGlobal("gc", () => undefined);
+  return {
+    benchmark: {
+      kind: "sharedState",
+      setup: () => 0,
+      fn: () => {
+        time += 80 * STEP_MS;
+        lastBodyMs = time;
+        followsRead = false;
+      },
+    },
+    now: () => {
+      if (followsRead) {
+        const slow = lastBodyMs !== undefined && time - lastBodyMs < 250;
+        time += (slow ? 8 : 1) * STEP_MS;
+      }
+      followsRead = true;
+      return time;
+    },
+  };
+}
+
 /** V8's garbage collector, exposed through a flag set at run time. */
 function exposedGc(...args: unknown[]): () => void {
   setFlagsFromString("--expose-gc");
@@ -657,6 +692,14 @@ describe("measure's empty-body check", () => {
     expect(error.message).toMatch(/1600000000[^]*250000000/);
   });
 
+  it("returns the ratio to the empty body as it reads once 250 ms of the empty body's warmup have passed", async () => {
+    const scripted = emptyBodyFasterAfter250Ms();
+
+    const result = await measure(scripted.benchmark, { now: scripted.now, callsPerSample: 1 });
+
+    expect(result.ratioToEmptyBody).toBe(80);
+  });
+
   // Two calls per sample: summed per-call spans read one resolution per empty call, a batched pair of
   // clock reads one resolution per two calls.
   it("times a per-call run's empty body as summed per-call spans", async () => {
@@ -903,7 +946,8 @@ console.log(JSON.stringify({
   console.log("REPORT " + JSON.stringify({ fn: received.includes(fn) }));
 `);
 
-      expect({ status: bun.status, stderr: bun.stderr }).toMatchObject({ status: 0 });
+      expect(bun.stderr).toMatch(/^ 0 fail\r?$/m);
+      expect(bun.status).toBe(0);
       expect(bun.report).toStrictEqual({ fn: true });
     },
     BUN_TIMEOUT_MS,
@@ -918,7 +962,8 @@ console.log(JSON.stringify({
   console.log("REPORT " + JSON.stringify({ bunJsc: received.length, injected: injected.length }));
 `);
 
-      expect({ status: bun.status, stderr: bun.stderr }).toMatchObject({ status: 0 });
+      expect(bun.stderr).toMatch(/^ 0 fail\r?$/m);
+      expect(bun.status).toBe(0);
       expect(bun.report).toStrictEqual({ bunJsc: 0, injected: 2 });
     },
     BUN_TIMEOUT_MS,
@@ -939,7 +984,8 @@ console.log(JSON.stringify({
         "() => { throw loadFailure; }",
       );
 
-      expect({ status: bun.status, stderr: bun.stderr }).toMatchObject({ status: 0 });
+      expect(bun.stderr).toMatch(/^ 0 fail\r?$/m);
+      expect(bun.status).toBe(0);
       expect(bun.report).toStrictEqual({ measureError: true, phase: "child", cause: true });
     },
     BUN_TIMEOUT_MS,

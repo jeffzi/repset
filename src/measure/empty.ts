@@ -12,6 +12,7 @@
 import {
   recordWarmup,
   startWarmup,
+  WARMUP_MIN_MS,
   WARMUP_MIN_SAMPLES,
   type SamplerResult,
   type Sampling,
@@ -86,8 +87,11 @@ function summed(timed: Timed, count: number): number {
 }
 
 /**
- * Times the empty body: 16 warmup samples that calibrate the count unless one is fixed, one
- * collection, then 64 timed samples.
+ * Times the empty body: warmup samples until both 250 ms on the clock and 16 samples have passed,
+ * calibrating the count unless one is fixed, then one collection, then 64 timed samples.
+ *
+ * The time minimum keeps the timed samples on the code the engine settles on: Bun can compile the
+ * empty loop partway through a shorter warmup, and the timed samples then read two speeds.
  *
  * @param options - The lifecycle to time it in, the clock, its resolution, the forced GC, and the fixed
  *   count if one was given.
@@ -100,7 +104,8 @@ export function sampleEmpty(options: EmptyOptions): EmptyResult {
   const span = kind === "sharedState" ? batched : summed;
   const timed: Timed = { now, fn: empty };
   const progress = startWarmup(resolutionMs, callsPerSample);
-  while (progress.samples < WARMUP_MIN_SAMPLES) {
+  const started = now();
+  while (progress.samples < WARMUP_MIN_SAMPLES || now() - started < WARMUP_MIN_MS) {
     recordWarmup(progress, span(timed, progress.count));
   }
   const count = progress.count;

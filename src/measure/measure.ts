@@ -26,7 +26,6 @@ const NS_PER_MS = 1_000_000;
 
 /** The run fails when the body's mean per call is below this multiple of the empty body's. */
 const MIN_RATIO_TO_EMPTY_BODY = 1.42;
-const DIAG: unknown[] = [];
 
 /** `detail.kind` of a Node `gc` performance entry for a scavenge (`NODE_PERFORMANCE_GC_MINOR`). */
 const GC_MINOR = 1;
@@ -308,7 +307,7 @@ function checkedRatioToEmptyBody(bodyMeanNs: number, kind: Lifecycle, sampling: 
     throw new MeasureError(
       "optimized-away",
       new Error(
-        `the body reads ${formatNs(bodyMeanNs)} ns per call, under ${String(MIN_RATIO_TO_EMPTY_BODY)} times the empty body's ${formatNs(emptyMeanNs)} ns: the benchmark times too little work to tell apart from the loop DIAG ${JSON.stringify({ resolutionMs: sampling.resolutionMs, runs: DIAG, emptySpansMs: [...emptyRun.spans] })}`,
+        `the body reads ${formatNs(bodyMeanNs)} ns per call, under ${String(MIN_RATIO_TO_EMPTY_BODY)} times the empty body's ${formatNs(emptyMeanNs)} ns: the benchmark times too little work to tell apart from the loop`,
       ),
     );
   }
@@ -611,7 +610,7 @@ export function summarize(
   for (const time of sorted) {
     total += time;
   }
-  const summary = {
+  return {
     min: quantile(sorted, 0),
     p25: quantile(sorted, 0.25),
     median: quantile(sorted, 0.5),
@@ -621,8 +620,6 @@ export function summarize(
     mean: total / sorted.length,
     sampleCount: sorted.length,
   };
-  DIAG.push({ callsPerSample, ...summary });
-  return summary;
 }
 
 // ---------------------------------------------------------------------------

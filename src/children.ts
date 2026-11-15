@@ -501,6 +501,7 @@ function isMeasured(value: unknown): value is Measured {
   );
 }
 
+/** Whether `value` is a once child's result: `status` `"ok"` and nothing else. */
 function isRan(value: unknown): value is Ran {
-  return isRecord(value) && value["status"] === "ok";
+  return isRecord(value) && value["status"] === "ok" && Object.keys(value).length === 1;
 }

@@ -247,6 +247,10 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
         },
       },
       {
+        why: "a listing for a once request",
+        request: { mode: "once", file: `${LISTED_LINE}\n`, id: "apple" },
+      },
+      {
         why: "a failure with no message",
         request: {
           mode: "once",

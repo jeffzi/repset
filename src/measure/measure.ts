@@ -116,7 +116,8 @@ export type Phase = "setup" | "fn" | "teardown" | "optimized-away" | "calibratio
 
 /**
  * A failure of `measure`: the phase it failed in, and as `cause` the value a callback, the loader or
- * the collector threw, or for `check` and a missing collector the `Error` `measure` built.
+ * the collector threw, or for `optimized-away` and a missing collector the `Error` `measure`
+ * built.
  */
 export class MeasureError extends Error {
   override name = "MeasureError";
@@ -428,9 +429,9 @@ function measureSharedState<State>(
  * @param timing - Receives the end of the timed samples; the forced GC records their start.
  * @returns What the body's sampler returned.
  * @throws MeasureError in phase `setup`, `fn` or `teardown` when that callback throws, `fn` also
- *   when the body's first call returns a thenable, `calibration` when the sampler refuses a count, and
- *   `process` when the forced GC throws, after every state built and not torn down is torn down, save the one whose teardown threw; a
- *   teardown error during that cleanup is discarded.
+ *   when the body's first call returns a thenable, `calibration` when the sampler refuses a count,
+ *   and `child` when the forced GC throws, after every state built and not torn down is torn down,
+ *   save the one whose teardown threw; a teardown error during that cleanup is discarded.
  */
 function measurePerCall<State>(
   benchmark: Case<State>,

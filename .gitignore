@@ -12,6 +12,8 @@ coverage
 
 # Dependency directories
 node_modules/
+# The discovery tests check that globs skip node_modules directories.
+!tests/fixtures/discovery/**/node_modules/
 
 # TypeScript cache
 *.tsbuildinfo

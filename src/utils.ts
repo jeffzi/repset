@@ -55,6 +55,21 @@ export function timerResolutionMs(now: () => number = performanceNow): number {
   return smallestChange(now, TRANSITIONS_PER_PASS);
 }
 
+/** Names `value` in an error message without printing a function's source or an object's body. */
+export function describe(value: unknown): string {
+  if (Array.isArray(value)) return "an array";
+  switch (typeof value) {
+    case "object":
+      return value === null ? "null" : "an object";
+    case "function":
+      return "a function";
+    case "string":
+      return JSON.stringify(value);
+    default:
+      return String(value);
+  }
+}
+
 /**
  * Reads the message of a thrown value, without letting a conversion throw in place of the failure
  * it describes.

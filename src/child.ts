@@ -3,8 +3,8 @@
  * its cases, measure one case, or run one case once.
  *
  * A measuring child loads this module beside the benchmark, so it imports only `bench`, the
- * `measure` modules and Node builtins: under Bun, module code a child loads slows the timed calls
- * even when it never runs.
+ * `measure` modules, the generic helpers in `utils` and Node builtins: under Bun, module code a
+ * child loads slows the timed calls even when it never runs.
  */
 import { existsSync, realpathSync, writeSync } from "node:fs";
 import { isAbsolute } from "node:path";
@@ -18,11 +18,16 @@ import {
   MeasureError,
   type Measurement,
   type Phase,
-  requireSynchronous,
   type Statistics,
-  tearDownDiscarding,
+  withCaseState,
 } from "./measure/measure.js";
-import { thrownMessage } from "./utils.js";
+import { describe, thrownMessage } from "./utils.js";
+
+/**
+ * The file descriptor the result goes to, so that what a benchmark file prints on stdout and stderr
+ * never mixes into it.
+ */
+const RESULT_FD = 3;
 
 /** Lists the cases a benchmark file registers. */
 export interface ListRequest {
@@ -75,20 +80,21 @@ export interface Listed {
 }
 
 /** How a measuring child's samples were taken, under the report's names. */
-export interface Sampling {
-  readonly timerResolutionNs: number;
-  readonly callsPerSample: number;
-  readonly callsPerSampleFixed: boolean;
-  readonly warmupSamples: number;
-  readonly timingAttempts: number;
-  readonly timingMs: number;
-}
+export type SamplingReport = Pick<
+  Measurement,
+  | "timerResolutionNs"
+  | "callsPerSample"
+  | "callsPerSampleFixed"
+  | "warmupSamples"
+  | "timingAttempts"
+  | "timingMs"
+>;
 
 /** A measuring child's result: the report's per-process fields the child knows. */
 export interface Measured {
   readonly status: "ok";
   readonly stats: Statistics;
-  readonly sampling: Sampling;
+  readonly sampling: SamplingReport;
   readonly checks: { readonly ratioToEmptyBody: number };
   /** The collections seen during timing, or `null` where the runtime delivers no `gc` entries. */
   readonly gc: GcDuringTiming | null;
@@ -112,7 +118,7 @@ export type ChildResult = Listed | Measured | Ran | Failed;
 function stringField(request: object, name: string): string {
   const value: unknown = Reflect.get(request, name);
   if (typeof value !== "string") {
-    throw new TypeError(`the request's ${name} must be a string, got ${typeof value}`);
+    throw new TypeError(`the request's ${name} must be a string, got ${describe(value)}`);
   }
   return value;
 }
@@ -128,7 +134,7 @@ function stringField(request: object, name: string): string {
 function numberField(request: object, name: string): number {
   const value: unknown = Reflect.get(request, name);
   if (typeof value !== "number") {
-    throw new TypeError(`the request's ${name} must be a number, got ${typeof value}`);
+    throw new TypeError(`the request's ${name} must be a number, got ${describe(value)}`);
   }
   return value;
 }
@@ -146,12 +152,12 @@ function numberField(request: object, name: string): number {
 export function parseRequest(argument: string): ChildRequest {
   const request: unknown = JSON.parse(argument);
   if (typeof request !== "object" || request === null) {
-    throw new TypeError(`the request must be a JSON object, got ${argument}`);
+    throw new TypeError(`the request must be a JSON object, got ${describe(request)}`);
   }
   const mode: unknown = Reflect.get(request, "mode");
   const file = stringField(request, "file");
   if (!isAbsolute(file)) {
-    throw new TypeError(`the request's file must be an absolute path, got ${file}`);
+    throw new TypeError(`the request's file must be an absolute path, got ${describe(file)}`);
   }
   switch (mode) {
     case "list":
@@ -168,7 +174,7 @@ export function parseRequest(argument: string): ChildRequest {
       };
     default:
       throw new TypeError(
-        `the request's mode must be list, measure or once, got ${JSON.stringify(mode)}`,
+        `the request's mode must be list, measure or once, got ${describe(mode)}`,
       );
   }
 }
@@ -232,23 +238,11 @@ export async function measureCase(
   id: string,
   minimums: Pick<MeasureRequest, "minTime" | "minSamples">,
 ): Promise<Measured | Failed> {
-  let selected: Case<unknown>;
-  try {
-    selected = await selectCase(file, id);
-  } catch (error) {
-    return failedResult("load", error);
-  }
-  try {
-    const measurement = await measure(selected, {
-      minTime: minimums.minTime,
-      minSamples: minimums.minSamples,
-    });
-    return measuredResult(measurement);
-  } catch (error) {
-    // "child" is only the fallback for a value that is not a MeasureError: `measure` rejects with
-    // MeasureErrors alone, whose own phase the result carries.
-    return failedResult("child", error);
-  }
+  return withSelectedCase(file, id, async (selected) =>
+    measuredResult(
+      await measure(selected, { minTime: minimums.minTime, minSamples: minimums.minSamples }),
+    ),
+  );
 }
 
 /**
@@ -261,20 +255,10 @@ export async function measureCase(
  *   select exactly one case, otherwise in the phase of the callback that failed.
  */
 export async function runOnce(file: string, id: string): Promise<Ran | Failed> {
-  let selected: Case<unknown>;
-  try {
-    selected = await selectCase(file, id);
-  } catch (error) {
-    return failedResult("load", error);
-  }
-  try {
-    runCaseOnce(selected);
+  return withSelectedCase(file, id, (selected): Ran => {
+    withCaseState(selected, () => undefined);
     return { status: "ok" };
-  } catch (error) {
-    // "child" is only the fallback for a value that is not a MeasureError: `runCaseOnce` throws
-    // MeasureErrors alone, whose own phase the result carries.
-    return failedResult("child", error);
-  }
+  });
 }
 
 /**
@@ -311,32 +295,31 @@ async function selectCase(file: string, id: string): Promise<Case<unknown>> {
 }
 
 /**
- * Builds a state, calls the body on it once and tears it down.
+ * Picks the case `id` of a benchmark file and runs `work` on it, encoding either failure as a result.
  *
- * @param benchmark - The case to run.
- * @throws MeasureError in phase `setup` when `setup` throws, with no teardown.
- * @throws MeasureError in phase `fn` when `fn` throws or returns a thenable, after teardown ran; a
- *   teardown error then is discarded.
- * @throws MeasureError in phase `teardown` when `teardown` throws after `fn` succeeded.
+ * @param file - The benchmark file's absolute path.
+ * @param id - The case to pick.
+ * @param work - Runs on the selected case; it may be asynchronous.
+ * @returns What `work` returned, or a failure: in phase `load` when the file fails to load or `id`
+ *   does not select exactly one case, otherwise in the phase `work` failed in.
  */
-function runCaseOnce<State>(benchmark: Case<State>): void {
-  const { setup, fn, teardown } = benchmark;
-  let state: State;
+async function withSelectedCase<T>(
+  file: string,
+  id: string,
+  work: (selected: Case<unknown>) => T | Promise<T>,
+): Promise<T | Failed> {
+  let selected: Case<unknown>;
   try {
-    state = setup();
+    selected = await selectCase(file, id);
   } catch (error) {
-    throw new MeasureError("setup", error);
+    return failedResult("load", error);
   }
   try {
-    requireSynchronous(fn(state));
+    return await work(selected);
   } catch (error) {
-    if (teardown !== undefined) tearDownDiscarding(teardown, state);
-    throw new MeasureError("fn", error);
-  }
-  try {
-    teardown?.(state);
-  } catch (error) {
-    throw new MeasureError("teardown", error);
+    // "child" is only the fallback for a value that is not a MeasureError: `work` throws
+    // MeasureErrors alone, whose own phase the result carries.
+    return failedResult("child", error);
   }
 }
 
@@ -368,9 +351,21 @@ function measuredResult(measurement: Measurement): Measured {
 }
 
 async function respond(request: ChildRequest): Promise<ChildResult> {
-  if (request.mode === "list") return listCases(request.file);
-  if (request.mode === "measure") return measureCase(request.file, request.id, request);
-  return runOnce(request.file, request.id);
+  switch (request.mode) {
+    case "list":
+      return listCases(request.file);
+    case "measure":
+      return measureCase(request.file, request.id, request);
+    case "once":
+      return runOnce(request.file, request.id);
+    default:
+      return assertNever(request);
+  }
+}
+
+/** Fails at compile time when a `switch` misses a variant, and at run time if one gets through. */
+function assertNever(value: never): never {
+  throw new Error(`unexpected request: ${JSON.stringify(value)}`);
 }
 
 /** Resolves once everything written to `stream` before the call has been handed off. */
@@ -391,12 +386,11 @@ function startedOnThisModule(): boolean {
   return realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url));
 }
 
-// The result goes to fd 3 so that what a benchmark file prints on stdout and stderr never mixes
-// into it. The explicit exit ends the child even when the file left a handle open; it waits for the
-// output streams first, which a piped stream on Node otherwise loses.
+// The explicit exit ends the child even when the file left a handle open; it waits for the output
+// streams first, which a piped stream on Node otherwise loses.
 if (startedOnThisModule()) {
   const result = await respond(parseRequest(process.argv[2] ?? ""));
-  writeSync(3, `${JSON.stringify(result)}\n`);
+  writeSync(RESULT_FD, `${JSON.stringify(result)}\n`);
   await flushed(process.stdout);
   await flushed(process.stderr);
   process.exit(0);

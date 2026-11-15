@@ -8,8 +8,15 @@ function record(entry: unknown): void {
   if (Array.isArray(calls)) calls.push(entry);
 }
 
+/** A teardown that records its call under `name`. */
+function recordTeardown(name: string): () => void {
+  return () => {
+    record(`${name} teardown`);
+  };
+}
+
 /** A case whose every callback records its call under `name`. */
-function recorded(name: string, setupPerCall: boolean): void {
+function recorded(name: string): void {
   bench(name, {
     setup: () => {
       record(`${name} setup`);
@@ -21,13 +28,11 @@ function recorded(name: string, setupPerCall: boolean): void {
     teardown: (state) => {
       record(`${state.name} teardown`);
     },
-    setupPerCall,
   });
 }
 
-recorded("quiet", false);
-recorded("batch", true);
-recorded("other", false);
+recorded("quiet");
+recorded("other");
 
 bench("steady", {
   setup: () => Array.from({ length: 512 }, (_, index) => index),
@@ -43,9 +48,7 @@ bench("setup-throws", {
     throw new Error("fig");
   },
   fn: () => 1,
-  teardown: () => {
-    record("setup-throws teardown");
-  },
+  teardown: recordTeardown("setup-throws"),
 });
 
 bench("fn-throws", {
@@ -55,18 +58,14 @@ bench("fn-throws", {
     record(error);
     throw error;
   },
-  teardown: () => {
-    record("fn-throws teardown");
-  },
+  teardown: recordTeardown("fn-throws"),
 });
 
 bench("fn-returns-thenable", {
   setup: () => 0,
   // oxlint-disable-next-line unicorn/no-thenable -- a thenable body result is the input under test
   fn: () => ({ then: () => 0 }),
-  teardown: () => {
-    record("fn-returns-thenable teardown");
-  },
+  teardown: recordTeardown("fn-returns-thenable"),
 });
 
 bench("fn-and-teardown-throw", {

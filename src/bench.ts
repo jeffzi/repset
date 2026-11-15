@@ -6,10 +6,12 @@
  * look like a file with no benchmarks. The slot carries a format number, and a copy refuses a
  * format it does not know rather than misreading another version's registry.
  *
- * Every measuring child loads this module, so it imports no `node:` module and nothing at run time.
+ * Every measuring child loads this module, so it imports no `node:` module and, at run time, only
+ * the generic helpers in `utils`, which the child loads anyway.
  */
 
 import type { Case } from "./measure/measure.js";
+import { describe } from "./utils.js";
 
 /** The parameter combination `fn` receives when there is no `setup`; it has no key yet. */
 type NoParams = Readonly<Record<string, never>>;
@@ -70,21 +72,6 @@ const ASYNC_TAGS: ReadonlyMap<unknown, string> = new Map([
 
 function isCaseFunction(value: unknown): value is CaseFunction {
   return typeof value === "function";
-}
-
-/** Names `value` in an error message without printing a function's source or an object's body. */
-function describe(value: unknown): string {
-  if (Array.isArray(value)) return "an array";
-  switch (typeof value) {
-    case "object":
-      return value === null ? "null" : "an object";
-    case "function":
-      return "a function";
-    case "string":
-      return JSON.stringify(value);
-    default:
-      return String(value);
-  }
 }
 
 /**

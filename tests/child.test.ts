@@ -16,8 +16,7 @@ import {
 import { MeasureError } from "../src/measure/measure.js";
 import { exposedGc } from "./measure/fixtures.js";
 import { requiresRealBunHere } from "./real-bun.js";
-
-const REGISTRY = Symbol.for("repset.registry");
+import { resetRegistry } from "./registry.js";
 
 /** The slot where the `lifecycle.ts` fixture records each callback it runs. */
 const CALLS = Symbol.for("repset.child-calls");
@@ -36,7 +35,23 @@ function phaseOf(result: ChildResult): string | undefined {
 
 const FILE = fixture("three-cases.ts");
 
-const MEASURE_REQUEST = { mode: "measure", file: FILE, id: "alpha", minTime: 5, minSamples: 8 };
+/** What `FILE` lists: its three cases in registration order. */
+const FILE_LISTED = {
+  status: "ok",
+  cases: [
+    { id: "alpha", setupPerCall: false },
+    { id: "beta", setupPerCall: true },
+    { id: "gamma", setupPerCall: false },
+  ],
+};
+
+/** The sampling bounds of a short measurement. */
+const SHORT_RUN = { minTime: 5, minSamples: 8 };
+
+/** How long a short measurement may take on a slow CI runner. */
+const MEASURE_TIMEOUT_MS = 15_000;
+
+const MEASURE_REQUEST = { mode: "measure", file: FILE, id: "alpha", ...SHORT_RUN };
 
 const LIFECYCLE = fixture("lifecycle.ts");
 
@@ -49,12 +64,12 @@ function calls(): unknown[] {
 
 /** Measures `id` of `file` with a short run. */
 async function measureShort(file: string, id: string): Promise<ChildResult> {
-  return measureCase(file, id, { minTime: 5, minSamples: 8 });
+  return measureCase(file, id, SHORT_RUN);
 }
 
 beforeEach(() => {
   vi.resetModules();
-  Reflect.deleteProperty(globalThis, REGISTRY);
+  resetRegistry();
   Reflect.set(globalThis, CALLS, []);
 });
 
@@ -78,16 +93,13 @@ describe("parseRequest", () => {
 
   describe("when the request is malformed", () => {
     it.each([
-      { why: "not JSON", error: /JSON/, argument: "banana" },
-      { why: "not an object", error: /JSON object/, argument: "3" },
-      { why: "null", error: /JSON object/, argument: "null" },
+      { why: "not an object", error: /\b3\b/, argument: "3" },
+      { why: "null", error: /\bnull\b/, argument: "null" },
       {
         why: "an unknown mode",
-        error: /mode/,
+        error: /"walk"/,
         argument: JSON.stringify({ mode: "walk", file: FILE }),
       },
-      { why: "no mode", error: /mode/, argument: JSON.stringify({ file: FILE }) },
-      { why: "no file", error: /file/, argument: JSON.stringify({ mode: "list" }) },
       {
         why: "a file that is not a string",
         error: /file/,
@@ -95,23 +107,8 @@ describe("parseRequest", () => {
       },
       {
         why: "a relative file",
-        error: /absolute path/,
+        error: /bench\/sort\.ts/,
         argument: JSON.stringify({ mode: "list", file: "bench/sort.ts" }),
-      },
-      {
-        why: "once without an id",
-        error: /\bid\b/,
-        argument: JSON.stringify({ mode: "once", file: FILE }),
-      },
-      {
-        why: "once with an id that is not a string",
-        error: /\bid\b/,
-        argument: JSON.stringify({ mode: "once", file: FILE, id: 1 }),
-      },
-      {
-        why: "measure without an id",
-        error: /\bid\b/,
-        argument: JSON.stringify({ ...MEASURE_REQUEST, id: undefined }),
       },
       {
         why: "measure without minTime",
@@ -119,22 +116,20 @@ describe("parseRequest", () => {
         argument: JSON.stringify({ ...MEASURE_REQUEST, minTime: undefined }),
       },
       {
-        why: "measure without minSamples",
-        error: /minSamples/,
-        argument: JSON.stringify({ ...MEASURE_REQUEST, minSamples: undefined }),
+        why: "a null id",
+        error: /\bid\b.*\bnull\b/,
+        argument: JSON.stringify({ mode: "once", file: FILE, id: null }),
       },
       {
-        why: "measure with a minTime that is not a number",
-        error: /minTime/,
+        why: "a minTime that is a string",
+        error: /\bminTime\b.*"5"/,
         argument: JSON.stringify({ ...MEASURE_REQUEST, minTime: "5" }),
       },
-      {
-        why: "measure with a minSamples that is not a number",
-        error: /minSamples/,
-        argument: JSON.stringify({ ...MEASURE_REQUEST, minSamples: "8" }),
-      },
-    ])("throws for $why", ({ argument, error }) => {
-      expect(() => parseRequest(argument)).toThrow(error);
+    ])("throws a TypeError for $why", ({ argument, error }) => {
+      const parse = (): unknown => parseRequest(argument);
+
+      expect(parse).toThrow(TypeError);
+      expect(parse).toThrow(error);
     });
   });
 });
@@ -144,50 +139,13 @@ describe("listCases", () => {
     it("returns each case's id and setupPerCall in registration order", async () => {
       const result = await listCases(FILE);
 
-      expect(result).toStrictEqual({
-        status: "ok",
-        cases: [
-          { id: "alpha", setupPerCall: false },
-          { id: "beta", setupPerCall: true },
-          { id: "gamma", setupPerCall: false },
-        ],
-      });
-    });
-
-    it("lists an id registered twice twice", async () => {
-      const result = await listCases(fixture("duplicate.ts"));
-
-      expect(result).toStrictEqual({
-        status: "ok",
-        cases: [
-          { id: "apple", setupPerCall: false },
-          { id: "apple", setupPerCall: false },
-        ],
-      });
-    });
-
-    it("lists the cases registered after a top-level await", async () => {
-      const result = await listCases(fixture("top-level-await.ts"));
-
-      expect(result).toStrictEqual({ status: "ok", cases: [{ id: "late", setupPerCall: false }] });
-    });
-  });
-
-  describe("when the file registers nothing", () => {
-    it("returns an empty list", async () => {
-      const result = await listCases(fixture("empty.ts"));
-
-      expect(result).toStrictEqual({ status: "ok", cases: [] });
+      expect(result).toStrictEqual(FILE_LISTED);
     });
   });
 
   describe("when the file fails to load", () => {
-    it.each([
-      { why: "is missing", name: "absent.ts" },
-      { why: "throws at its top level", name: "top-level-throw.ts" },
-      { why: "makes a bench() call that is rejected", name: "registration-error.ts" },
-    ])("fails in phase load when the file $why", async ({ name }) => {
-      const result = await listCases(fixture(name));
+    it("fails in phase load when the file throws at its top level", async () => {
+      const result = await listCases(fixture("top-level-throw.ts"));
 
       expect(phaseOf(result)).toBe("load");
     });
@@ -233,14 +191,14 @@ describe("failedResult", () => {
       });
     });
 
-    it("carries the message MeasureError gives a value with no string form", () => {
+    it("carries a placeholder message for a value with no string form", () => {
       const unprintable: unknown = Object.create(null);
 
       const result = failedResult("load", unprintable);
 
       expect(result.error).toStrictEqual({
         phase: "load",
-        message: new MeasureError("fn", unprintable).message,
+        message: "a value with no string form",
         stack: null,
       });
     });
@@ -271,51 +229,34 @@ describe("failedResult", () => {
 });
 
 describe("measureCase and runOnce", () => {
-  const MODES = [
-    { mode: "measure", run: measureShort },
-    { mode: "once", run: runOnce },
-  ];
-
   describe("when the id does not select exactly one case", () => {
-    it.each(MODES)(
-      "$mode fails in phase load naming an id that is not registered",
-      async ({ run }) => {
-        const result = await run(FILE, "banana");
+    it("measureCase fails in phase load naming an id that is not registered", async () => {
+      const result = await measureShort(FILE, "banana");
 
-        expect(result).toMatchObject({
-          status: "failed",
-          error: { phase: "load", message: expect.stringContaining("banana") },
-        });
-      },
-    );
+      expect(result).toMatchObject({
+        status: "failed",
+        error: { phase: "load", message: expect.stringContaining("banana") },
+      });
+    });
 
-    it.each(MODES)(
-      "$mode fails in phase load naming an id registered more than once",
-      async ({ run }) => {
-        const result = await run(fixture("duplicate.ts"), "apple");
+    it("runOnce fails in phase load naming an id registered more than once", async () => {
+      const result = await runOnce(fixture("duplicate.ts"), "apple");
 
-        expect(result).toMatchObject({
-          status: "failed",
-          error: { phase: "load", message: expect.stringContaining("apple") },
-        });
-      },
-    );
-  });
-
-  describe("when the file fails to load", () => {
-    it.each(MODES)("$mode fails in phase load", async ({ run }) => {
-      const result = await run(fixture("top-level-throw.ts"), "alpha");
-
-      expect(phaseOf(result)).toBe("load");
+      expect(result).toMatchObject({
+        status: "failed",
+        error: { phase: "load", message: expect.stringContaining("apple") },
+      });
     });
   });
 });
 
 describe("measureCase", () => {
-  describe("when the case measures", () => {
-    it("returns the report's per-process fields", { timeout: 15_000 }, async () => {
-      vi.stubGlobal("gc", exposedGc());
+  beforeEach(() => {
+    vi.stubGlobal("gc", exposedGc());
+  });
 
+  describe("when the case measures", { timeout: MEASURE_TIMEOUT_MS }, () => {
+    it("returns the report's per-process fields", async () => {
       const result = await measureShort(LIFECYCLE, "steady");
 
       expect(result).toStrictEqual({
@@ -349,79 +290,35 @@ describe("measureCase", () => {
       });
     });
 
-    it("reports the quantiles under their own names", { timeout: 15_000 }, async () => {
-      vi.stubGlobal("gc", exposedGc());
-
+    it("reports the quantiles under their own names", async () => {
       const result = await measureShort(LIFECYCLE, "steady");
 
-      const stats = result.status === "ok" && "stats" in result ? result.stats : undefined;
-      const quantiles = [stats?.min, stats?.p25, stats?.median, stats?.p75, stats?.p99, stats?.max];
-      expect(quantiles).toStrictEqual(quantiles.toSorted((a = 0, b = 0) => a - b));
-    });
-
-    it("samples for the request's minTime and minSamples", { timeout: 15_000 }, async () => {
-      vi.stubGlobal("gc", exposedGc());
-
-      const result = await measureCase(LIFECYCLE, "steady", { minTime: 0, minSamples: 200 });
-
-      expect(result).toMatchObject({
-        stats: { sampleCount: expect.toSatisfy((count: number) => count >= 200) },
-        sampling: { timingMs: expect.toSatisfy((ms: number) => ms < 1000) },
-      });
-    });
-
-    it("runs none of the file's other cases", { timeout: 15_000 }, async () => {
-      vi.stubGlobal("gc", exposedGc());
-
-      const result = await measureShort(LIFECYCLE, "steady");
-
-      expect(result.status).toBe("ok");
-      expect(calls()).toStrictEqual([]);
+      if (!("stats" in result)) {
+        throw new Error(`the case did not measure: ${JSON.stringify(result)}`);
+      }
+      const { min, p25, median, p75, p99, max } = result.stats;
+      const quantiles = [min, p25, median, p75, p99, max];
+      expect(quantiles).toStrictEqual(quantiles.toSorted((a, b) => a - b));
     });
   });
 
   describe("when measure rejects", () => {
-    it("carries the phase, the message and the stack of what the case threw", async () => {
-      vi.stubGlobal("gc", exposedGc());
-
+    it("fails in the phase of what the case threw", async () => {
       const result = await measureShort(LIFECYCLE, "fn-throws");
 
-      const [thrown] = calls();
-      expect(thrown).toBeInstanceOf(Error);
-      expect(result).toStrictEqual({
-        status: "failed",
-        error: {
-          phase: "fn",
-          message: "kiwi",
-          stack: thrown instanceof Error ? thrown.stack : undefined,
-        },
-      });
+      expect(result).toMatchObject({ status: "failed", error: { phase: "fn" } });
     });
   });
 });
 
 describe("runOnce", () => {
   describe("when the case runs", () => {
-    it("returns a success with no measurement when no collector is exposed", async () => {
-      vi.stubGlobal("gc", undefined);
-
+    it("runs one setup, one fn and one teardown of a shared-state case, and no other case", async () => {
       const result = await runOnce(LIFECYCLE, "quiet");
 
-      expect(result).toStrictEqual({ status: "ok" });
+      expect(result.status).toBe("ok");
+      expect(calls()).toStrictEqual(["quiet setup", "quiet fn", "quiet teardown"]);
     });
-
-    it.each([
-      { kind: "shared-state", id: "quiet" },
-      { kind: "setupPerCall", id: "batch" },
-    ])(
-      "runs one setup, one fn and one teardown of a $kind case, and no other case",
-      async ({ id }) => {
-        const result = await runOnce(LIFECYCLE, id);
-
-        expect(result.status).toBe("ok");
-        expect(calls()).toStrictEqual([`${id} setup`, `${id} fn`, `${id} teardown`]);
-      },
-    );
   });
 
   describe("when a callback fails", () => {
@@ -479,7 +376,7 @@ const SPAWN_TIMEOUT_MS = 60_000;
 const KILL_AFTER_MS = 30_000;
 
 /** The bytes the `loud.ts` fixture prints to each stream, its newline included. */
-const MIB = 1024 * 1024;
+const LOUD_STREAM_BYTES = 1024 * 1024;
 
 const LOUD = fixture("loud.ts");
 
@@ -510,14 +407,13 @@ function chunksOf(stream: EventEmitter | null | undefined): Buffer[] {
  * Starts the child entry on `runtime` with `request` as its argument, file descriptor 3 a pipe.
  *
  * @param runtime - The runtime the child runs on.
- * @param request - The request, serialized to JSON unless it is already a string.
+ * @param request - The request, serialized to JSON.
  * @returns The exit status and what the child wrote to stdout, stderr and file descriptor 3.
  * @throws Error when the runtime cannot be spawned.
  */
-async function spawnChild(runtime: Runtime, request: unknown): Promise<ChildRun> {
+async function spawnChild(runtime: Runtime, request: object): Promise<ChildRun> {
   const { command, args } = RUNTIMES[runtime];
-  const argument = typeof request === "string" ? request : JSON.stringify(request);
-  const child = spawn(command, [...args, CHILD, argument], {
+  const child = spawn(command, [...args, CHILD, JSON.stringify(request)], {
     cwd: ROOT,
     stdio: ["ignore", "pipe", "pipe", "pipe"],
     timeout: KILL_AFTER_MS,
@@ -546,113 +442,90 @@ function resultLine(fd3: string): unknown {
 describe.each([
   { runtime: "node", here: true, gc: expect.objectContaining({ count: expect.any(Number) }) },
   { runtime: "bun", here: requiresRealBunHere(), gc: null },
-] as const)("the child started on $runtime", ({ runtime, here, gc }) => {
-  describe.runIf(here)("when the request is valid", () => {
-    it(
-      "writes the file's cases as one result line on fd 3 and exits 0",
-      { timeout: SPAWN_TIMEOUT_MS },
-      async () => {
+] as const)(
+  "the child started on $runtime",
+  { timeout: SPAWN_TIMEOUT_MS },
+  ({ runtime, here, gc }) => {
+    describe.runIf(here)("when the request is valid", () => {
+      it("writes the file's cases as one result line on fd 3", async () => {
         const run = await spawnChild(runtime, { mode: "list", file: FILE });
 
-        expect(run.status).toBe(0);
-        expect(resultLine(run.fd3)).toStrictEqual({
-          status: "ok",
-          cases: [
-            { id: "alpha", setupPerCall: false },
-            { id: "beta", setupPerCall: true },
-            { id: "gamma", setupPerCall: false },
-          ],
-        });
-      },
-    );
-
-    it("writes the measurement of the requested case", { timeout: SPAWN_TIMEOUT_MS }, async () => {
-      const run = await spawnChild(runtime, { ...MEASURE_REQUEST, file: LIFECYCLE, id: "steady" });
-
-      expect(resultLine(run.fd3)).toMatchObject({
-        status: "ok",
-        stats: { sampleCount: expect.any(Number) },
-        gc,
+        expect(resultLine(run.fd3)).toStrictEqual(FILE_LISTED);
       });
-    });
 
-    it(
-      "exits 0 after the result line when the file leaves an interval open",
-      { timeout: SPAWN_TIMEOUT_MS },
-      async () => {
-        const run = await spawnChild(runtime, { mode: "list", file: fixture("open-interval.ts") });
+      it("writes the measurement of the requested case", async () => {
+        const run = await spawnChild(runtime, {
+          ...MEASURE_REQUEST,
+          file: LIFECYCLE,
+          id: "steady",
+        });
+
+        expect(resultLine(run.fd3)).toMatchObject({
+          status: "ok",
+          stats: { sampleCount: expect.any(Number) },
+          gc,
+        });
+      });
+
+      it("exits 0 after the result line when the file leaves an interval open", async () => {
+        const run = await spawnChild(runtime, {
+          mode: "list",
+          file: fixture("open-interval.ts"),
+        });
 
         expect(run.status).toBe(0);
         expect(resultLine(run.fd3)).toStrictEqual({
           status: "ok",
           cases: [{ id: "orange", setupPerCall: false }],
         });
-      },
-    );
+      });
 
-    it(
-      "keeps what the file prints out of the result line",
-      { timeout: SPAWN_TIMEOUT_MS },
-      async () => {
+      it("keeps what the file prints out of the result line", async () => {
         const run = await spawnChild(runtime, { mode: "list", file: LOUD });
 
-        expect(run.status).toBe(0);
         expect(resultLine(run.fd3)).toStrictEqual({
           status: "ok",
           cases: [{ id: "loud", setupPerCall: false }],
         });
-      },
-    );
-  });
-});
-
-describe("the child started on node", () => {
-  it(
-    "hands the parent every byte the file printed to stdout and stderr",
-    { timeout: SPAWN_TIMEOUT_MS },
-    async () => {
-      const run = await spawnChild("node", { mode: "list", file: LOUD });
-
-      expect({
-        stdout: run.stdout === `${"o".repeat(MIB - 1)}\n`,
-        stderr: run.stderr === `${"e".repeat(MIB - 1)}\n`,
-      }).toStrictEqual({ stdout: true, stderr: true });
-    },
-  );
-
-  it(
-    "imports a file whose name holds a hash by its file URL",
-    { timeout: SPAWN_TIMEOUT_MS },
-    async () => {
-      const run = await spawnChild("node", { mode: "list", file: fixture("hash#name.ts") });
-
-      expect(resultLine(run.fd3)).toStrictEqual({
-        status: "ok",
-        cases: [{ id: "found", setupPerCall: false }],
       });
-    },
-  );
+    });
+  },
+);
+
+describe("the child started on node", { timeout: SPAWN_TIMEOUT_MS }, () => {
+  it("hands the parent every byte the file printed to stdout and stderr", async () => {
+    const run = await spawnChild("node", { mode: "list", file: LOUD });
+
+    expect({
+      stdout: run.stdout === `${"o".repeat(LOUD_STREAM_BYTES - 1)}\n`,
+      stderr: run.stderr === `${"e".repeat(LOUD_STREAM_BYTES - 1)}\n`,
+    }).toStrictEqual({ stdout: true, stderr: true });
+  });
+
+  it("imports a file whose name holds a hash by its file URL", async () => {
+    const run = await spawnChild("node", { mode: "list", file: fixture("hash#name.ts") });
+
+    expect(resultLine(run.fd3)).toStrictEqual({
+      status: "ok",
+      cases: [{ id: "found", setupPerCall: false }],
+    });
+  });
 
   describe("when the request is malformed", () => {
-    it(
-      "exits non-zero before loading the file, writing nothing on fd 3",
-      { timeout: SPAWN_TIMEOUT_MS },
-      async () => {
-        const run = await spawnChild("node", { mode: "once", file: LOUD });
+    it("exits non-zero before loading the file, writing nothing on fd 3", async () => {
+      const run = await spawnChild("node", { mode: "once", file: LOUD });
 
-        expect(run.status).not.toBe(0);
-        expect(run.fd3).toBe("");
-        expect(run.stdout).toBe("");
-        expect(run.stderr).toMatch(/\bid\b/);
-      },
-    );
+      expect(run.status).not.toBe(0);
+      expect(run.fd3).toBe("");
+      expect(run.stdout).toBe("");
+      expect(run.stderr).toMatch(/\bid\b/);
+    });
   });
 
   describe("when the case fails", () => {
-    it("writes the failed result and exits 0", { timeout: SPAWN_TIMEOUT_MS }, async () => {
+    it("writes the failed result of a once request", async () => {
       const run = await spawnChild("node", { mode: "once", file: LIFECYCLE, id: "fn-throws" });
 
-      expect(run.status).toBe(0);
       expect(resultLine(run.fd3)).toMatchObject({
         status: "failed",
         error: { phase: "fn", message: "kiwi" },

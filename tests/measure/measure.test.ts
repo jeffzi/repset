@@ -903,7 +903,8 @@ console.log(JSON.stringify({
   console.log("REPORT " + JSON.stringify({ fn: received.includes(fn) }));
 `);
 
-      expect({ status: bun.status, stderr: bun.stderr }).toMatchObject({ status: 0 });
+      expect(bun.stderr).toMatch(/^ 0 fail\r?$/m);
+      expect(bun.status).toBe(0);
       expect(bun.report).toStrictEqual({ fn: true });
     },
     BUN_TIMEOUT_MS,
@@ -918,7 +919,8 @@ console.log(JSON.stringify({
   console.log("REPORT " + JSON.stringify({ bunJsc: received.length, injected: injected.length }));
 `);
 
-      expect({ status: bun.status, stderr: bun.stderr }).toMatchObject({ status: 0 });
+      expect(bun.stderr).toMatch(/^ 0 fail\r?$/m);
+      expect(bun.status).toBe(0);
       expect(bun.report).toStrictEqual({ bunJsc: 0, injected: 2 });
     },
     BUN_TIMEOUT_MS,
@@ -939,7 +941,8 @@ console.log(JSON.stringify({
         "() => { throw loadFailure; }",
       );
 
-      expect({ status: bun.status, stderr: bun.stderr }).toMatchObject({ status: 0 });
+      expect(bun.stderr).toMatch(/^ 0 fail\r?$/m);
+      expect(bun.status).toBe(0);
       expect(bun.report).toStrictEqual({ measureError: true, phase: "child", cause: true });
     },
     BUN_TIMEOUT_MS,

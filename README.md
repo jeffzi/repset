@@ -113,7 +113,7 @@ Common options:
 
 Node runs TypeScript files by stripping their types, but it does not map an import of `./foo.js` to
 `foo.ts`. If your benchmarks import TypeScript files that way, give Node a loader such as
-[tsx](https://tsx.is): `npx repset --node-import tsx`. Bun needs none.
+[tsx](https://github.com/privatenumber/tsx): `npx repset --node-import tsx`. Bun needs none.
 
 ## Learn more
 

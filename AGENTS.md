@@ -10,8 +10,8 @@ this file. It is gitignored for personal, machine-specific preferences and never
 `Taskfile.yml` is the only entry point (`task --list`); the git hooks only call tasks.
 
 - `task install` — install the pinned tools, the npm dependencies and the git hooks
-- `task test` — run the tests with coverage; coverage thresholds fail the run. Arguments after `--`
-  go to Vitest, which then runs without coverage.
+- `task test` — build `dist/`, then run the tests with coverage; coverage thresholds fail the run.
+  Arguments after `--` go to Vitest, which then runs without coverage.
 - `task check` — every check; run before committing. Fixing steps rewrite files in place. The types
   step builds `dist/` before it type-checks. The quality step refuses a coverage report older than
   `src/`, `tests/` or `vitest.config.ts`: run `task test` first. `ONLY=<names>` runs some steps;

@@ -73,8 +73,15 @@ function alignRows(rows: readonly (readonly string[])[], idWidth: number): strin
   );
 }
 
-/** `message` after `lead`, each further line of it beneath its first. */
-function leadLines(lead: string, message: string): string[] {
+/**
+ * A message's lines after a lead, aligned so a multi-line message reads as one block.
+ *
+ * @param lead - What opens the first line, before the message.
+ * @param message - The message, which may span lines.
+ * @returns The lead and the message's first line, then each further line of the message beneath
+ *   its first character.
+ */
+export function leadLines(lead: string, message: string): string[] {
   const [first = "", ...rest] = message.split("\n");
   const continuation = " ".repeat(lead.length);
   return [`${lead}${first}`, ...rest.map((line) => `${continuation}${line}`)];

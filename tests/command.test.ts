@@ -698,6 +698,26 @@ describe("main", () => {
       });
     });
 
+    it("prints each further line of a failure's message beneath the message's first character", async () => {
+      const dir = workspace();
+      const failsOverLines = starter(() => failedOutcome("fn", "kiwi\nmango"));
+
+      const { code, stdout } = await command(
+        dir,
+        ["--once", "--runtime", "node", "parse.bench.ts"],
+        {
+          startChild: failsOverLines,
+        },
+      );
+
+      const lines = linesOf(stdout);
+      const column = Math.max(0, lines[0]?.indexOf("kiwi") ?? 0);
+      expect({ code, lines }).toStrictEqual({
+        code: 1,
+        lines: [naming("node", "parse/fast", "fn", "kiwi"), `${" ".repeat(column)}mango`],
+      });
+    });
+
     it("exits 0 with an ok line per case when every case passes", async () => {
       const dir = workspace();
 
@@ -757,6 +777,25 @@ describe("main", () => {
       const ended = await command(dir, ["--list", "sort.bench.ts"], { signals, startChild: stops });
 
       expect(ended.code).toBe(130);
+    });
+
+    it.each([
+      { signal: "SIGINT", code: 130 },
+      { signal: "SIGTERM", code: 143 },
+    ])("exits $code, not 2, when a listing fails after $signal", async ({ signal, code }) => {
+      const dir = workspace();
+      const signals = new EventEmitter();
+      const failsListingAfterSignal: StartChild = async () => {
+        signals.emit(signal);
+        return failedOutcome("load", "kiwi");
+      };
+
+      const ended = await command(dir, ["sort.bench.ts"], {
+        signals,
+        startChild: failsListingAfterSignal,
+      });
+
+      expect(ended.code).toBe(code);
     });
   });
 });

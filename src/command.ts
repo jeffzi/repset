@@ -28,7 +28,7 @@ import {
   selectCases,
   type SelectInput,
 } from "./run.js";
-import { formatTable, metricLine, teardownLines } from "./table.js";
+import { formatTable, leadLines, metricLine, teardownLines } from "./table.js";
 import { type StrictOmit, thrownMessage } from "./utils.js";
 
 /** Where the command prints: `process.stdout` and `process.stderr` fit. */
@@ -406,8 +406,9 @@ async function list(command: Command, context: Context): Promise<number> {
 const ONCE_INDENT = "  ";
 
 /**
- * Runs every selected case once per runtime, printing a line per case and runtime, and a labelled
- * line beneath a failed one whose cleanup teardown failed too.
+ * Runs every selected case once per runtime, printing a line per case and runtime with each further
+ * line of a failure's message beneath its first, and a labelled line beneath a failed one whose
+ * cleanup teardown failed too.
  *
  * @param command - What the command line asks for.
  * @param context - The streams, the working directory, the stop signal and the child functions.
@@ -425,7 +426,7 @@ async function once(command: Command, context: Context): Promise<number> {
     const { phase, message, teardownError } = result.error;
     const teardown = teardownError === null ? [] : teardownLines(teardownError, ONCE_INDENT);
     context.stdout.write(
-      [`failed ${ran}: phase ${phase}: ${message}`, ...teardown]
+      [...leadLines(`failed ${ran}: phase ${phase}: `, message), ...teardown]
         .map((line) => `${line}\n`)
         .join(""),
     );
@@ -456,7 +457,7 @@ function printError(stderr: Output, error: ConfigError): void {
  *   process's own by default.
  * @returns 0 when every selected case ran, 1 when one failed or the last report write failed, 2
  *   when the command line, the config or the selection is wrong, and 130 or 143 when `SIGINT` or
- *   `SIGTERM` interrupted it.
+ *   `SIGTERM` interrupted it, even when a wrong selection or config follows the interrupt.
  * @throws {Error} An error that is not a {@link ConfigError}, such as one reading the package's
  *   `package.json`.
  */
@@ -482,6 +483,10 @@ export async function main(args: readonly string[], io: CommandIo = {}): Promise
   });
   const signals = io.signals ?? process;
   for (const [signal, listener] of listeners) signals.on(signal, listener);
+  // An interrupted run exits 128 plus the signal's number, as a shell reports it, whatever the
+  // command would have exited with: a ConfigError the interrupt provoked included.
+  const exitCode = (code: number): number =>
+    received === undefined ? code : 128 + constants.signals[received];
   try {
     const command = parseCommand(args);
     const context: Context = {
@@ -493,13 +498,11 @@ export async function main(args: readonly string[], io: CommandIo = {}): Promise
       startChild: io.startChild ?? realStartChild,
     };
     const actions = { run: measure, list, once };
-    const code = await actions[command.mode](command, context);
-    // An interrupted run exits 128 plus the signal's number, as a shell reports it.
-    return received === undefined ? code : 128 + constants.signals[received];
+    return exitCode(await actions[command.mode](command, context));
   } catch (error) {
     if (!(error instanceof ConfigError)) throw error;
     printError(stderr, error);
-    return 2;
+    return exitCode(2);
   } finally {
     for (const [signal, listener] of listeners) signals.off(signal, listener);
   }

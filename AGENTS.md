@@ -21,7 +21,7 @@ this file. It is gitignored for personal, machine-specific preferences and never
 - `task build` — compile `src/` to `dist/`
 - `task check-package` — pack the package, install it in an empty app, import every entry and run
   the installed `repset --version` once, which loads the command's static imports. CI runs it.
-- `task overhead-check` — build, then compare repset's timings with a baseline loop. It exits 1 when
+- `task check-overhead` — build, then compare repset's timings with a baseline loop. It exits 1 when
   repset and the baseline differ significantly in the same direction in both rounds, or a calibrated
   reading falls below its timing floors. Run it before a release, alone on a quiet machine; never in
   CI, and `task check` does not run it.

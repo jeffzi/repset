@@ -11,9 +11,9 @@ import {
   repsetReading,
   runCheck,
   takeRound,
-} from "../scripts/overhead-check.js";
-import type { Scenario, Readers, RepsetReading } from "../scripts/overhead-check.js";
-import { summarizeRound } from "../scripts/overhead-check/verdict.js";
+} from "../scripts/check-overhead.js";
+import type { Scenario, Readers, RepsetReading } from "../scripts/check-overhead.js";
+import { summarizeRound } from "../scripts/check-overhead/verdict.js";
 import type { SamplingReport } from "../src/child.js";
 import type { FailedResult, MeasuredResult, Report, Result } from "../src/report.js";
 import {
@@ -21,7 +21,7 @@ import {
   constantRound,
   PAIRS,
   SAME_SIGN_P_VALUE,
-} from "./overhead-check/rounds.js";
+} from "./check-overhead/rounds.js";
 import { temporaryDir } from "./temporary-dir.js";
 
 const CALIBRATED: Scenario = { runtime: "node", countMode: "calibrated", body: "each" };
@@ -79,7 +79,7 @@ const RESULT_BASE = {
   name: "overhead/each",
   contender: null,
   params: {},
-  file: "scripts/overhead-check/overhead.bench.ts",
+  file: "scripts/check-overhead/overhead.bench.ts",
   runtime: { name: "node", version: "26.13.1" },
   setupPerCall: false,
 } as const;
@@ -144,7 +144,7 @@ function createReport(results: readonly Result[]): Report {
     interrupted: false,
     options: {
       runtimes: ["node"],
-      files: ["scripts/overhead-check/overhead.bench.ts"],
+      files: ["scripts/check-overhead/overhead.bench.ts"],
       filter: "overhead/each",
       minTime: 1000,
       minSamples: 64,
@@ -376,7 +376,7 @@ describe("repsetReading", () => {
 
 describe("baselineCommand", () => {
   const baselineChild = fileURLToPath(
-    new URL("../scripts/overhead-check/baseline-child.ts", import.meta.url),
+    new URL("../scripts/check-overhead/baseline-child.ts", import.meta.url),
   );
 
   it.each([

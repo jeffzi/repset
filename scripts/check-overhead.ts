@@ -1,9 +1,9 @@
 /**
  * The overhead check: for each of eight scenarios it pairs one run of the built repset command with
- * one run of the baseline loop in `overhead-check/baseline-child.ts`, back to back, and judges the
- * pairs with `overhead-check/verdict.ts`.
+ * one run of the baseline loop in `check-overhead/baseline-child.ts`, back to back, and judges the
+ * pairs with `check-overhead/verdict.ts`.
  *
- *   node --import tsx scripts/overhead-check.ts
+ *   node --import tsx scripts/check-overhead.ts
  *
  * It reads `dist/`, so build first. Nothing in it runs two children at once: the check is a
  * measurement, and a second process would move both readings.
@@ -18,14 +18,14 @@ import type { SamplingReport } from "../src/child.js";
 import type { Runtime } from "../src/measure/runtime.js";
 import type { Report } from "../src/report.js";
 import { thrownMessage } from "../src/utils.js";
-import { BODY_NAMES, type BodyName } from "./overhead-check/bodies.js";
+import { BODY_NAMES, type BodyName } from "./check-overhead/bodies.js";
 import {
   exitStatus,
   judgeScenario,
   type Pairs,
   type RoundSummary,
   type ScenarioVerdict,
-} from "./overhead-check/verdict.js";
+} from "./check-overhead/verdict.js";
 
 /** One scenario: a runtime, how its count is chosen, and the body both sides time. */
 export interface Scenario {
@@ -65,8 +65,8 @@ export interface Round {
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const CLI = join(ROOT, "dist", "cli.js");
-const BENCH_FILE = "scripts/overhead-check/overhead.bench.ts";
-const BASELINE_CHILD = join(ROOT, "scripts", "overhead-check", "baseline-child.ts");
+const BENCH_FILE = "scripts/check-overhead/overhead.bench.ts";
+const BASELINE_CHILD = join(ROOT, "scripts", "check-overhead", "baseline-child.ts");
 
 const PAIRS = 12;
 
@@ -273,7 +273,7 @@ function throwSpawnError(scenario: Scenario, error: Error | undefined): void {
 }
 
 function readRepset(scenario: Scenario): RepsetReading {
-  const dir = mkdtempSync(join(tmpdir(), "overhead-check-"));
+  const dir = mkdtempSync(join(tmpdir(), "check-overhead-"));
   try {
     const outPath = join(dir, "report.json");
     const command = repsetCommand(scenario, outPath, process.env);

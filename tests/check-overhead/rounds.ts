@@ -1,4 +1,4 @@
-import type { Pairs } from "../../scripts/overhead-check/verdict.js";
+import type { Pairs } from "../../scripts/check-overhead/verdict.js";
 
 /** How many pairs a round takes. */
 export const PAIRS = 12;

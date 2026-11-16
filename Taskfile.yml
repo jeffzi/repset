@@ -55,12 +55,12 @@ tasks:
         task: "_{{.ITEM}}"
       - "{{.MISE}} npx fallow fix --yes --no-create-config"
 
-  overhead-check:
+  check-overhead:
     desc: Build, then compare repset's timings with a baseline loop; run alone, before a release
     deps: [_deps]
     cmds:
       - task: build
-      - "{{.MISE}} node --import tsx scripts/overhead-check.ts"
+      - "{{.MISE}} node --import tsx scripts/check-overhead.ts"
 
   check-package:
     desc:

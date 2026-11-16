@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { exitStatus, judgeScenario, summarizeRound } from "../../scripts/overhead-check/verdict.js";
-import type { Pairs, RoundSummary, ScenarioVerdict } from "../../scripts/overhead-check/verdict.js";
+import { exitStatus, judgeScenario, summarizeRound } from "../../scripts/check-overhead/verdict.js";
+import type { Pairs, RoundSummary, ScenarioVerdict } from "../../scripts/check-overhead/verdict.js";
 import {
   constantRound,
   ONE_CALL_RESOLUTION,

@@ -54,8 +54,7 @@ jobs:
   # OIDC trusted publishing: id-token:write is scoped to this job only, and the
   # pre-built tarball is published so no project build scripts run while the
   # token is available. Configure the npm trusted publisher for this repo +
-  # workflow on npmjs.com first; publishing stays inert while package.json has
-  # "private": true.
+  # workflow on npmjs.com before the first release is published.
   publish:
     name: Publish to npm
     needs: build

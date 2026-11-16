@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 
 import type { ChildError, ChildRequest } from "./child.js";
 import {
+  childFailure,
   findRuntime as realFindRuntime,
   type FoundRuntime,
   type Outcome,
@@ -26,7 +27,7 @@ import {
   type ResolvedOptions,
 } from "./options.js";
 import type { FailedProcess, Machine, Report, ReportOptions, Result } from "./report.js";
-import { property, slashed } from "./utils.js";
+import { property } from "./utils.js";
 
 // ---------------------------------------------------------------------------
 // Case selection
@@ -88,11 +89,6 @@ export class ListingError extends ConfigError {
   }
 }
 
-/** Orders two keyed paths by key, by code unit. */
-function byKey(a: { readonly key: string }, b: { readonly key: string }): number {
-  return a.key < b.key ? -1 : Number(a.key > b.key);
-}
-
 /**
  * Finds the files a glob pattern matches, never descending into `node_modules`.
  *
@@ -107,10 +103,12 @@ function globFiles(pattern: string, base: string): string[] {
     exclude: (path) => basename(path) === "node_modules",
   })
     .map((match) => resolve(base, match))
-    .filter((path) => isFile(path))
-    .map((path) => ({ path, key: slashed(path, sep) }));
-  matches.sort(byKey);
-  return matches.map((match) => match.path);
+    .filter((path) => isFile(path));
+  // By the slash-separated path, by code unit, so the order is the same on every OS.
+  return matches.toSorted((a, b) => {
+    const [left, right] = [a.replaceAll(sep, "/"), b.replaceAll(sep, "/")];
+    return left < right ? -1 : Number(left > right);
+  });
 }
 
 /**
@@ -206,18 +204,12 @@ async function listFiles(
   const cases: SelectedCase[] = [];
   for (const path of files) {
     if (signal?.aborted === true) return undefined;
-    const file = slashed(relative(cwd, path), sep);
+    const file = relative(cwd, path).replaceAll(sep, "/");
     const outcome = await startChild(runtime, { mode: "list", file: path }, childOptions);
     if (outcome.status === "stopped") return undefined;
     if (outcome.status === "failed") throw new ListingError(file, outcome.error, outcome.output);
     if (!("cases" in outcome.result)) {
-      const error = {
-        phase: "child",
-        message: "the child gave no listing",
-        stack: null,
-        teardownError: null,
-      } as const;
-      throw new ListingError(file, error, outcome.output);
+      throw new ListingError(file, childFailure("the child gave no listing"), outcome.output);
     }
     for (const listed of outcome.result.cases) cases.push({ ...listed, path, file });
   }
@@ -306,12 +298,7 @@ export interface OnceRun {
 type Finished = Exclude<Outcome, { status: "stopped" }>;
 
 /** The failure of a measuring child that answered with something other than a measurement. */
-const NO_MEASUREMENT: ChildError = {
-  phase: "child",
-  message: "the child gave no measurement",
-  stack: null,
-  teardownError: null,
-};
+const NO_MEASUREMENT = childFailure("the child gave no measurement");
 
 /** The processes of a case whose child failed: one, holding `null` for what it did not reach. */
 const FAILED_PROCESSES: readonly FailedProcess[] = [

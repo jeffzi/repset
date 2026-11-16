@@ -5,7 +5,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { accessSync, constants, statSync } from "node:fs";
 import { delimiter, dirname, extname, join } from "node:path";
-import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 
 import type {
@@ -27,12 +26,10 @@ import { ConfigError } from "./options.js";
 import { RESULT_FD } from "./result-fd.js";
 import { isRecord, thrownMessage } from "./utils.js";
 
-/** The child entry beside `moduleFile`, with its extension: `child.js` built, `child.ts` from source. */
-function childEntryBeside(moduleFile: string): string {
-  return join(dirname(moduleFile), `child${extname(moduleFile)}`);
-}
+const THIS_FILE = fileURLToPath(import.meta.url);
 
-const CHILD_ENTRY = childEntryBeside(fileURLToPath(import.meta.url));
+/** The child entry beside this module, with its extension: `child.js` built, `child.ts` from source. */
+const CHILD_ENTRY = join(dirname(THIS_FILE), `child${extname(THIS_FILE)}`);
 
 /** How much of the child's stdout and stderr an outcome keeps, from the end. */
 const OUTPUT_TAIL_BYTES = 16 * 1024;
@@ -166,24 +163,13 @@ const GC_NUMBERS = Object.keys(GC_NUMBER_KEYS);
  */
 export async function findRuntime(runtime: Runtime): Promise<FoundRuntime> {
   if (runtime === runningRuntime()) {
-    return { runtime, executable: process.execPath, version: ownVersion(runtime) };
+    const version = process.versions[runtime];
+    if (version === undefined) throw new Error(`process.versions holds no ${runtime} version`);
+    return { runtime, executable: process.execPath, version };
   }
   const executable = onPath(runtime);
   if (executable === undefined) throw new ConfigError(`no ${runtime} executable on PATH`);
   return { runtime, executable, version: await probeVersion(executable) };
-}
-
-/**
- * Reads the version of the runtime this process runs on.
- *
- * @param runtime - The runtime this process runs on.
- * @returns Its version from `process.versions`.
- * @throws Error when `process.versions` holds none for it.
- */
-function ownVersion(runtime: Runtime): string {
-  const version = process.versions[runtime];
-  if (version === undefined) throw new Error(`process.versions holds no ${runtime} version`);
-  return version;
 }
 
 /** The first executable file named `name` in a `PATH` directory, or `undefined` when none is. */
@@ -223,10 +209,9 @@ async function probeVersion(executable: string): Promise<string> {
     stdio: ["ignore", "pipe", "ignore"],
     windowsHide: true,
   });
-  const decoder = new StringDecoder("utf8");
   let printed = "";
-  probe.stdout.on("data", (chunk: Buffer) => {
-    printed += decoder.write(chunk);
+  probe.stdout.setEncoding("utf8").on("data", (text: string) => {
+    printed += text;
   });
   const [code, signal] = await new Promise<[number | null, string | null]>((resolve, reject) => {
     probe.once("error", (error) => {
@@ -242,7 +227,7 @@ async function probeVersion(executable: string): Promise<string> {
   if (code !== 0) {
     throw new ConfigError(`${executable} --version exited with status ${code ?? "unknown"}`);
   }
-  const version = (printed + decoder.end()).trim().replace(/^v/, "");
+  const version = printed.trim().replace(/^v/, "");
   if (version === "") throw new ConfigError(`${executable} --version printed nothing`);
   return version;
 }
@@ -251,23 +236,10 @@ async function probeVersion(executable: string): Promise<string> {
 // Child process and output capture
 // ---------------------------------------------------------------------------
 
-/** Keeps the end of what a child prints, each stream decoded on its own so no character splits. */
+/** Keeps the end of what a child prints, as the text each stream decodes to. */
 class OutputTail {
   readonly #chunks: string[] = [];
   #bytes = 0;
-
-  /** A sink for one stream's chunks, decoded as UTF-8. */
-  stream(): { write: (chunk: Buffer) => void; end: () => void } {
-    const decoder = new StringDecoder("utf8");
-    return {
-      write: (chunk) => {
-        this.#add(decoder.write(chunk));
-      },
-      end: () => {
-        this.#add(decoder.end());
-      },
-    };
-  }
 
   /** The last {@link OUTPUT_TAIL_BYTES} bytes kept, cut forward to a character boundary. */
   text(): string {
@@ -278,7 +250,8 @@ class OutputTail {
     return kept.toString("utf8", start);
   }
 
-  #add(text: string): void {
+  /** Keeps `text`, dropping the oldest chunks that leave the tail. */
+  add(text: string): void {
     if (text === "") return;
     this.#chunks.push(text);
     this.#bytes += Buffer.byteLength(text);
@@ -390,10 +363,11 @@ function spawnChild(
     { stdio: ["ignore", "pipe", "pipe", "pipe"], windowsHide: true },
   );
   const tail = new OutputTail();
+  // Each stream decodes on its own, so a character split across chunks stays whole.
   for (const stream of [child.stdout, child.stderr]) {
-    const sink = tail.stream();
-    stream?.on("data", sink.write);
-    stream?.on("end", sink.end);
+    stream?.setEncoding("utf8").on("data", (text: string) => {
+      tail.add(text);
+    });
   }
   const fd3: Buffer[] = [];
   child.stdio[RESULT_FD]?.on("data", (chunk: Buffer) => {
@@ -428,12 +402,13 @@ function outcomeOf(
 }
 
 /** A failure in phase `child`, which has no stack. */
+export function childFailure(message: string): ChildError {
+  return { phase: "child", message, stack: null, teardownError: null };
+}
+
+/** An outcome that failed in phase `child`, with the child's output tail. */
 function noResult(message: string, output: string): ChildFailed {
-  return {
-    status: "failed",
-    error: { phase: "child", message, stack: null, teardownError: null },
-    output,
-  };
+  return { status: "failed", error: childFailure(message), output };
 }
 
 /** The timeout, the signal or the exit status (`unknown` when null) a failure message opens with. */

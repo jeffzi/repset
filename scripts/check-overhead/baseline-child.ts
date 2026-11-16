@@ -3,7 +3,7 @@
 // reported, and prints `{"median": <ns per call>}` on stdout.
 //
 //   <node --import tsx | bun> --expose-gc baseline-child.ts <body> <calls per sample> <samples>
-import { quantile, runtimeNoInline } from "../../src/measure/measure.js";
+import { runtimeNoInline, summarize } from "../../src/measure/measure.js";
 import { WARMUP_MIN_MS, WARMUP_MIN_SAMPLES } from "../../src/measure/sampler.js";
 import {
   BODIES,
@@ -18,8 +18,6 @@ declare global {
   /** Holds the moved positions after timing, so no engine treats the body's work as dead. */
   var benchSink: number | undefined;
 }
-
-const NS_PER_MS = 1e6;
 
 const [name = "", callsArg = "", samplesArg = ""] = process.argv.slice(2);
 const calls = Number(callsArg);
@@ -51,7 +49,7 @@ function isPositiveInteger(value: number): boolean {
  *
  * @param state - The points the body moves.
  * @param gc - The engine's exposed collector.
- * @returns Each timed batch's per-call time in nanoseconds, ascending.
+ * @returns Each timed batch's span in milliseconds, in the order the batches ran.
  */
 // fallow-ignore-next-line complexity -- the baseline's loops stay inline; see the doc comment
 function run(state: State, gc: NodeJS.GCFunction): Float64Array {
@@ -62,17 +60,17 @@ function run(state: State, gc: NodeJS.GCFunction): Float64Array {
     warmed += 1;
   }
   gc();
-  const perCall = new Float64Array(samples);
+  const spans = new Float64Array(samples);
   for (let sample = 0; sample < samples; sample++) {
     const start = performance.now();
     for (let call = 0; call < calls; call++) body(state);
-    perCall[sample] = ((performance.now() - start) * NS_PER_MS) / calls;
+    spans[sample] = performance.now() - start;
   }
-  return perCall.toSorted();
+  return spans;
 }
 
 const state = buildState();
-const perCall = run(state, collect);
+const spans = run(state, collect);
 globalThis.benchSink = positionSum(state);
-const median = quantile(perCall, 0.5);
+const { median } = summarize(spans, samples, calls);
 process.stdout.write(`${JSON.stringify({ median })}\n`);

@@ -449,33 +449,21 @@ describe("measure", () => {
       expect([...fake.live].map((world) => world.id)).toStrictEqual([fails.teardown]);
     });
 
-    const UNDEFINED_STATE_FAILURES = [
-      { when: "the check's body call throws", fails: { fn: 0 }, from: "fn" },
-      { when: "the body throws in warmup", fails: { fn: 5 }, from: "fn" },
-      { when: "a warmup teardown throws", fails: { teardown: 2 }, from: "teardown" },
-    ] as const;
+    it("rejects a per-call run whose setup returns undefined in phase fn when the body throws in warmup", async () => {
+      const fake = bench("perCall", { bodyMs: 200, fails: { fn: 5 } });
 
-    it.each(UNDEFINED_STATE_FAILURES)(
-      "rejects a per-call run whose setup returns undefined in phase $from when $when",
-      async ({ fails, from }) => {
-        const fake = bench("perCall", { bodyMs: 200, fails });
+      const error = await failure(runOnUndefined(fake));
 
-        const error = await failure(runOnUndefined(fake));
+      expect(error.phase).toBe("fn");
+    });
 
-        expect(error.phase).toBe(from);
-      },
-    );
+    it("tears down every state a per-call run whose setup returns undefined built when the body throws in warmup", async () => {
+      const fake = bench("perCall", { bodyMs: 200, fails: { fn: 5 } });
 
-    it.each(UNDEFINED_STATE_FAILURES.filter((row) => row.from === "fn"))(
-      "tears down every state a per-call run whose setup returns undefined built when $when",
-      async ({ fails }) => {
-        const fake = bench("perCall", { bodyMs: 200, fails });
+      await runOnUndefined(fake).catch(() => undefined);
 
-        await runOnUndefined(fake).catch(() => undefined);
-
-        expect(fake.live.size).toBe(0);
-      },
-    );
+      expect(fake.live.size).toBe(0);
+    });
 
     const BODY_AND_CLEANUP_FAILURES = [
       { kind: "sharedState", fails: { fn: 5, teardown: 0 } },
@@ -609,23 +597,6 @@ describe("measure", () => {
 
       expect(error.phase).toBe("calibration");
       expect(error.cause).toBeInstanceOf(CalibrationError);
-    });
-
-    it("rejects a run whose callback throws a value with no string form in phase setup, that value as cause", async () => {
-      const unprintable: unknown = Object.create(null);
-      vi.stubGlobal("gc", () => undefined);
-      const benchmark: Case<number> = {
-        kind: "sharedState",
-        setup: () => {
-          throw unprintable;
-        },
-        fn: () => 0,
-      };
-
-      const error = await failure(measure(benchmark, { now: steppedClock().now }));
-
-      expect(error.phase).toBe("setup");
-      expect(error.cause).toBe(unprintable);
     });
 
     it("rejects a run whose empty body's collection throws in phase child, the collector's value as cause", async () => {

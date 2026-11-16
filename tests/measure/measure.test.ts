@@ -66,6 +66,7 @@ interface BenchOptions {
   readonly fails?: Failures;
   readonly returns?: () => unknown;
   readonly teardown?: boolean;
+  readonly teardownThrows?: unknown;
 }
 
 interface Bench {
@@ -77,7 +78,7 @@ interface Bench {
   readonly inlined: unknown[];
   readonly setupError: Error;
   readonly fnError: string;
-  readonly teardownError: { readonly name: string };
+  readonly teardownError: unknown;
 }
 
 /**
@@ -86,7 +87,8 @@ interface Bench {
  * Stubs `globalThis.gc` with a recorder.
  *
  * @param kind - The benchmark's lifecycle.
- * @param options - The body's cost per call, which calls throw, and what the body returns.
+ * @param options - The body's cost per call, which calls throw, what the body returns, and the
+ *   value the teardown throws.
  * @returns The benchmark, its scripted clock, and the logs the tests read.
  */
 function bench(kind: Kind, options: BenchOptions = {}): Bench {
@@ -100,7 +102,7 @@ function bench(kind: Kind, options: BenchOptions = {}): Bench {
   const inlined: unknown[] = [];
   const setupError = new Error("banana");
   const fnError = "apple";
-  const teardownError = { name: "cherry" };
+  const teardownError = "teardownThrows" in options ? options.teardownThrows : { name: "cherry" };
   const benchmark: Case<World> = {
     kind,
     setup: () => {
@@ -496,10 +498,12 @@ describe("measure", () => {
       },
     );
 
-    it.each([
+    const BODY_AND_CLEANUP_FAILURES = [
       { kind: "sharedState", fails: { fn: 5, teardown: 0 } },
       { kind: "perCall", fails: { fn: 5, teardown: 5 } },
-    ] as const)(
+    ] as const;
+
+    it.each(BODY_AND_CLEANUP_FAILURES)(
       "rejects a $kind run in phase fn with the body's value as cause when the cleanup's teardown throws too",
       async ({ kind, fails }) => {
         const fake = bench(kind, { bodyMs: 200, fails });
@@ -508,6 +512,61 @@ describe("measure", () => {
 
         expect(error.phase).toBe("fn");
         expect(error.cause).toBe(fake.fnError);
+      },
+    );
+
+    it.each(BODY_AND_CLEANUP_FAILURES)(
+      "keeps the cleanup's teardown failure on a $kind run's error in phase teardown, the teardown's value as cause, when the body throws first",
+      async ({ kind, fails }) => {
+        const fake = bench(kind, { bodyMs: 200, fails });
+
+        const error = await failure(run(fake));
+
+        expect(error.teardownError).toBeInstanceOf(MeasureError);
+        expect(error.teardownError?.phase).toBe("teardown");
+        expect(error.teardownError?.cause).toBe(fake.teardownError);
+      },
+    );
+
+    it("keeps a cleanup teardown that throws null on the body's error, null as cause", async () => {
+      const fake = bench("perCall", {
+        bodyMs: 200,
+        fails: { fn: 5, teardown: 5 },
+        teardownThrows: null,
+      });
+
+      const error = await failure(run(fake));
+
+      expect(error.teardownError).toBeInstanceOf(MeasureError);
+      expect(error.teardownError?.cause).toBeNull();
+    });
+
+    it("keeps the cleanup's teardown failure on a shared-state run whose collection throws, the collector's value as cause", async () => {
+      const fake = bench("sharedState", { bodyMs: 200, fails: { teardown: 0 } });
+      const collectorError = new Error("durian");
+      vi.stubGlobal("gc", () => {
+        throw collectorError;
+      });
+
+      const error = await failure(run(fake));
+
+      expect(error.phase).toBe("child");
+      expect(error.cause).toBe(collectorError);
+      expect(error.teardownError?.phase).toBe("teardown");
+      expect(error.teardownError?.cause).toBe(fake.teardownError);
+    });
+
+    it.each([
+      { when: "the body throws and the cleanup's teardown succeeds", fails: { fn: 5 } },
+      { when: "the one teardown throws", fails: { teardown: 0 } },
+    ] as const)(
+      "rejects a shared-state run with no teardown failure kept when $when",
+      async ({ fails }) => {
+        const fake = bench("sharedState", { bodyMs: 200, fails });
+
+        const error = await failure(run(fake));
+
+        expect(error.teardownError).toBeNull();
       },
     );
 
@@ -708,7 +767,6 @@ describe("measure", () => {
         timerResolutionNs: 125_000,
         callsPerSample: 2,
         callsPerSampleFixed: true,
-        collected: expect.any(Boolean),
         ratioToEmptyBody: 1600,
         gcDuringTiming: expect.any(Object),
         timingAttempts: 1,

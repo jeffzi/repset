@@ -11,9 +11,9 @@ import { isAbsolute } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { type RegisteredCase, registeredCases } from "./bench.js";
+import type { GcDuringTiming } from "./measure/collections.js";
 import {
   type Case,
-  type GcDuringTiming,
   measure,
   MeasureError,
   type Measurement,

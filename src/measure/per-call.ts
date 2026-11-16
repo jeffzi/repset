@@ -3,8 +3,8 @@
  * Each call builds a state, runs the body once on it between a pair of clock reads, then tears it
  * down; a sample's span is the sum of its calls' spans, so no setup or teardown lands inside one.
  * Spans are in milliseconds. The result is the `SamplerResult` every sampler returns, and `collect`,
- * `now`, `resolutionMs` and `callsPerSample` mean what they mean there, except that `collect` runs once:
- * this sampler takes a single timing attempt.
+ * `now`, `resolutionMs` and `callsPerSample` mean what they mean there, except that `collect` runs
+ * once: this sampler takes a single timing attempt.
  *
  * Every function from `samplePerCall` down to the body is plain synchronous code: no `try`,
  * `catch`, `finally`, `async` function, generator or Promise encloses the timed calls or the loops
@@ -12,8 +12,8 @@
  * handling and teardown on a throw belong to the caller, which finds the state in flight in
  * `inFlight`.
  *
- * The module imports only `../utils.js` and sibling `measure` modules and reads no Node builtin, so it loads in a
- * browser page.
+ * The module imports only `../utils.js` and sibling `measure` modules and reads no Node builtin, so
+ * it loads in a browser page.
  */
 
 import type { StrictOmit } from "../utils.js";
@@ -120,8 +120,9 @@ function sample<State>(perCall: PerCall<State>, count: number): number {
 }
 
 /**
- * Runs warmup samples until 1000 have run, or until both 3000 ms of wall time, every setup and
- * teardown included, and 16 samples have passed, calibrating the count unless one was fixed.
+ * Runs warmup samples until {@link WARMUP_MAX_SAMPLES} have run, or until both
+ * {@link PER_CALL_WARMUP_MIN_MS} ms of wall time, every setup and teardown included, and
+ * {@link WARMUP_MIN_SAMPLES} samples have passed, calibrating the count unless one was fixed.
  *
  * @param perCall - The clock, the lifecycle, and the holder of the state in flight.
  * @param resolutionMs - The timer resolution, in milliseconds.
@@ -200,8 +201,9 @@ function timeSamples<State>(
  *   timing attempt or times again), warmup's samples without the forced GC's call, and the
  *   timed run's wall time, every setup and teardown in it included.
  * @throws Whatever `setup`, `fn`, `teardown` or `collect` throws, leaving the state built and not
- *   torn down, if any, in `options.inFlight`; and CalibrationError when warmup's calibrated count would pass
- *   `ceil(200 × resolution / 0.1 ns)`, naming the count asked for and the cap, before any sample runs it.
+ *   torn down, if any, in `options.inFlight`; and CalibrationError when warmup's calibrated count
+ *   would pass `ceil(200 × resolution / 0.1 ns)`, naming the count asked for and the cap, before any
+ *   sample runs it.
  */
 export function samplePerCall<State>(options: PerCallOptions<State>): SamplerResult {
   const { setup, fn, collect, callsPerSample } = options;

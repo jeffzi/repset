@@ -336,7 +336,8 @@ interface SharedStateWarmup extends WarmupResult {
 }
 
 /**
- * Runs warmup samples until both 250 ms and 16 samples have passed, calibrating the count unless
+ * Runs warmup samples until both {@link WARMUP_MIN_MS} ms and
+ * {@link WARMUP_MIN_SAMPLES} samples have passed, calibrating the count unless
  * one was fixed.
  *
  * @param timed - The clock, the body, and its state.

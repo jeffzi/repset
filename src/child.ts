@@ -471,7 +471,7 @@ function encodeThrown(thrown: unknown): TeardownFailure {
  *   stack `null` unless the cause is an `Error` with a string stack, and the teardown error `null`
  *   unless a cleanup teardown threw.
  */
-export function failedResult(phase: ChildPhase, thrown: unknown): Failed {
+function failedResult(phase: ChildPhase, thrown: unknown): Failed {
   const isMeasureError = thrown instanceof MeasureError;
   const teardownError = isMeasureError ? thrown.teardownError : null;
   return {
@@ -526,15 +526,8 @@ export async function measureCase(
   id: string,
   sampling: Pick<MeasureRequest, "minTime" | "minSamples" | "callsPerSample">,
 ): Promise<Measured | Failed> {
-  const { minTime, minSamples, callsPerSample } = sampling;
   return withSelectedCase(file, id, async (selected) =>
-    measuredResult(
-      await measure(selected, {
-        minTime,
-        minSamples,
-        ...(callsPerSample === undefined ? {} : { callsPerSample }),
-      }),
-    ),
+    measuredResult(await measure(selected, sampling)),
   );
 }
 
@@ -647,6 +640,7 @@ function measuredResult(measurement: Measurement): Measured {
 // Process entry
 // ---------------------------------------------------------------------------
 
+// oxlint-disable-next-line typescript/consistent-return -- the switch covers every mode, which tsc and switch-exhaustiveness-check enforce
 async function respond(request: ChildRequest): Promise<ChildResult> {
   switch (request.mode) {
     case "list":
@@ -655,14 +649,7 @@ async function respond(request: ChildRequest): Promise<ChildResult> {
       return measureCase(request.file, request.id, request);
     case "once":
       return runOnce(request.file, request.id);
-    default:
-      return assertNever(request);
   }
-}
-
-/** Fails at compile time when a `switch` misses a variant, and at run time if one gets through. */
-function assertNever(value: never): never {
-  throw new Error(`unexpected request: ${JSON.stringify(value)}`);
 }
 
 /** Resolves once everything written to `stream` before the call has been handed off. */

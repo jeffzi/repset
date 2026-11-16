@@ -83,8 +83,6 @@ const OPTION_KEYS: Readonly<Record<OptionName, true>> = {
   nodeImport: true,
 };
 
-const OPTION_NAMES: ReadonlySet<string> = new Set(Object.keys(OPTION_KEYS));
-
 /** The largest delay a Node timer keeps; a larger one fires after 1 ms. */
 const MAX_TIMEOUT = 2_147_483_647;
 
@@ -150,7 +148,7 @@ async function loadConfig(file: string): Promise<Readonly<Record<string, unknown
     throw failedWith(`cannot read the config file ${file}`, error);
   }
   for (const [key, value] of entries) {
-    if (value !== undefined && !OPTION_NAMES.has(key)) {
+    if (value !== undefined && !Object.hasOwn(OPTION_KEYS, key)) {
       throw new ConfigError(`the config file ${file} sets ${key}, which is not an option`);
     }
   }

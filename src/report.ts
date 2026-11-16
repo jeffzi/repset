@@ -45,13 +45,9 @@ export interface ResultError {
 }
 
 /** One measuring process of a measured case, holding its statistics, sampling and checks. */
-export interface MeasuredProcess {
+export interface MeasuredProcess extends Pick<Measured, "stats" | "sampling" | "checks" | "gc"> {
   readonly round: number;
   readonly orderInRound: number;
-  readonly stats: Measured["stats"];
-  readonly sampling: Measured["sampling"];
-  readonly checks: Measured["checks"];
-  readonly gc: Measured["gc"];
   readonly rawSamples: null;
 }
 

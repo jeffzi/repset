@@ -73,8 +73,6 @@ function alignRows(rows: readonly (readonly string[])[], idWidth: number): strin
   );
 }
 
-const TEARDOWN_LABEL = "teardown also failed: ";
-
 /** `message` after `lead`, each further line of it beneath its first. */
 function leadLines(lead: string, message: string): string[] {
   const [first = "", ...rest] = message.split("\n");
@@ -90,7 +88,7 @@ function leadLines(lead: string, message: string): string[] {
  * @returns The label and the teardown's message, each further line of the message beneath its first.
  */
 export function teardownLines(teardownError: TeardownFailure, indent: string): string[] {
-  return leadLines(`${indent}${TEARDOWN_LABEL}`, teardownError.message);
+  return leadLines(`${indent}teardown also failed: `, teardownError.message);
 }
 
 /**

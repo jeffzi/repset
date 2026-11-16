@@ -3,6 +3,7 @@
  * prints what a person or a tool reads, returning the exit code.
  */
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { constants } from "node:os";
 import { dirname, relative, resolve, sep } from "node:path";
 import { parseArgs } from "node:util";
 
@@ -54,9 +55,6 @@ export interface CommandIo extends ChildFunctionOverrides {
   readonly stderr?: Output | undefined;
   readonly signals?: SignalSource | undefined;
 }
-
-/** The exit code of a run interrupted by each signal: 128 plus the signal's number. */
-const SIGNAL_CODES: Readonly<Record<Signal, number>> = { SIGINT: 130, SIGTERM: 143 };
 
 const FLAGS = {
   filter: { type: "string" },
@@ -496,7 +494,8 @@ export async function main(args: readonly string[], io: CommandIo = {}): Promise
     };
     const actions = { run: measure, list, once };
     const code = await actions[command.mode](command, context);
-    return received === undefined ? code : SIGNAL_CODES[received];
+    // An interrupted run exits 128 plus the signal's number, as a shell reports it.
+    return received === undefined ? code : 128 + constants.signals[received];
   } catch (error) {
     if (!(error instanceof ConfigError)) throw error;
     printError(stderr, error);

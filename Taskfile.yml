@@ -52,6 +52,13 @@ tasks:
         task: "_{{.ITEM}}"
       - "{{.MISE}} npx fallow fix --yes --no-create-config"
 
+  overhead-check:
+    desc: Build, then compare repset's timings with a hand-written loop; run alone, before a release
+    deps: [_deps]
+    cmds:
+      - task: build
+      - "{{.MISE}} node --import tsx scripts/overhead-check.ts"
+
   check-package:
     desc:
       Build, lint the published surface, then install the packed package in an empty app, import
@@ -148,6 +155,8 @@ tasks:
     internal: true
     deps: [_deps]
     cmds:
+      # The overhead check's benchmark file imports the built entry from dist/.
+      - task: build
       - "{{.MISE}} npx tsc -p tsconfig.json"
       - "{{.MISE}} npx oxlint --type-aware --disable-nested-config"
 

@@ -28,7 +28,10 @@ import {
 import type { FailedProcess, Machine, Report, ReportOptions, Result } from "./report.js";
 import { property, slashed } from "./utils.js";
 
-/** A case the run measures. */
+// ---------------------------------------------------------------------------
+// Case selection
+// ---------------------------------------------------------------------------
+
 export interface SelectedCase {
   readonly id: string;
   /** The benchmark file that registers the case, as an absolute path. */
@@ -47,7 +50,6 @@ export type Selection =
     }
   | { readonly status: "stopped" };
 
-/** The functions a run looks runtimes up and starts children with. */
 export interface ChildFunctions {
   readonly findRuntime: typeof realFindRuntime;
   readonly startChild: typeof realStartChild;
@@ -58,7 +60,6 @@ export type ChildFunctionOverrides = {
   readonly [Name in keyof ChildFunctions]?: ChildFunctions[Name] | undefined;
 };
 
-/** What a selection reads, and the functions it looks runtimes up and starts children with. */
 export interface SelectInput extends ChildFunctionOverrides {
   readonly options: ResolvedOptions;
   /** The positional files, relative to `cwd`; when there are some, they replace `include`. */
@@ -254,13 +255,16 @@ export async function selectCases(input: SelectInput): Promise<Selection> {
   return { status: "selected", runtimes, cases };
 }
 
+// ---------------------------------------------------------------------------
+// Run inputs and results
+// ---------------------------------------------------------------------------
+
 /**
  * The package's own `package.json`: one directory above this module, which holds from `src/` and
  * from `dist/` alike.
  */
 const PACKAGE_JSON = fileURLToPath(new URL("../package.json", import.meta.url));
 
-/** What a run or a once run takes: the caller's options and the functions it starts children with. */
 export interface OnceInput extends OptionsInput, ChildFunctionOverrides {
   /** Paths or globs of benchmark files, relative to `cwd`; when there are some, they replace `include`. */
   readonly files?: readonly string[] | undefined;
@@ -268,7 +272,6 @@ export interface OnceInput extends OptionsInput, ChildFunctionOverrides {
   readonly signal?: AbortSignal | undefined;
 }
 
-/** What a run takes: a once run's input, the result callback, and where it reads the host from. */
 export interface RunInput extends OnceInput {
   /** Receives each result when it finishes, before the next child starts. */
   readonly onResult?: ((result: Result) => void) | undefined;
@@ -295,7 +298,6 @@ export type OnceResult =
       readonly error: Pick<ChildError, "phase" | "message" | "teardownError">;
     };
 
-/** How a once run ended: whether the stop signal ended it, and the results that finished. */
 export interface OnceRun {
   readonly interrupted: boolean;
   readonly results: readonly OnceResult[];
@@ -323,6 +325,10 @@ const FAILED_PROCESSES: readonly FailedProcess[] = [
     rawSamples: null,
   },
 ];
+
+// ---------------------------------------------------------------------------
+// Running
+// ---------------------------------------------------------------------------
 
 /**
  * Reads the version a `package.json` holds.

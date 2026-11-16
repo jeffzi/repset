@@ -135,6 +135,10 @@ interface Context extends ChildFunctions {
   readonly signal: AbortSignal;
 }
 
+// ---------------------------------------------------------------------------
+// Command-line parsing
+// ---------------------------------------------------------------------------
+
 /** Whether `flag` is among the arguments before a `--` terminator. */
 function flagged(args: readonly string[], flag: string): boolean {
   const end = args.indexOf("--");
@@ -245,6 +249,10 @@ function parseCommand(args: readonly string[]): Command {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Child functions and report output
+// ---------------------------------------------------------------------------
+
 /** A child starter that prints a progress line on stderr before it starts each child. */
 function announcing(context: Context): typeof realStartChild {
   const { cwd, stderr, startChild } = context;
@@ -326,6 +334,10 @@ function reportWrites(path: string, shown: string): Pick<RunInput, "onSelected" 
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// Actions
+// ---------------------------------------------------------------------------
 
 /**
  * Measures the selected cases, printing the table, the metric lines and the report where the
@@ -422,6 +434,10 @@ async function once(command: Command, context: Context): Promise<number> {
   }
   return outcome.results.some((result) => result.status === "failed") ? 1 : 0;
 }
+
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
 
 /** Prints a `ConfigError`; a failed listing's stack and output tail come before its message. */
 function printError(stderr: Output, error: ConfigError): void {

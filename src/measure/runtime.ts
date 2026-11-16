@@ -1,4 +1,3 @@
-/** The runtimes repset runs on. */
 export const RUNTIMES = ["node", "bun"] as const;
 
 export type Runtime = (typeof RUNTIMES)[number];

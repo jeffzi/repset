@@ -60,6 +60,10 @@ export interface ResolvedOptions {
   readonly filter: RegExp | undefined;
 }
 
+// ---------------------------------------------------------------------------
+// Config file loading
+// ---------------------------------------------------------------------------
+
 type OptionName = keyof Config;
 
 const CONFIG_NAMES = [
@@ -153,6 +157,10 @@ async function loadConfig(file: string): Promise<Readonly<Record<string, unknown
   return Object.fromEntries(entries);
 }
 
+// ---------------------------------------------------------------------------
+// Value checks
+// ---------------------------------------------------------------------------
+
 function invalid(option: string, rule: string, value: unknown): ConfigError {
   return new ConfigError(`${option} must be ${rule}, got ${describe(value)}`);
 }
@@ -241,6 +249,10 @@ function checkedConfig(values: Readonly<Partial<Record<OptionName, unknown>>>): 
     nodeImport: given(values.nodeImport, (value) => checkedString("nodeImport", value)),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Resolution
+// ---------------------------------------------------------------------------
 
 function resolvedNodeImport(
   caller: string | undefined,

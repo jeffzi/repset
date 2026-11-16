@@ -29,6 +29,10 @@ import {
 import { RESULT_FD } from "./result-fd.js";
 import { describe, isRecord, thrownMessage } from "./utils.js";
 
+// ---------------------------------------------------------------------------
+// Benchmark registration
+// ---------------------------------------------------------------------------
+
 /** The parameter combination `fn` receives when there is no `setup`; it has no key yet. */
 type NoParams = Readonly<Record<string, never>>;
 
@@ -263,6 +267,10 @@ export function registeredCases(): readonly RegisteredCase[] {
   return registry();
 }
 
+// ---------------------------------------------------------------------------
+// Request and result protocol
+// ---------------------------------------------------------------------------
+
 /** Lists the cases a benchmark file registers. */
 export interface ListRequest {
   readonly mode: "list";
@@ -350,6 +358,10 @@ export interface Ran {
 }
 
 export type ChildResult = Listed | Measured | Ran | Failed;
+
+// ---------------------------------------------------------------------------
+// Request parsing and result encoding
+// ---------------------------------------------------------------------------
 
 /**
  * Reads a string field of the request.
@@ -471,6 +483,10 @@ export function failedResult(phase: ChildPhase, thrown: unknown): Failed {
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// Loading and running cases
+// ---------------------------------------------------------------------------
 
 /**
  * Lists the cases a benchmark file registers, in registration order.
@@ -626,6 +642,10 @@ function measuredResult(measurement: Measurement): Measured {
     gc: measurement.gcDuringTiming ?? null,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Process entry
+// ---------------------------------------------------------------------------
 
 async function respond(request: ChildRequest): Promise<ChildResult> {
   switch (request.mode) {

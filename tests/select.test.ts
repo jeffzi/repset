@@ -13,7 +13,6 @@ const FIXTURES = fileURLToPath(new URL("fixtures/discovery", import.meta.url));
 
 const TESTS = fileURLToPath(new URL(".", import.meta.url));
 
-/** The absolute path of the discovery fixture `name`. */
 function fixture(name: string): string {
   return join(FIXTURES, name);
 }

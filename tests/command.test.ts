@@ -155,7 +155,7 @@ function parseReport(text: string, source: string): Report {
   return parsed;
 }
 
-/** The report the file at `path` holds. */
+/** The report the file at `path` holds, which the error thrown names when it holds none. */
 function reportAt(path: string): Report {
   return parseReport(readFileSync(path, "utf8"), path);
 }

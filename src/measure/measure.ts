@@ -103,7 +103,7 @@ export interface Measurement extends Statistics {
   readonly timingMs: number;
 }
 
-/** The phases a case fails in; {@link Phase} describes each. */
+/** Each value is described by {@link Phase}. */
 export const PHASES = [
   "setup",
   "fn",
@@ -278,8 +278,8 @@ function checkedRatioToEmptyBody(bodyMeanNs: number, kind: Lifecycle, sampling: 
   try {
     emptyRun = sampleEmpty({ kind, ...sampling });
   } catch (error) {
-    // The empty body is repset's own: past the cap, only the forced GC is left to throw, and it
-    // throws a MeasureError of its own.
+    // The empty body is repset's own, so `failedIn` never falls back to `child`: it keeps the forced
+    // GC's MeasureError and maps the cap's CalibrationError to `calibration`.
     throw failedIn("child", error);
   }
   const emptyMeanNs = summarize(emptyRun.spans, emptyRun.sampleCount, emptyRun.callsPerSample).mean;

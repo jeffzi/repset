@@ -94,8 +94,12 @@ export function teardownLines(teardownError: TeardownFailure, indent: string): s
 }
 
 /**
- * The lines of a failed case: its row, then each further line of its message beneath it, then the
- * labelled lines of its cleanup teardown's failure when that teardown threw too.
+ * The lines of a failed case.
+ *
+ * @param result - The failed result.
+ * @param idWidth - The width the case id is padded to.
+ * @returns Its row, then each further line of its message beneath it, then the labelled lines of
+ *   its cleanup teardown's failure when that teardown threw too.
  */
 function failedLines(result: FailedResult, idWidth: number): string[] {
   const lead = `${result.id.padEnd(idWidth)}${COLUMN_GAP}failed in ${result.error.phase}: `;

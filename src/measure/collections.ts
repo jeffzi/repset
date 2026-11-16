@@ -26,7 +26,6 @@ export interface TimingWindow {
   endMs: number;
 }
 
-/** A `gc` performance observer for the body's run. */
 interface CollectionObserver {
   readonly during: (timing: TimingWindow) => Promise<GcDuringTiming>;
   readonly disconnect: () => void;

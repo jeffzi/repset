@@ -101,17 +101,16 @@ function failed(
   };
 }
 
-/** The lines of the table of `results`. */
 function tableLines(results: readonly Result[]): string[] {
   return formatTable(results).split("\n");
 }
 
-/** The index of the row of case `id` among `lines`. */
+/** The index of the first line that starts with `id` and a space, or -1 when no row does. */
 function rowIndex(lines: readonly string[], id: string): number {
   return lines.findIndex((line) => line.trimStart().startsWith(`${id} `));
 }
 
-/** The index of the heading of `runtime` among `lines`. */
+/** The index of the first line naming `runtime` and its version, or -1 when none does. */
 function headingIndex(lines: readonly string[], runtime: Runtime): number {
   return lines.findIndex((line) => line.includes(runtime) && line.includes(VERSIONS[runtime]));
 }
@@ -131,7 +130,7 @@ function cells(line: string): Cell[] {
   }));
 }
 
-/** The cells of the row of case `id` among `lines`. */
+/** The cells of the row of case `id`, none when no row matches. */
 function rowCells(lines: readonly string[], id: string): Cell[] {
   return cells(lines[rowIndex(lines, id)] ?? "");
 }

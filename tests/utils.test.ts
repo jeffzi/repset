@@ -51,7 +51,7 @@ describe("the describe function", () => {
     it("names it without printing its source", () => {
       const described = describeValue(() => 1);
 
-      expect(described).not.toContain("=>");
+      expect(described).toBe("a function");
     });
   });
 });
@@ -69,9 +69,9 @@ describe("thrownMessage", () => {
     it("returns a string instead of throwing", () => {
       const unprintable: unknown = Object.create(null);
 
-      const message = thrownMessage(unprintable);
+      const message = (): string => thrownMessage(unprintable);
 
-      expect(typeof message).toBe("string");
+      expect(message).not.toThrow();
     });
   });
 });

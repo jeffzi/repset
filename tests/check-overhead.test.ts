@@ -20,9 +20,11 @@ const READERS: Readers = {
 };
 
 describe("runCheck", () => {
-  it("exits 0 when every scenario passes", async () => {
-    const status = await runCheck(READERS, () => undefined);
+  describe("when every scenario passes", () => {
+    it("returns 0", async () => {
+      const status = await runCheck(READERS, () => undefined);
 
-    expect(status).toBe(0);
+      expect(status).toBe(0);
+    });
   });
 });

@@ -10,12 +10,11 @@ import type {
 } from "../src/report.js";
 import { formatTable, metricLine } from "../src/table.js";
 import type { StrictOmit } from "../src/utils.js";
+import { found, measured as measuredChild } from "./fake-children.js";
 
 type Runtime = Result["runtime"]["name"];
 type Stats = MeasuredProcess["stats"];
 type ResultBase = StrictOmit<Result, "status" | "error" | "median" | "processes">;
-
-const VERSIONS: Readonly<Record<Runtime, string>> = { node: "24.1.0", bun: "1.3.2" };
 
 /** The statistics of a case whose every time is `median`, measured over 64 samples. */
 function flatStats(median: number): Stats {
@@ -37,15 +36,8 @@ function measuredProcess(stats: Stats): MeasuredProcess {
     round: 0,
     orderInRound: 0,
     stats,
-    sampling: {
-      timerResolutionNs: 41.7,
-      callsPerSample: 2,
-      callsPerSampleFixed: false,
-      warmupSamples: 1000,
-      timingAttempts: 1,
-      timingMs: 1003.4,
-    },
-    checks: { ratioToEmptyBody: 120.5 },
+    sampling: measuredChild(stats.median).sampling,
+    checks: measuredChild(stats.median).checks,
     gc: null,
     rawSamples: null,
   };
@@ -59,7 +51,7 @@ function resultBase(id: string, runtime: Runtime): ResultBase {
     contender: null,
     params: {},
     file: "fruit.bench.ts",
-    runtime: { name: runtime, version: VERSIONS[runtime] },
+    runtime: { name: runtime, version: found(runtime).version },
     setupPerCall: false,
   };
 }
@@ -101,6 +93,7 @@ function failed(
   };
 }
 
+/** The lines of the table of `results`, the last one empty after the closing newline. */
 function tableLines(results: readonly Result[]): string[] {
   return formatTable(results).split("\n");
 }
@@ -112,32 +105,15 @@ function rowIndex(lines: readonly string[], id: string): number {
 
 /** The index of the first line naming `runtime` and its version, or -1 when none does. */
 function headingIndex(lines: readonly string[], runtime: Runtime): number {
-  return lines.findIndex((line) => line.includes(runtime) && line.includes(VERSIONS[runtime]));
+  return lines.findIndex((line) => line.includes(runtime) && line.includes(found(runtime).version));
 }
 
-interface Cell {
-  readonly text: string;
-  readonly start: number;
-  readonly end: number;
-}
-
-/** The cells of a row: runs of text that two or more spaces separate. */
-function cells(line: string): Cell[] {
-  return [...line.matchAll(/\S+(?: \S+)*/gu)].map((match) => ({
-    text: match[0],
-    start: match.index,
-    end: match.index + match[0].length,
-  }));
-}
-
-/** The cells of the row of case `id`, none when no row matches. */
-function rowCells(lines: readonly string[], id: string): Cell[] {
-  return cells(lines[rowIndex(lines, id)] ?? "");
-}
-
-/** The cells of the row of case `id` in the table of `results`, as text. */
+/** The cells of the row of case `id` in the table of `results`: runs of text two or more spaces separate. */
 function rowTexts(results: readonly Result[], id: string): string[] {
-  return rowCells(tableLines(results), id).map((cell) => cell.text);
+  const lines = tableLines(results);
+  return [...(lines[rowIndex(lines, id)] ?? "").matchAll(/\S+(?: \S+)*/gu)].map(
+    (match) => match[0],
+  );
 }
 
 describe("formatTable", () => {
@@ -179,24 +155,32 @@ describe("formatTable", () => {
     });
   });
 
-  describe("when a section holds rows of different widths", () => {
-    it("lines up each column across the rows", () => {
+  describe("when sections hold rows of different widths, a failed row with the longest id and ids shorter than the header", () => {
+    it("lays out each section's columns, its row indent and the blank line between sections", () => {
       const results = [
-        measured("apple", "node", { ...flatStats(812), sampleCount: 64 }),
+        measured("apple", "node", flatStats(812)),
         measured("elderberry", "node", { ...flatStats(4656), max: 2_340_000, sampleCount: 1200 }),
+        failed("watermelons", "fn", "plum exploded\nat the stone"),
+        measured("nut", "bun", flatStats(812)),
       ];
 
       const lines = tableLines(results);
 
-      const rows = ["apple", "elderberry"].map((id) => rowCells(lines, id));
-      const aligned = [0, 1, 2, 3, 4, 5].map((column) => {
-        const starts = new Set(rows.map((row) => row[column]?.start));
-        const ends = new Set(rows.map((row) => row[column]?.end));
-        return starts.size === 1 || ends.size === 1;
-      });
-
-      expect(rows.map((row) => row.length)).toStrictEqual([6, 6]);
-      expect(aligned).toStrictEqual([true, true, true, true, true, true]);
+      expect(lines).toStrictEqual([
+        "node 24.1.0",
+        expect.any(String),
+        "  apple         812 ns   812 ns   812 ns   812 ns       64",
+        "  elderberry   4.66 µs  4.66 µs  4.66 µs  2.34 ms     1200",
+        expect.stringMatching(/^ {2}watermelons {2}\S.*: plum exploded$/u),
+        expect.stringMatching(/^ +at the stone$/u),
+        "",
+        "bun 1.3.2",
+        expect.any(String),
+        "  nut   812 ns  812 ns  812 ns  812 ns       64",
+        "",
+        expect.any(String),
+        "",
+      ]);
     });
   });
 

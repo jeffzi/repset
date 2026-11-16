@@ -105,6 +105,12 @@ describe("resolveOptions", () => {
 
       expect(minSamples).toBe("6");
     });
+
+    it("rejects a config path the file system cannot stat", async () => {
+      const result = resolveHere({ config: "apple\0.ts" });
+
+      await expect(result).rejects.toBeInstanceOf(ConfigError);
+    });
   });
 
   describe("when config is false", () => {
@@ -180,18 +186,6 @@ describe("resolveOptions", () => {
       await expectConfigError(result, ["getter-throws.ts", "pear"]);
     });
 
-    it("rejects a config path the file system cannot stat", async () => {
-      const result = resolveHere({ config: "apple\0.ts" });
-
-      await expect(result).rejects.toBeInstanceOf(ConfigError);
-    });
-
-    it("accepts a timeout of 1", async () => {
-      const resolved = await resolveHere({ timeout: 1 });
-
-      expect(resolved.timeout).toBe(1);
-    });
-
     it("treats a caller option holding undefined as absent", async () => {
       const resolved = await resolveHere({ config: "caller-undefined.ts", minTime: undefined });
 
@@ -234,6 +228,14 @@ describe("resolveOptions", () => {
         await expectConfigError(result, [option, shown]);
       },
     );
+  });
+
+  describe("when the caller gives a boundary value", () => {
+    it("accepts a timeout of 1", async () => {
+      const resolved = await resolveHere({ timeout: 1 });
+
+      expect(resolved.timeout).toBe(1);
+    });
   });
 
   describe("when merging", () => {

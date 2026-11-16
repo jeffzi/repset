@@ -5,6 +5,6 @@
 import { bench } from "../../dist/index.js";
 import { BODIES, BODY_NAMES, buildState } from "./bodies.js";
 
-for (const body of BODY_NAMES) {
-  bench(`overhead/${body}`, { setup: buildState, fn: BODIES[body] });
+for (const name of BODY_NAMES) {
+  bench(`overhead/${name}`, { setup: buildState, fn: BODIES[name] });
 }

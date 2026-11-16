@@ -26,7 +26,6 @@ export function empty(): void {
   // Times the sampling loop alone.
 }
 
-/** The empty run's timed spans and the calls per sample they ran. */
 export type EmptyResult = Pick<SamplerResult, "spans" | "sampleCount" | "callsPerSample">;
 
 /** How a benchmark builds the state its body runs on: one shared by every call, or one per call. */

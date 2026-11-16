@@ -59,8 +59,13 @@ function median(values: readonly number[]): number {
 }
 
 /**
- * `repset - baseline`, or 0 when the two differ by no more than a millionth of
- * `perCallResolution`.
+ * The paired difference, with near-ties counted as 0.
+ *
+ * @param baseline - The baseline median.
+ * @param repset - The repset median.
+ * @param perCallResolution - The pair's per-call resolution; differences within a millionth of it
+ * count as a tie.
+ * @returns `repset - baseline`, or 0 for a tie.
  */
 function pairedDifference(baseline: number, repset: number, perCallResolution: number): number {
   const difference = repset - baseline;
@@ -112,31 +117,6 @@ function summarizeWithDirection(pairs: Pairs): {
     },
     direction: Math.sign(observedSum),
   };
-}
-
-/**
- * Summarize one round of paired medians.
- *
- * The p-value is the two-sided sign-flip permutation test on `repset[i] - baseline[i]`, enumerated
- * exactly over all 2^n sign assignments, so the cost doubles with every pair. A pair whose two
- * medians differ by no more than a millionth of its per-call resolution counts as a tie, a
- * difference of 0.
- *
- * @param baseline - Per-process medians from the baseline loop.
- * @param repset - Per-process medians from repset, paired index by index with `baseline`.
- * @param perCallResolutions - Each pair's per-call resolution (ns), paired index by index with
- * `baseline`.
- * @returns The median of each side, the gap `(repset - baseline) / baseline` between those medians,
- * the fraction of sign assignments whose absolute signed sum reaches the observed one, and the mean
- * of the paired differences with ties counted as 0.
- * @throws RangeError when `baseline` is empty or the three arrays differ in length.
- */
-export function summarizeRound(
-  baseline: readonly number[],
-  repset: readonly number[],
-  perCallResolutions: readonly number[],
-): RoundSummary {
-  return summarizeWithDirection({ baseline, repset, perCallResolutions }).summary;
 }
 
 /**

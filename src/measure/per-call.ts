@@ -31,7 +31,7 @@ import {
   type WarmupResult,
 } from "./shared-state.js";
 
-const WARMUP_MIN_MS = 3000;
+const PER_CALL_WARMUP_MIN_MS = 3000;
 const WARMUP_MAX_SAMPLES = 1000;
 
 /**
@@ -44,6 +44,27 @@ export interface InFlight<State> {
   /** Whether a state was built and not yet torn down; while it is, `state` is that state. */
   held: boolean;
   state: State | undefined;
+}
+
+/**
+ * Records a state built and not yet torn down: `state` first, then `held`.
+ *
+ * @param inFlight - The holder to write.
+ * @param state - The state just built.
+ */
+export function holdInFlight<State>(inFlight: InFlight<State>, state: State): void {
+  inFlight.state = state;
+  inFlight.held = true;
+}
+
+/**
+ * Records that the state in flight was torn down: `held` first, then `state`.
+ *
+ * @param inFlight - The holder to clear.
+ */
+export function releaseInFlight<State>(inFlight: InFlight<State>): void {
+  inFlight.held = false;
+  inFlight.state = undefined;
 }
 
 /** `now` defaults to `performance.now()`, and `resolutionMs` to a probe of `now`. */
@@ -122,7 +143,7 @@ function warmup<State>(
   let elapsedMs = 0;
   while (
     progress.samples < WARMUP_MAX_SAMPLES &&
-    (progress.samples < WARMUP_MIN_SAMPLES || elapsedMs < WARMUP_MIN_MS)
+    (progress.samples < WARMUP_MIN_SAMPLES || elapsedMs < PER_CALL_WARMUP_MIN_MS)
   ) {
     const spanMs = sample(perCall, progress.count);
     elapsedMs = now() - started;
@@ -192,13 +213,11 @@ export function samplePerCall<State>(options: PerCallOptions<State>): SamplerRes
   const warmed = warmup(perCall, resolutionMs, callsPerSample);
   const spans = sampleBuffer(options, calibratedSampleMs(resolutionMs));
   const held = setup();
-  inFlight.state = held;
-  inFlight.held = true;
+  holdInFlight(inFlight, held);
   fn(held);
   collect();
   teardown(held);
-  inFlight.held = false;
-  inFlight.state = undefined;
+  releaseInFlight(inFlight);
   const { sampleCount, timingMs } = timeSamples(perCall, warmed.callsPerSample, spans, options);
   return {
     spans,

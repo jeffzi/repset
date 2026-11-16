@@ -12,16 +12,17 @@ import type {
   ChildError,
   ChildPhase,
   ChildRequest,
+  ChildResult,
   Failed,
   Listed,
   ListedCase,
   Measured,
   Ran,
 } from "./child.js";
-import type { GcDuringTiming, Statistics } from "./measure/measure.js";
+import { type GcDuringTiming, PHASES, type Statistics } from "./measure/measure.js";
 import { type Runtime, runningRuntime } from "./measure/runtime.js";
 import { ConfigError } from "./options.js";
-import { thrownMessage } from "./utils.js";
+import { isRecord, thrownMessage } from "./utils.js";
 
 /** The child entry beside `moduleFile`, with its extension: `child.js` built, `child.ts` from source. */
 export function childEntryBeside(moduleFile: string): string {
@@ -38,6 +39,9 @@ const OUTPUT_TAIL_BYTES = 16 * 1024;
  * hold them open for as long as it lives, and the call must not wait for it.
  */
 const CLOSE_GRACE_MS = 250;
+
+/** The child's stdio index of its result descriptor: matches the child entry's `RESULT_FD`. */
+const RESULT_FD = 3;
 
 /** How much of a result line that does not answer its request a failure message quotes. */
 const QUOTED_LINE_CHARS = 200;
@@ -69,7 +73,7 @@ interface Captured {
 
 interface Succeeded extends Captured {
   readonly status: "ok";
-  readonly result: Listed | Measured | Ran;
+  readonly result: Exclude<ChildResult, Failed>;
 }
 
 interface ChildFailed extends Captured {
@@ -93,15 +97,7 @@ type Ending =
   | { readonly kind: "timeout" }
   | { readonly kind: "exit"; readonly code: number | null; readonly signal: string | null };
 
-const CHILD_PHASES: ReadonlySet<string> = new Set<ChildPhase>([
-  "setup",
-  "fn",
-  "teardown",
-  "optimized-away",
-  "calibration",
-  "child",
-  "load",
-]);
+const CHILD_PHASES: ReadonlySet<string> = new Set<ChildPhase>([...PHASES, "load"]);
 
 const STATISTICS = [
   "min",
@@ -276,8 +272,7 @@ class OutputTail {
  * Starts the child entry on one runtime with one request, in this process's working directory, and
  * reads back its result.
  *
- * Nothing the child prints reaches this process's stdout or stderr: the outcome carries the last
- * 16 KiB of it. A result line the child wrote stands however the child then ended.
+ * Nothing the child prints reaches this process's stdout or stderr.
  *
  * @param runtime - The runtime to start the child on.
  * @param request - What the child is asked to do.
@@ -285,7 +280,8 @@ class OutputTail {
  *   signal, and the file to start in place of the child entry.
  * @returns The child's result, the child's own failure, a failure in phase `child` when it left no
  *   result that answers `request`, could not start or ran past `timeout`, or a stop when `signal`
- *   fired while it ran.
+ *   fired while it ran. Each carries the last 16 KiB the child printed. A result line the child
+ *   wrote stands however the child then ended.
  */
 export async function startChild(
   runtime: FoundRuntime,
@@ -371,13 +367,13 @@ function spawnChild(
     { stdio: ["ignore", "pipe", "pipe", "pipe"], windowsHide: true },
   );
   const tail = new OutputTail();
-  for (const stream of [child.stdio[1], child.stdio[2]]) {
+  for (const stream of [child.stdout, child.stderr]) {
     const sink = tail.stream();
     stream?.on("data", sink.write);
     stream?.on("end", sink.end);
   }
   const fd3: Buffer[] = [];
-  child.stdio[3]?.on("data", (chunk: Buffer) => {
+  child.stdio[RESULT_FD]?.on("data", (chunk: Buffer) => {
     fd3.push(chunk);
   });
   return { child, tail, written: () => Buffer.concat(fd3).toString("utf8") };
@@ -395,7 +391,7 @@ function spawnChild(
  */
 function outcomeOf(
   ending: Ending,
-  read: Listed | Measured | Ran | Failed | string,
+  read: ChildResult | string,
   timeout: number,
   output: string,
 ): Outcome {
@@ -431,10 +427,7 @@ function howItEnded(ending: Exclude<Ending, { kind: "stopped" }>, timeout: numbe
  * @param mode - The mode of the child's request, whose result shape the line must have.
  * @returns The result, or what was wrong with what the child wrote.
  */
-function readResult(
-  written: string,
-  mode: ChildRequest["mode"],
-): Listed | Measured | Ran | Failed | string {
+function readResult(written: string, mode: ChildRequest["mode"]): ChildResult | string {
   if (written === "") return "it wrote no result";
   if (!written.endsWith("\n")) return "its result line has no newline";
   const line = written.slice(0, -1);
@@ -451,10 +444,6 @@ function readResult(
   const answers = { list: isListed, measure: isMeasured, once: isRan }[mode];
   if (answers(value)) return value;
   return `its result line does not answer a ${mode} request: ${line.slice(0, QUOTED_LINE_CHARS)}`;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** Whether `value` is an object whose every `keys` field is a number. */

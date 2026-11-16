@@ -11,7 +11,7 @@
  */
 
 import type { Case } from "./measure/measure.js";
-import { describe } from "./utils.js";
+import { describe, isRecord } from "./utils.js";
 
 /** The parameter combination `fn` receives when there is no `setup`; it has no key yet. */
 type NoParams = Readonly<Record<string, never>>;
@@ -93,8 +93,7 @@ function checkName(name: unknown): asserts name is string {
 }
 
 /**
- * Returns `value` itself once it is a synchronous function. The check reads the function's tag and
- * never calls it.
+ * Checks that `value` is a synchronous function, reading its tag without calling it.
  *
  * @param subject - What `value` is, as an error message names it.
  * @param value - The function to check.
@@ -145,7 +144,7 @@ function caseOf(name: string, benchmark: unknown): Case<unknown> {
   if (typeof benchmark === "function") {
     return { kind: "sharedState", setup: noParams, fn: checkedFunction(subject, benchmark) };
   }
-  if (typeof benchmark !== "object" || benchmark === null || Array.isArray(benchmark)) {
+  if (!isRecord(benchmark)) {
     throw new TypeError(
       `${subject} must be a function or a benchmark object, got ${describe(benchmark)}`,
     );
@@ -186,7 +185,7 @@ function isKnownRegistry(slot: object): slot is Registry {
 }
 
 /**
- * Returns the registered cases, creating the registry slot on `globalThis` when it is empty.
+ * Reads the registry slot on `globalThis`, creating it when it is empty.
  *
  * @returns The live list of registered cases.
  * @throws TypeError when the slot holds a registry format this copy does not know, leaving the slot
@@ -236,9 +235,9 @@ export function bench<State = NoParams>(
 }
 
 /**
- * Returns every registered case, in registration order.
+ * Reads every registered case.
  *
- * @returns The id and the `Case` of each registered benchmark.
+ * @returns The id and the `Case` of each registered benchmark, in registration order.
  * @throws TypeError when the registry on `globalThis` has a format this copy does not know.
  */
 export function registeredCases(): readonly RegisteredCase[] {

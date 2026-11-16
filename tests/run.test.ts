@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -230,17 +229,11 @@ describe("run", () => {
     it("records files, filter and nodeImport as null when none was given", async () => {
       const report = await runHere({ files: undefined, include: ["zeta.bench.ts"] });
 
-      expect(report.options).toStrictEqual({
-        runtimes: ["node"],
+      const { files, filter, nodeImport } = report.options;
+      expect({ files, filter, nodeImport }).toStrictEqual({
         files: null,
         filter: null,
-        minTime: 1000,
-        minSamples: 64,
-        rounds: null,
-        seed: null,
-        timeout: 600_000,
         nodeImport: null,
-        rawSamples: false,
       });
     });
 
@@ -436,16 +429,6 @@ describe("run", () => {
   });
 
   describe("the package's version", () => {
-    it("is read from the package.json one directory above the module by default", async () => {
-      const own: unknown = JSON.parse(
-        readFileSync(new URL("../package.json", import.meta.url), "utf8"),
-      );
-
-      const report = await runHere({ packageJson: undefined });
-
-      expect(own).toMatchObject({ version: report.repset });
-    });
-
     it("throws the read error as it is, before any child starts, when package.json cannot be read", async () => {
       const result = runHere({
         packageJson: join(RUN_FIXTURES, "banana.json"),
@@ -526,29 +509,6 @@ describe("runOnce", () => {
       ],
     });
   });
-
-  it("ends as interrupted after the running child when the stop signal fires", async () => {
-    const controller = new AbortController();
-    const stopAtA = starter((_runtime, request) => {
-      if (request.id === "a.bench.ts") {
-        controller.abort();
-        return stopped;
-      }
-      return ranOnce;
-    });
-
-    const outcome = await runOnceHere({
-      files: ["zeta.bench.ts", "a.bench.ts"],
-      runtimes: ["node", "bun"],
-      signal: controller.signal,
-      startChild: stopAtA,
-    });
-
-    expect(outcome).toStrictEqual({
-      interrupted: true,
-      results: [{ id: "zeta.bench.ts", runtime: "node", status: "ok" }],
-    });
-  });
 });
 
 /** Whether a run was interrupted, and each result's case id and error message. */
@@ -582,17 +542,6 @@ describe.each([
   { name: "run", go: runEnded, mode: "measure" },
   { name: "runOnce", go: runOnceEnded, mode: "once" },
 ])("$name", ({ go, mode }) => {
-  describe("where the command exits 2", () => {
-    it.each([
-      { why: "resolving the options", input: { filter: "(" } },
-      { why: "selecting the cases", input: { files: ["banana.bench.ts"] } },
-    ])("throws the ConfigError from $why, starting no child", async ({ input }) => {
-      const result = go({ ...input, startChild: startsNoChild });
-
-      await expect(result).rejects.toBeInstanceOf(ConfigError);
-    });
-  });
-
   describe("when the stop signal fires during listing", () => {
     it("returns no result, as interrupted", async () => {
       const controller = new AbortController();

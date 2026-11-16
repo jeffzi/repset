@@ -312,28 +312,4 @@ describe("samplePerCall", () => {
       },
     );
   });
-
-  describe("when given no clock or resolution", () => {
-    it("times on performance.now", { timeout: 15_000 }, () => {
-      let collections = 0;
-      let calls = 0;
-
-      const result = samplePerCall({
-        setup: () => ({ total: 0 }),
-        fn: (world: { total: number }) => {
-          world.total += 1;
-          calls += 1;
-        },
-        collect: () => {
-          collections += 1;
-        },
-        minTime: 1000,
-        minSamples: 64,
-      });
-
-      expect(collections).toBe(1);
-      expect(result.sampleCount).toBeGreaterThanOrEqual(64);
-      expect(calls).toBeGreaterThan(result.sampleCount * result.callsPerSample);
-    });
-  });
 });

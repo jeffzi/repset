@@ -16,7 +16,7 @@ function recordTeardown(name: string): () => void {
 }
 
 /** A case whose every callback records its call under `name`. */
-function recorded(name: string): void {
+function benchRecorded(name: string): void {
   bench(name, {
     setup: () => {
       record(`${name} setup`);
@@ -31,8 +31,8 @@ function recorded(name: string): void {
   });
 }
 
-recorded("quiet");
-recorded("other");
+benchRecorded("quiet");
+benchRecorded("other");
 
 bench("steady", {
   setup: () => Array.from({ length: 512 }, (_, index) => index),

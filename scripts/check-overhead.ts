@@ -15,9 +15,10 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { SamplingReport } from "../src/child.js";
+import { CALLS_PER_SAMPLE } from "../src/command.js";
 import type { Runtime } from "../src/measure/runtime.js";
 import type { Report } from "../src/report.js";
-import { thrownMessage } from "../src/utils.js";
+import { isRecord, thrownMessage } from "../src/utils.js";
 import { BODY_NAMES, type BodyName } from "./check-overhead/bodies.js";
 import {
   exitStatus,
@@ -26,6 +27,10 @@ import {
   type RoundSummary,
   type ScenarioVerdict,
 } from "./check-overhead/verdict.js";
+
+// ---------------------------------------------------------------------------
+// Scenarios, readings and constants
+// ---------------------------------------------------------------------------
 
 /** One scenario: a runtime, how its count is chosen, and the body both sides time. */
 export interface Scenario {
@@ -73,8 +78,6 @@ const PAIRS = 12;
 /** The span, in timer resolutions, a calibrated reading's median timed sample reaches at least. */
 const MIN_SPAN_RESOLUTIONS = 200;
 
-const CALLS_VARIABLE = "REPSET_CALLS_PER_SAMPLE";
-
 const RUNTIMES: readonly Runtime[] = ["node", "bun"];
 const COUNT_MODES: readonly Scenario["countMode"][] = ["calibrated", "one-call"];
 
@@ -86,15 +89,22 @@ function scenarioName(scenario: Scenario): string {
   return `${scenario.runtime} ${scenario.countMode} ${scenario.body}`;
 }
 
+// ---------------------------------------------------------------------------
+// Reading repset and the baseline
+// ---------------------------------------------------------------------------
+
 function exitDescription(status: number | null): string {
   return status === null ? "was ended by a signal" : `exited ${String(status)}`;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** Trusts the rest of the shape once `schema` names the format repset writes. */
+/**
+ * Checks that `value` is a report, trusting the rest of its shape once `schema` names the format
+ * repset writes.
+ *
+ * @param value - The parsed report file.
+ * @returns Whether `value` has repset's `schema` and a `results` array, which narrows it to
+ *   `Report`.
+ */
 function isReport(value: unknown): value is Report {
   return isRecord(value) && value["schema"] === 1 && Array.isArray(value["results"]);
 }
@@ -114,7 +124,7 @@ export function repsetCommand(
   outPath: string,
   env: NodeJS.ProcessEnv,
 ): { readonly args: readonly string[]; readonly env: NodeJS.ProcessEnv } {
-  const { [CALLS_VARIABLE]: _inherited, ...rest } = env;
+  const { [CALLS_PER_SAMPLE]: _inherited, ...rest } = env;
   return {
     args: [
       CLI,
@@ -128,7 +138,7 @@ export function repsetCommand(
       "--out",
       outPath,
     ],
-    env: scenario.countMode === "one-call" ? { ...rest, [CALLS_VARIABLE]: "1" } : rest,
+    env: scenario.countMode === "one-call" ? { ...rest, [CALLS_PER_SAMPLE]: "1" } : rest,
   };
 }
 
@@ -244,7 +254,11 @@ export function checkedBaselineMedian(
 }
 
 /**
- * Reads the median from the baseline child's `{"median": <ns per call>}` line, `NaN` when absent.
+ * Reads the median from the baseline child's `{"median": <ns per call>}` line.
+ *
+ * @param stdout - What the baseline child printed.
+ * @returns The median in nanoseconds per call; `NaN` when the output is not JSON or holds no
+ *   numeric median.
  */
 function printedMedian(stdout: string): number {
   try {
@@ -329,6 +343,10 @@ function readBaseline(scenario: Scenario, counts: BaselineCounts): number {
 
 const REAL_READERS: Readers = { repset: readRepset, baseline: readBaseline };
 
+// ---------------------------------------------------------------------------
+// Rounds
+// ---------------------------------------------------------------------------
+
 function countsOf(reading: RepsetReading): BaselineCounts {
   return { callsPerSample: reading.callsPerSample, sampleCount: reading.sampleCount };
 }
@@ -376,12 +394,27 @@ export async function takeRound(scenario: Scenario, readers: Readers): Promise<R
   };
 }
 
-/** The median timed sample's span in timer resolutions: the median per call times the count. */
+// ---------------------------------------------------------------------------
+// Report layout
+// ---------------------------------------------------------------------------
+
+/**
+ * Measures the span of a reading's median timed sample.
+ *
+ * @param reading - The repset reading.
+ * @returns The span in timer resolutions: the median per call times the count, over the timer
+ *   resolution.
+ */
 function spanInResolutions(reading: RepsetReading): number {
   return (reading.median * reading.callsPerSample) / reading.timerResolutionNs;
 }
 
-/** Formats `value` with two decimals, signed `+` when zero or positive. */
+/**
+ * Formats a number with two decimals and an explicit sign.
+ *
+ * @param value - The number to format.
+ * @returns `value` with two decimals, prefixed `+` when it is zero or positive.
+ */
 function formatSigned(value: number): string {
   return `${value >= 0 ? "+" : ""}${value.toFixed(2)}`;
 }
@@ -487,10 +520,14 @@ function scenarioReport(
   lines.push(
     `${name}  smallest span ${smallestSpan.toFixed(1)} resolutions  shortest timing ${shortestTiming.toFixed(1)} ms`,
   );
-  const report = { lines, floorBreaks: floorBreaks(name, rounds) };
-  lines.push(...report.floorBreaks, outcome);
-  return report;
+  const breaks = floorBreaks(name, rounds);
+  lines.push(...breaks, outcome);
+  return { lines, floorBreaks: breaks };
 }
+
+// ---------------------------------------------------------------------------
+// Running the check
+// ---------------------------------------------------------------------------
 
 /**
  * Runs the overhead check over every scenario, one reading at a time, printing each once judged.

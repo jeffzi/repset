@@ -19,10 +19,8 @@ export interface State {
 
 const SIZE = 1000;
 
-/** How many distinct velocities the points cycle through. */
 const VELOCITY_LEVELS = 7;
 
-/** The velocity difference between neighboring levels. */
 const VELOCITY_STEP = 0.001;
 
 export const BODY_NAMES = ["each", "inlined"] as const;

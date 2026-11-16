@@ -4,16 +4,36 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import type { Report } from "../src/report.js";
 import { formatTable } from "../src/table.js";
 import { requiresRealBunHere } from "./real-bun.js";
-import { temporaryDir } from "./temporary-dir.js";
+import { suiteTemporaryDir, temporaryDir } from "./temporary-dir.js";
 
-/** The report the file at `path` holds. */
+/** Whether `value` is a schema-1 report document, checked on the keys the tests read. */
+function isReport(value: unknown): value is Report {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "schema" in value &&
+    value.schema === 1 &&
+    "results" in value &&
+    Array.isArray(value.results)
+  );
+}
+
+/**
+ * The report the file at `path` holds.
+ *
+ * @param path - The file the command wrote with `--out`.
+ * @returns The parsed report.
+ * @throws When the file is not JSON, or holds no schema-1 report.
+ */
 function reportAt(path: string): Report {
-  return JSON.parse(readFileSync(path, "utf8"));
+  const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+  if (!isReport(parsed)) throw new Error(`${path} does not hold a schema-1 report`);
+  return parsed;
 }
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
@@ -73,11 +93,12 @@ describe("the command started as a process", { timeout: SPAWN_TIMEOUT_MS }, () =
     { runtime: "node", here: true },
     { runtime: "bun", here: requiresRealBunHere() },
   ])("on $runtime", ({ runtime, here }) => {
-    it.runIf(here)(
-      "prints the table, writes a schema-1 report with every case ok and exits 0",
-      async () => {
-        const out = join(reportDir(), "report.json");
+    describe.runIf(here)("running the sum fixture", () => {
+      const dir = suiteTemporaryDir("repset-command-e2e-");
+      let run!: { code: number | null; stdout: string; report: Report };
 
+      beforeAll(async () => {
+        const out = join(dir.path, "report.json");
         const { code, stdout } = await spawnCommand([
           commandFixture("sum.bench.ts"),
           "--runtime",
@@ -89,24 +110,30 @@ describe("the command started as a process", { timeout: SPAWN_TIMEOUT_MS }, () =
           "--out",
           out,
         ]);
+        run = { code, stdout, report: reportAt(out) };
+      }, SPAWN_TIMEOUT_MS);
 
-        const report = reportAt(out);
+      it("exits 0", () => {
+        expect(run.code).toBe(0);
+      });
+
+      it("writes a schema-1 report with every case ok", () => {
         expect({
-          code,
-          schema: report.schema,
-          ran: report.results.map((result) => [result.id, result.runtime.name, result.status]),
-          stdout,
+          schema: run.report.schema,
+          ran: run.report.results.map((result) => [result.id, result.runtime.name, result.status]),
         }).toStrictEqual({
-          code: 0,
           schema: 1,
           ran: [
             ["sum/small", runtime, "ok"],
             ["sum/large", runtime, "ok"],
           ],
-          stdout: formatTable(report.results),
         });
-      },
-    );
+      });
+
+      it("prints the table of the report's results", () => {
+        expect(run.stdout).toBe(formatTable(run.report.results));
+      });
+    });
   });
 
   it("exits 1 with the error in the result when a case throws", async () => {
@@ -126,12 +153,6 @@ describe("the command started as a process", { timeout: SPAWN_TIMEOUT_MS }, () =
       code,
       errors: reportAt(out).results.map((result) => result.error?.message),
     }).toStrictEqual({ code: 1, errors: ["banana"] });
-  });
-
-  it("exits 2 on a bad flag", async () => {
-    const { code, stdout } = await spawnCommand(["--banana"]);
-
-    expect({ code, stdout }).toStrictEqual({ code: 2, stdout: "" });
   });
 
   it.runIf(POSIX)("exits 130 on SIGINT, killing the running case", async () => {

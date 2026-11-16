@@ -3,6 +3,8 @@
 // reported, and prints `{"median": <ns per call>}` on stdout.
 //
 //   <node --import tsx | bun> --expose-gc baseline-child.ts <body> <calls per sample> <samples>
+import { quantile } from "../../src/measure/measure.js";
+import { WARMUP_MIN_MS, WARMUP_MIN_SAMPLES } from "../../src/measure/shared-state.js";
 import {
   BODIES,
   BODY_NAMES,
@@ -17,15 +19,7 @@ declare global {
   var benchSink: number | undefined;
 }
 
-/** How long warmup runs before timing starts, repset's warmup length. */
-const WARMUP_MS = 250;
-
-/** The fewest warmup batches before timing starts, repset's warmup floor. */
-const WARMUP_MIN_BATCHES = 16;
-
 const NS_PER_MS = 1e6;
-
-const MEDIAN_QUANTILE = 0.5;
 
 const [name = "", callsArg = "", samplesArg = ""] = process.argv.slice(2);
 const calls = Number(callsArg);
@@ -48,24 +42,8 @@ function isPositiveInteger(value: number): boolean {
 }
 
 /**
- * Reads one rank of the ascending per-call times.
- *
- * @param sorted - The per-call times, ascending.
- * @param rank - The zero-based rank to read.
- * @returns The time at that rank.
- * @throws RangeError when no time is stored at that rank.
- */
-function timeAt(sorted: Float64Array, rank: number): number {
-  const time = sorted[rank];
-  if (time === undefined) {
-    throw new RangeError(`no timed batch at rank ${String(rank)}: ${String(sorted.length)} timed`);
-  }
-  return time;
-}
-
-/**
- * Warms the body with the timed loop's own batches until both 250 ms and 16 batches have passed,
- * collects once, then times `samples` batches.
+ * Warms the body with the timed loop's own batches until both repset's warmup time and warmup
+ * batch floor have passed, collects once, then times `samples` batches.
  *
  * The loops live in a function: top-level loops run several times slower on Node. Both stay
  * inline here, since this function is the baseline: a helper around the inner loop changes the code
@@ -77,9 +55,9 @@ function timeAt(sorted: Float64Array, rank: number): number {
  */
 // fallow-ignore-next-line complexity -- the baseline's loops stay inline; see the doc comment
 function run(state: State, gc: NodeJS.GCFunction): Float64Array {
-  const warmEnd = performance.now() + WARMUP_MS;
+  const warmEnd = performance.now() + WARMUP_MIN_MS;
   let warmed = 0;
-  while (warmed < WARMUP_MIN_BATCHES || performance.now() < warmEnd) {
+  while (warmed < WARMUP_MIN_SAMPLES || performance.now() < warmEnd) {
     for (let call = 0; call < calls; call++) body(state);
     warmed += 1;
   }
@@ -96,9 +74,5 @@ function run(state: State, gc: NodeJS.GCFunction): Float64Array {
 const state = buildState();
 const perCall = run(state, collect);
 globalThis.benchSink = positionSum(state);
-const rank = (samples - 1) * MEDIAN_QUANTILE;
-const lowerRank = Math.floor(rank);
-const low = timeAt(perCall, lowerRank);
-const high = timeAt(perCall, Math.ceil(rank));
-const median = low + (high - low) * (rank - lowerRank);
+const median = quantile(perCall, 0.5);
 process.stdout.write(`${JSON.stringify({ median })}\n`);

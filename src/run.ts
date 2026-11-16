@@ -3,7 +3,7 @@
  * each file's cases in a child), then starting one child per case and runtime to measure the case
  * or run it once.
  */
-import { globSync, statSync } from "node:fs";
+import { globSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { cpus as realCpus } from "node:os";
 import { basename, relative, resolve, sep } from "node:path";
@@ -15,10 +15,22 @@ import {
   type FoundRuntime,
   type Outcome,
   startChild as realStartChild,
+  type StartOptions,
 } from "./children.js";
 import type { Runtime } from "./measure/runtime.js";
-import { ConfigError, type OptionsInput, resolveOptions, type ResolvedOptions } from "./options.js";
+import {
+  ConfigError,
+  isFile,
+  type OptionsInput,
+  resolveOptions,
+  type ResolvedOptions,
+} from "./options.js";
 import type { Machine, Process, Report, ReportOptions, Result } from "./report.js";
+import { property } from "./utils.js";
+
+// ---------------------------------------------------------------------------
+// Case selection
+// ---------------------------------------------------------------------------
 
 /** A case the run measures. */
 export interface SelectedCase {
@@ -74,29 +86,58 @@ function slashed(path: string): string {
   return path.split(sep).join("/");
 }
 
-/** The files `pattern` matches under `base`, as absolute paths sorted by path, never in `node_modules`. */
+/** Orders two keyed paths by key, by code unit. */
+function byKey(a: { readonly key: string }, b: { readonly key: string }): number {
+  return a.key < b.key ? -1 : Number(a.key > b.key);
+}
+
+/**
+ * Finds the files a glob pattern matches, never descending into `node_modules`.
+ *
+ * @param pattern - The glob pattern.
+ * @param base - The directory the pattern is relative to.
+ * @returns The files, as absolute paths sorted by path.
+ * @throws {@link ConfigError} When a match exists but cannot be read.
+ */
 function globFiles(pattern: string, base: string): string[] {
   const matches = globSync(pattern, {
     cwd: base,
     exclude: (path) => basename(path) === "node_modules",
   })
     .map((match) => resolve(base, match))
-    .filter((path) => statSync(path).isFile())
+    .filter((path) => isFile(path))
     .map((path) => ({ path, key: slashed(path) }));
-  matches.sort((a, b) => (a.key < b.key ? -1 : Number(a.key > b.key)));
+  matches.sort(byKey);
   return matches.map((match) => match.path);
 }
 
-/** A positional argument's files: the file it names, or else the files it matches as a glob. */
+/**
+ * Finds a positional argument's files.
+ *
+ * @param argument - The argument: a file, or else a glob.
+ * @param cwd - The directory the argument is relative to.
+ * @returns The file the argument names, or else the files it matches as a glob.
+ * @throws {@link ConfigError} When the argument names no file and matches none as a glob, or a
+ *   path it names or matches cannot be read.
+ */
 function argumentFiles(argument: string, cwd: string): string[] {
   const named = resolve(cwd, argument);
-  if (statSync(named, { throwIfNoEntry: false })?.isFile() === true) return [named];
+  if (isFile(named)) return [named];
   const matched = globFiles(argument, cwd);
   if (matched.length === 0) throw new ConfigError(`no benchmark file matches ${argument}`);
   return matched;
 }
 
-/** The benchmark files of a selection, in the order their patterns are written, each one once. */
+/**
+ * Finds the benchmark files of a selection.
+ *
+ * @param options - The resolved options, whose `include` patterns apply when `files` is empty.
+ * @param files - The positional arguments, relative to `cwd`.
+ * @param cwd - The directory the arguments are relative to.
+ * @returns The files in the order their patterns are written, each one once.
+ * @throws {@link ConfigError} When an argument matches no file, no `include` pattern matches one,
+ *   or a path cannot be read.
+ */
 function benchmarkFiles(options: ResolvedOptions, files: readonly string[], cwd: string): string[] {
   const perPattern =
     files.length > 0
@@ -109,7 +150,12 @@ function benchmarkFiles(options: ResolvedOptions, files: readonly string[], cwd:
   return found;
 }
 
-/** Throws a `ConfigError` naming the first id two cases share and the files that register it. */
+/**
+ * Checks that no two cases share an id.
+ *
+ * @param cases - The listed cases.
+ * @throws {@link ConfigError} Naming the first id two cases share and the files that register it.
+ */
 function checkUniqueIds(cases: readonly SelectedCase[]): void {
   const filesById = new Map<string, Set<string>>();
   let firstRepeated: string | undefined;
@@ -128,6 +174,17 @@ function checkUniqueIds(cases: readonly SelectedCase[]): void {
 }
 
 /**
+ * How a child of this run is started.
+ *
+ * @param options - The resolved options.
+ * @param signal - The caller's stop signal.
+ * @returns The options' timeout and resolved `nodeImport`, and the signal.
+ */
+function startOptions(options: ResolvedOptions, signal: AbortSignal | undefined): StartOptions {
+  return { timeout: options.timeout, nodeImport: options.nodeImport?.resolved, signal };
+}
+
+/**
  * Lists the cases of `files`, one listing child per file on `runtime`, in file order.
  *
  * @param files - The benchmark files, as absolute paths.
@@ -135,6 +192,7 @@ function checkUniqueIds(cases: readonly SelectedCase[]): void {
  * @param input - The options, the working directory, the stop signal and the child starter.
  * @returns The cases in file order, or `undefined` when the stop signal fired.
  * @throws {@link ListingError} When a listing child fails or gives no listing.
+ * @throws {@link Error} What starting a listing child throws.
  */
 async function listFiles(
   files: readonly string[],
@@ -142,15 +200,12 @@ async function listFiles(
   input: SelectInput,
 ): Promise<SelectedCase[] | undefined> {
   const { options, cwd, signal, startChild = realStartChild } = input;
+  const childOptions = startOptions(options, signal);
   const cases: SelectedCase[] = [];
   for (const path of files) {
     if (signal?.aborted === true) return undefined;
     const file = slashed(relative(cwd, path));
-    const outcome = await startChild(
-      runtime,
-      { mode: "list", file: path },
-      { timeout: options.timeout, nodeImport: options.nodeImport?.resolved, signal },
-    );
+    const outcome = await startChild(runtime, { mode: "list", file: path }, childOptions);
     if (outcome.status === "stopped") return undefined;
     if (outcome.status === "failed") throw new ListingError(file, outcome.error, outcome.output);
     if (!("cases" in outcome.result)) {
@@ -169,8 +224,10 @@ async function listFiles(
  *   the functions that look a runtime up and start a child, the real ones by default.
  * @returns The runtimes with their versions and the selected cases, or a stop when the signal fired
  *   during listing.
- * @throws {ConfigError} When an argument matches no file, a runtime cannot be found, a listing
- *   child fails (a {@link ListingError}), two cases share an id, or no case is selected.
+ * @throws {@link ConfigError} When an argument matches no file, a runtime cannot be found, a
+ *   listing child fails (a {@link ListingError}), two cases share an id, or no case is selected.
+ * @throws {@link Error} What starting a listing child throws, and the plain `Error` that finding the
+ *   runtime this process runs on throws when `process.versions` holds no version for it.
  */
 export async function selectCases(input: SelectInput): Promise<Selection> {
   const { options, files, cwd, findRuntime = realFindRuntime } = input;
@@ -190,6 +247,10 @@ export async function selectCases(input: SelectInput): Promise<Selection> {
   if (cases.length === 0) throw new ConfigError(`no case id matches the filter ${String(filter)}`);
   return { status: "selected", runtimes, cases };
 }
+
+// ---------------------------------------------------------------------------
+// Run inputs and results
+// ---------------------------------------------------------------------------
 
 /**
  * The package's own `package.json`: one directory above this module, which holds from `src/` and
@@ -240,7 +301,6 @@ export interface OnceRun {
   readonly results: readonly OnceResult[];
 }
 
-/** A child's outcome other than a stop. */
 type Finished = Exclude<Outcome, { status: "stopped" }>;
 
 /** The failure of a measuring child that answered with something other than a measurement. */
@@ -263,18 +323,21 @@ const FAILED_PROCESSES: readonly Process[] = [
   },
 ];
 
+// ---------------------------------------------------------------------------
+// Running and reporting
+// ---------------------------------------------------------------------------
+
 /**
  * Reads the version a `package.json` holds.
  *
  * @param path - The `package.json` to read; the package's own by default.
  * @returns Its `version`.
- * @throws {Error} The read or parse error as it is, or a plain `Error` when the file holds no
+ * @throws {@link Error} The read or parse error as it is, or a plain `Error` when the file holds no
  *   version string.
  */
 export async function packageVersion(path: string = PACKAGE_JSON): Promise<string> {
   const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
-  const version: unknown =
-    typeof parsed === "object" && parsed !== null ? Reflect.get(parsed, "version") : undefined;
+  const version = property(parsed, "version");
   if (typeof version !== "string") throw new Error(`${path} holds no version string`);
   return version;
 }
@@ -291,9 +354,9 @@ export async function packageVersion(path: string = PACKAGE_JSON): Promise<strin
  *   child of a case starts.
  * @returns The resolved options, and whether the stop signal ended the run before every child ran:
  *   during listing, before the next child, or by stopping the running one.
- * @throws {ConfigError} When the options are invalid or the selection fails, before any child but
- *   the listing children starts.
- * @throws {Error} What `passed` or `finished` throws, or what starting a child throws.
+ * @throws {@link ConfigError} When the options are invalid or the selection fails, before any child
+ *   but the listing children starts.
+ * @throws {@link Error} What `passed` or `finished` throws, or what starting a child throws.
  */
 async function startEach(
   input: OnceInput,
@@ -313,15 +376,11 @@ async function startEach(
   });
   if (selection.status === "stopped") return { options, interrupted: true };
   passed?.(options);
-  const startOptions = {
-    timeout: options.timeout,
-    nodeImport: options.nodeImport?.resolved,
-    signal,
-  };
+  const childOptions = startOptions(options, signal);
   for (const runtime of selection.runtimes) {
     for (const selected of selection.cases) {
       if (signal?.aborted === true) return { options, interrupted: true };
-      const outcome = await startChild(runtime, request(options, selected), startOptions);
+      const outcome = await startChild(runtime, request(options, selected), childOptions);
       if (outcome.status === "stopped") return { options, interrupted: true };
       finished(runtime, selected, outcome);
     }
@@ -384,7 +443,7 @@ function machineOf(cpus: () => readonly { readonly model: string }[]): Machine {
 function reportOptions(input: OnceInput, options: ResolvedOptions): ReportOptions {
   return {
     runtimes: options.runtimes,
-    files: input.files === undefined ? null : [...input.files],
+    files: input.files === undefined || input.files.length === 0 ? null : [...input.files],
     filter: input.filter ?? null,
     minTime: options.minTime,
     minSamples: options.minSamples,
@@ -410,15 +469,15 @@ function reportOptions(input: OnceInput, options: ResolvedOptions): ReportOption
  *   ones by default.
  * @returns The report of the results that finished, with `interrupted` set when the stop signal
  *   ended the run.
- * @throws {Error} The error reading the package's `package.json`, before any child starts; what
- *   `onSelected` throws, before any measuring child starts; or what `onResult` throws, once a child
- *   has finished.
- * @throws {ConfigError} When the options are invalid or the selection fails, before any measuring
- *   child starts.
+ * @throws {@link Error} The error reading the package's `package.json`, before any child starts;
+ *   what `onSelected` throws, before any measuring child starts; what `onResult` throws, once a
+ *   child has finished; or what starting a child throws.
+ * @throws {@link ConfigError} When the options are invalid or the selection fails, before any
+ *   measuring child starts.
  */
 export async function run(input: RunInput): Promise<Report> {
   const startedAt = new Date().toISOString();
-  const repset = await packageVersion(input.packageJson ?? PACKAGE_JSON);
+  const repset = await packageVersion(input.packageJson);
   const machine = machineOf(input.cpus ?? realCpus);
   const results: Result[] = [];
   const { callsPerSample } = input;
@@ -460,8 +519,9 @@ export async function run(input: RunInput): Promise<Report> {
  *   that look a runtime up and start a child, the real ones by default.
  * @returns Per case and runtime, that it ran or how it failed, with `interrupted` set when the stop
  *   signal ended it.
- * @throws {ConfigError} When the options are invalid or the selection fails, before any once child
- *   starts.
+ * @throws {@link ConfigError} When the options are invalid or the selection fails, before any once
+ *   child starts.
+ * @throws {@link Error} What starting a child throws.
  */
 export async function runOnce(input: OnceInput): Promise<OnceRun> {
   const results: OnceResult[] = [];

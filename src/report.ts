@@ -63,6 +63,7 @@ interface ResultBase {
   readonly file: string;
   readonly runtime: { readonly name: Runtime; readonly version: string };
   readonly setupPerCall: boolean;
+  readonly processes: readonly Process[];
 }
 
 /** A case that was measured: its median is the median of its processes' medians. */
@@ -70,7 +71,6 @@ export interface MeasuredResult extends ResultBase {
   readonly status: "ok";
   readonly error: null;
   readonly median: number;
-  readonly processes: readonly Process[];
 }
 
 /** A case that failed: `error` says why, and its one process holds `null` for what it did not reach. */
@@ -78,7 +78,6 @@ export interface FailedResult extends ResultBase {
   readonly status: "failed";
   readonly error: ResultError;
   readonly median: null;
-  readonly processes: readonly Process[];
 }
 
 /** One case's result on one runtime. */

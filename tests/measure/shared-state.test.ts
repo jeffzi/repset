@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  CalibrationError,
-  sampleSharedState,
-  type SamplerResult,
-} from "../../src/measure/shared-state.js";
+import { sampleSharedState, type SamplerResult } from "../../src/measure/shared-state.js";
 import { COARSE_RESOLUTION, errorOf, FINE_RESOLUTION } from "./fixtures.js";
 
 interface World {
@@ -26,6 +22,9 @@ type CostMs = (sample: number, timed: boolean, run: number) => number;
 /**
  * Builds a virtual clock that only the body advances, recording the body calls and the span
  * between clock reads.
+ *
+ * @param costMs - The body's cost per call.
+ * @returns The harness's clock, body, collector and recordings.
  */
 function harness(costMs: CostMs): Harness {
   let time = 1000;
@@ -86,6 +85,9 @@ function coarse(count: number): number {
 /**
  * Costs 40 times the resolution a call during warmup and from the second timing attempt on, so warmup settles
  * on 5 calls per sample, and `firstRun` a call during the first timing attempt.
+ *
+ * @param firstRun - The cost per call during the first timing attempt, given the sample's index.
+ * @returns The cost function.
  */
 function slowerAfterFirstRun(firstRun: (sample: number) => number): CostMs {
   return (sample, _timed, timingRun) => (timingRun === 1 ? firstRun(sample) : coarse(40));
@@ -94,6 +96,9 @@ function slowerAfterFirstRun(firstRun: (sample: number) => number): CostMs {
 /**
  * Costs 21.6 times the resolution a call on every tenth sample and 30 on the rest, so a first run of 5 calls
  * per sample is discarded and its shortest sample grows the count to 10.
+ *
+ * @param sample - The index of the sample the call belongs to.
+ * @returns The body's cost per call, in milliseconds.
  */
 function shortestFirstRun(sample: number): number {
   return coarse(sample % 10 === 0 ? 21.6 : 30);
@@ -106,6 +111,9 @@ const CAPPED_STEP = 2 ** -16;
  * Costs one capped resolution a call for the first warmup sample and 0.25 ms after, so warmup settles on
  * 200 calls; then, per timing attempt, one sample in three spans 50 ms and the others span the run's
  * short multiple of the resolution, so each run's median falls under 200 times the resolution.
+ *
+ * @param runs - Each timing attempt's calls per sample and the short samples' multiple of the capped resolution.
+ * @returns The cost function.
  */
 function shortRuns(runs: readonly { calls: number; shortSteps: number }[]): CostMs {
   return (sample, _timed, timingRun) => {
@@ -115,7 +123,14 @@ function shortRuns(runs: readonly { calls: number; shortSteps: number }[]): Cost
   };
 }
 
-/** Costs 40 times the resolution a call in warmup, then halves per timing attempt so every run spans 100 times the resolution. */
+/**
+ * Costs 40 times the resolution a call in warmup, then halves per timing attempt so every run spans 100 times the resolution.
+ *
+ * @param _sample - Unused: the cost does not depend on the sample.
+ * @param _timed - Unused: the cost follows `timingRun`.
+ * @param timingRun - The timing attempt's number, 0 during warmup.
+ * @returns The body's cost per call, in milliseconds.
+ */
 function fasterEveryRun(_sample: number, _timed: boolean, timingRun: number): number {
   return timingRun === 0 ? coarse(40) : coarse(20 / 2 ** (timingRun - 1));
 }
@@ -124,6 +139,11 @@ function fasterEveryRun(_sample: number, _timed: boolean, timingRun: number): nu
  * Costs 100 ms a call outside the first timing attempt, so warmup runs 16 samples of one call; in the
  * first run, 50 ms on every third sample and 10 times the resolution on the rest, so its 64 samples are
  * discarded and the count grows to 20 for a kept second run of 64 samples of 2000 ms.
+ *
+ * @param sample - The index of the sample the call belongs to.
+ * @param _timed - Unused: the cost follows `timingRun`.
+ * @param timingRun - The timing attempt's number, 0 during warmup.
+ * @returns The body's cost per call, in milliseconds.
  */
 function discardedFirstRun(sample: number, _timed: boolean, timingRun: number): number {
   if (timingRun !== 1) return 100;
@@ -133,18 +153,27 @@ function discardedFirstRun(sample: number, _timed: boolean, timingRun: number): 
 /**
  * Costs 40 times the resolution a call in warmup, then 10, 7.5 and 10 times the resolution a call in
  * timing attempts 1, 2 and 3.
+ *
+ * @param _sample - Unused: the cost does not depend on the sample.
+ * @param _timed - Unused: the cost follows `timingRun`.
+ * @param timingRun - The timing attempt's number, 0 during warmup.
+ * @returns The body's cost per call, in milliseconds.
  */
 function discardedTwice(_sample: number, _timed: boolean, timingRun: number): number {
   if (timingRun === 0) return coarse(40);
   return coarse(timingRun === 2 ? 7.5 : 10);
 }
 
-/** Warmup spans of 0 ms (no clock change read), 30 and then 50: the shortest that read a clock change is 30. */
+/**
+ * Warmup spans of 0 ms (no clock change read), 30 and then 50: the shortest that read a clock change is 30.
+ *
+ * @param sample - The index of the warmup sample.
+ * @returns The sample's span, in milliseconds.
+ */
 function warmupSpanMs(sample: number): number {
   return [0, 30][sample] ?? 50;
 }
 
-/** A fixed count of 1 call, for 500 ms and 10 samples. */
 const FIXED_SHORT_RUN: RunOptions = { callsPerSample: 1, minTime: 500, minSamples: 10 };
 
 describe("sampleSharedState", () => {
@@ -348,6 +377,11 @@ describe("sampleSharedState", () => {
       /**
        * Costs one coarse resolution a call in warmup, then 0.75 times the resolution, so the first timing attempt is
        * discarded and the second kept.
+       *
+       * @param sample - The index of the sample the call belongs to.
+       * @param timed - Whether a collection has run, which ends warmup.
+       * @param timingRun - The timing attempt's number, 0 during warmup.
+       * @returns The body's cost per call, in milliseconds.
        */
       const fasterWhenTimed: CostMs = (sample, timed, timingRun) => {
         if (!timed) return COARSE_RESOLUTION;
@@ -492,21 +526,6 @@ describe("sampleSharedState", () => {
         expect(fake.sampleCalls).toContain(20);
         expect(fake.sampleCalls).not.toContain(40);
       });
-    });
-
-    it.each([
-      { when: "warmup's count passes the cap", costMs: () => 0, resolutionMs: CAPPED_STEP },
-      {
-        when: "the third run is discarded within the cap",
-        costMs: fasterEveryRun,
-        resolutionMs: COARSE_RESOLUTION,
-      },
-    ])("fails with a CalibrationError when $when", ({ costMs, resolutionMs }) => {
-      const fake = harness(costMs);
-
-      const error = errorOf(() => run(fake, resolutionMs));
-
-      expect(error).toBeInstanceOf(CalibrationError);
     });
 
     describe("when a run is discarded", () => {

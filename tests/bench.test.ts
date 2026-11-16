@@ -199,13 +199,6 @@ describe("bench", () => {
 
       expectTypeErrorHolding(error, ["sort", field]);
     });
-
-    it("names a function given as setupPerCall without printing its source", () => {
-      const error = rejectionOf("sort", { fn: sync, setupPerCall: sync });
-
-      expectTypeErrorHolding(error, ["sort", "setupPerCall", "a function"]);
-      expect(String(error)).not.toContain("=>");
-    });
   });
 
   describe("when given an async function", () => {

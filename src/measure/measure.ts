@@ -12,7 +12,7 @@
 
 import { performanceNow, thrownMessage, timerResolutionMs } from "../utils.js";
 import { empty, type EmptyResult, type Lifecycle, sampleEmpty } from "./empty.js";
-import { type InFlight, keep, samplePerCall } from "./per-call.js";
+import { holdInFlight, type InFlight, keep, releaseInFlight, samplePerCall } from "./per-call.js";
 import { runningRuntime } from "./runtime.js";
 import {
   CalibrationError,
@@ -34,10 +34,10 @@ const GC_MINOR = 1;
 const GC_MAJOR = 4;
 
 /** The time, in milliseconds, the body's timed samples span at least when `minTime` is absent. */
-const DEFAULT_TIME_MS = 1000;
+export const DEFAULT_MIN_TIME = 1000;
 
 /** The fewest timed samples the body runs when `minSamples` is absent. */
-const DEFAULT_SAMPLES = 64;
+export const DEFAULT_MIN_SAMPLES = 64;
 
 // ---------------------------------------------------------------------------
 // Types and errors
@@ -68,13 +68,13 @@ export interface MeasureOptions {
   /** The clock, in milliseconds; defaults to `performance.now()`. */
   readonly now?: () => number;
   /**
-   * The time, in milliseconds, the body's timed samples span at least; defaults to 1000. Not
-   * validated: the caller passes a finite number of 0 or more.
+   * The time, in milliseconds, the body's timed samples span at least; defaults to
+   * {@link DEFAULT_MIN_TIME}. Not validated: the caller passes a finite number of 0 or more.
    */
   readonly minTime?: number;
   /**
-   * The fewest timed samples the body runs; defaults to 64. Not validated: the caller passes an
-   * integer of 1 or more.
+   * The fewest timed samples the body runs; defaults to {@link DEFAULT_MIN_SAMPLES}. Not
+   * validated: the caller passes an integer of 1 or more.
    */
   readonly minSamples?: number;
 }
@@ -119,13 +119,23 @@ export interface Measurement extends Statistics {
   readonly timingMs: number;
 }
 
+/** The phases a case fails in; {@link Phase} describes each. */
+export const PHASES = [
+  "setup",
+  "fn",
+  "teardown",
+  "optimized-away",
+  "calibration",
+  "child",
+] as const;
+
 /**
  * Where a case failed: `setup`, `fn` or `teardown` threw (`fn` also for a first call that returned
  * a thenable); `optimized-away`, the body is too close to the empty body to tell apart; `calibration`, a count
  * passed the cap or a third timing attempt was discarded; `child`, the runtime lacks what measuring
  * needs.
  */
-export type Phase = "setup" | "fn" | "teardown" | "optimized-away" | "calibration" | "child";
+export type Phase = (typeof PHASES)[number];
 
 /**
  * A failure of `measure`: the phase it failed in, and as `cause` the value a callback, the loader or
@@ -172,8 +182,8 @@ interface TimingWindow {
  *
  * @param benchmark - The benchmark to measure.
  * @param options - A fixed count, an injected `noInline`, a clock to read, and the `minTime` and
- *   `minSamples` the body's timing attempts must pass, 1000 ms and 64 when absent; the empty body
- *   always takes 64 timed samples.
+ *   `minSamples` the body's timing attempts must pass, {@link DEFAULT_MIN_TIME} and
+ *   {@link DEFAULT_MIN_SAMPLES} when absent; the empty body always takes 64 timed samples.
  * @returns The body's per-call statistics in nanoseconds and how they were taken.
  * @throws MeasureError in phase `child` when no garbage collector is exposed, or when Bun is
  *   running but `bun:jsc` cannot be loaded, with the loader's value as cause, before anything runs;
@@ -256,12 +266,13 @@ export async function measure<State>(
  * The `minTime` and `minSamples` the body's timing attempts must pass.
  *
  * @param options - The options `measure` was given.
- * @returns The given `minTime` and `minSamples`, 1000 ms and 64 when absent.
+ * @returns The given `minTime` and `minSamples`, {@link DEFAULT_MIN_TIME} and
+ *   {@link DEFAULT_MIN_SAMPLES} when absent.
  */
 function timedMinimums(options: MeasureOptions): TimedMinimums {
   return {
-    minTime: options.minTime ?? DEFAULT_TIME_MS,
-    minSamples: options.minSamples ?? DEFAULT_SAMPLES,
+    minTime: options.minTime ?? DEFAULT_MIN_TIME,
+    minSamples: options.minSamples ?? DEFAULT_MIN_SAMPLES,
   };
 }
 
@@ -481,12 +492,10 @@ function measurePerCall<State>(
   const inFlight: InFlight<State> = { held: false, state: undefined };
   try {
     const checked = setup();
-    inFlight.state = checked;
-    inFlight.held = true;
+    holdInFlight(inFlight, checked);
     requireSynchronous(fn(checked));
     trackedTeardown(checked);
-    inFlight.held = false;
-    inFlight.state = undefined;
+    releaseInFlight(inFlight);
     const run = samplePerCall({ ...sampling, setup, fn, teardown: trackedTeardown, inFlight });
     timing.endMs = performance.now();
     return run;
@@ -570,7 +579,7 @@ function tearDownDiscarding<State>(teardown: (state: State) => void, state: Stat
  * @returns The time at that rank.
  * @throws RangeError when no time is stored at that rank, as when no span was stored at all.
  */
-function timeAt(sorted: Float64Array, rank: number): number {
+function timeAt(sorted: ArrayLike<number>, rank: number): number {
   const time = sorted[rank];
   if (time === undefined) {
     throw new RangeError(`no stored span at rank ${rank}: ${sorted.length} spans stored`);
@@ -587,7 +596,7 @@ function timeAt(sorted: Float64Array, rank: number): number {
  * @returns The interpolated time.
  * @throws RangeError when no span was stored.
  */
-function quantile(sorted: Float64Array, q: number): number {
+export function quantile(sorted: ArrayLike<number>, q: number): number {
   const position = (sorted.length - 1) * q;
   const lowerRank = Math.floor(position);
   const lowTime = timeAt(sorted, lowerRank);

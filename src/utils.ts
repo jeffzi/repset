@@ -71,6 +71,22 @@ export function describe(value: unknown): string {
 }
 
 /**
+ * Reads one property of a value, for a value that may not be an object.
+ *
+ * @param value - The value to read from.
+ * @param key - The property to read.
+ * @returns The property's value when `value` is a non-null object, `undefined` otherwise.
+ */
+export function property(value: unknown, key: PropertyKey): unknown {
+  return typeof value === "object" && value !== null ? Reflect.get(value, key) : undefined;
+}
+
+/** Whether `value` is a non-null, non-array object, narrowed to read its fields as `unknown`. */
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
  * Reads the message of a thrown value, without letting a conversion throw in place of the failure
  * it describes.
  *

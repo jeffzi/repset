@@ -18,12 +18,12 @@ export function requiresRealBun(bunInstalled: boolean, ci: string | undefined): 
  * Whether spawning `bun` found an executable. A broken install must run the real-Bun cases and fail
  * loudly instead of skipping them.
  *
- * @param result - The `spawnSync` result of running `bun`; only its `error` is read.
+ * @param spawnResult - The `spawnSync` result of running `bun`; only its `error` is read.
  * @returns `false` only when the spawn failed with `ENOENT` (no `bun` on `PATH`); `true` otherwise,
  * including a non-zero exit, a signal, or any other spawn error.
  */
-export function bunExecutableFound(result: { error?: Error | undefined }): boolean {
-  const { error } = result;
+export function bunExecutableFound(spawnResult: { error?: Error | undefined }): boolean {
+  const { error } = spawnResult;
   const missingExecutable = error !== undefined && "code" in error && error.code === "ENOENT";
   return !missingExecutable;
 }
@@ -35,5 +35,6 @@ export function bunExecutableFound(result: { error?: Error | undefined }): boole
  * @returns `true` when a `bun` executable was found or `CI` marks a CI runner.
  */
 export function requiresRealBunHere(): boolean {
-  return requiresRealBun(bunExecutableFound(spawnSync("bun", ["--version"])), process.env["CI"]);
+  const bunInstalled = bunExecutableFound(spawnSync("bun", ["--version"]));
+  return requiresRealBun(bunInstalled, process.env["CI"]);
 }

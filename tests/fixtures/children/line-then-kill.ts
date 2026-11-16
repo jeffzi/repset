@@ -1,4 +1,6 @@
 import { writeSync } from "node:fs";
 
-writeSync(3, '{"status":"ok"}\n');
+const RESULT_FD = 3;
+
+writeSync(RESULT_FD, '{"status":"ok"}\n');
 process.kill(process.pid, "SIGKILL");

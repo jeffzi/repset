@@ -28,7 +28,9 @@ export interface Output {
 }
 
 /** The signals that interrupt a run. */
-type Signal = "SIGINT" | "SIGTERM";
+const SIGNALS = ["SIGINT", "SIGTERM"] as const;
+
+type Signal = (typeof SIGNALS)[number];
 
 /** What delivers the interrupting signals: `process` fits. */
 export interface SignalSource {
@@ -78,7 +80,13 @@ const EXCLUSIVE: readonly (readonly [string, string])[] = [
 const DECIMAL = /^\d+(?:\.\d+)?$/;
 
 /** The environment variable that fixes the calls per sample of every measuring child of a run. */
-const CALLS_PER_SAMPLE = "REPSET_CALLS_PER_SAMPLE";
+export const CALLS_PER_SAMPLE = "REPSET_CALLS_PER_SAMPLE";
+
+/** The `--out` value that sends the report to stdout instead of a file. */
+const OUT_STDOUT = "-";
+
+/** Like `Omit`, but `K` must be a key of `T`, so a misspelled or removed key fails to compile. */
+type StrictOmit<T, K extends keyof T> = Omit<T, K>;
 
 const USAGE = `Usage: repset [options] [file...]
 
@@ -102,7 +110,9 @@ Options:
 
 interface Command {
   readonly mode: "run" | "list" | "once";
-  readonly input: Omit<OptionsInput, "cwd"> & { readonly files: readonly string[] | undefined };
+  readonly input: StrictOmit<OptionsInput, "cwd"> & {
+    readonly files: readonly string[] | undefined;
+  };
   /** The `--out` value as written: a file relative to the working directory, or `-` for stdout. */
   readonly out: string | undefined;
   readonly metricLines: boolean;
@@ -126,7 +136,14 @@ function flagged(args: readonly string[], flag: string): boolean {
   return (end === -1 ? args : args.slice(0, end)).includes(flag);
 }
 
-/** The value of a number flag, or `undefined` when it is absent. */
+/**
+ * Reads the value of a number flag.
+ *
+ * @param flag - The flag's name, without the leading dashes, which the error names.
+ * @param text - The flag's value, or `undefined` when the flag is absent.
+ * @returns The number, or `undefined` when the flag is absent.
+ * @throws {@link ConfigError} When `text` is not decimal digits with an optional fraction.
+ */
 function decimal(flag: string, text: string | undefined): number | undefined {
   if (text === undefined) return undefined;
   if (!DECIMAL.test(text)) {
@@ -154,7 +171,13 @@ function fixedCallsPerSample(text: string | undefined): number | undefined {
   return count;
 }
 
-/** The runtimes of a `--runtime` list, or `undefined` when it is absent. */
+/**
+ * Reads the runtimes of a `--runtime` list.
+ *
+ * @param text - The comma-separated list, or `undefined` when the flag is absent.
+ * @returns The runtimes in the order given, or `undefined` when the flag is absent.
+ * @throws {@link ConfigError} When an entry of the list is not a runtime.
+ */
 function runtimeList(text: string | undefined): Runtime[] | undefined {
   if (text === undefined) return undefined;
   const names = text.split(",");
@@ -188,7 +211,7 @@ function parseCommand(args: readonly string[]): Command {
     if (given.has(token.name)) throw new ConfigError(`--${token.name} is given more than once`);
     given.add(token.name);
   }
-  if (values["metric-lines"] === true && values.out === "-") {
+  if (values["metric-lines"] === true && values.out === OUT_STDOUT) {
     throw new ConfigError("--metric-lines cannot be used with --out -");
   }
   const conflict = EXCLUSIVE.find(([one, other]) => given.has(one) && given.has(other));
@@ -220,11 +243,12 @@ function parseCommand(args: readonly string[]): Command {
 function announcing(context: Context): typeof realStartChild {
   const { cwd, stderr, startChild } = context;
   return async (runtime, request, options) => {
-    const line =
-      request.mode === "list"
-        ? `listing ${relative(cwd, request.file)}`
-        : `${request.mode === "once" ? "running" : "measuring"} ${request.id} on ${runtime.runtime}`;
-    stderr.write(`${line}\n`);
+    if (request.mode === "list") {
+      stderr.write(`listing ${relative(cwd, request.file)}\n`);
+    } else {
+      const verb = request.mode === "once" ? "running" : "measuring";
+      stderr.write(`${verb} ${request.id} on ${runtime.runtime}\n`);
+    }
     return startChild(runtime, request, options);
   };
 }
@@ -241,6 +265,16 @@ function childInput(
   };
 }
 
+/** The report as a file or stdout holds it: JSON indented by two spaces, and a newline. */
+function reportText(report: Report): string {
+  return `${JSON.stringify(report, null, 2)}\n`;
+}
+
+/** The message for a report that could not be written to `shown`, the path as the user wrote it. */
+function reportWriteFailure(shown: string, error: unknown): string {
+  return `cannot write the report to ${shown}: ${thrownMessage(error)}`;
+}
+
 /**
  * Writes `report` to `path` through a temporary file in the same directory renamed over it, so
  * the file always holds a whole report, creating the directory first when it is missing.
@@ -254,7 +288,7 @@ function writeReport(path: string, report: Report): void {
   mkdirSync(dirname(path), { recursive: true });
   const temporary = `${path}.${String(process.pid)}.tmp`;
   try {
-    writeFileSync(temporary, `${JSON.stringify(report, null, 2)}\n`);
+    writeFileSync(temporary, reportText(report));
     renameSync(temporary, path);
   } catch (error) {
     rmSync(temporary, { force: true });
@@ -271,9 +305,7 @@ function reportWrites(path: string, shown: string): Pick<RunInput, "onSelected" 
       try {
         writeReport(path, head);
       } catch (error) {
-        throw new ConfigError(`cannot write the report to ${shown}: ${thrownMessage(error)}`, {
-          cause: error,
-        });
+        throw new ConfigError(reportWriteFailure(shown, error), { cause: error });
       }
     },
     onResult: (result) => {
@@ -301,7 +333,8 @@ function reportWrites(path: string, shown: string): Pick<RunInput, "onSelected" 
  */
 async function measure(command: Command, context: Context): Promise<number> {
   const { stdout, stderr } = context;
-  const toFile = command.out !== undefined && command.out !== "-";
+  const toStdout = command.out === OUT_STDOUT;
+  const toFile = command.out !== undefined && command.out !== OUT_STDOUT;
   const path = toFile ? resolve(context.cwd, command.out) : undefined;
   const writes = path === undefined ? undefined : reportWrites(path, String(command.out));
   const report = await run({
@@ -315,17 +348,15 @@ async function measure(command: Command, context: Context): Promise<number> {
       writes?.onResult?.(result);
     },
   });
-  const tableOut = command.out === "-" || command.metricLines ? stderr : stdout;
+  const tableOut = toStdout || command.metricLines ? stderr : stdout;
   tableOut.write(formatTable(report.results));
-  if (command.out === "-") stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  if (toStdout) stdout.write(reportText(report));
   let written = true;
   if (path !== undefined) {
     try {
       writeReport(path, report);
     } catch (error) {
-      stderr.write(
-        `repset: cannot write the report to ${String(command.out)}: ${thrownMessage(error)}\n`,
-      );
+      stderr.write(`repset: ${reportWriteFailure(String(command.out), error)}\n`);
       written = false;
     }
   }
@@ -411,7 +442,7 @@ export async function main(args: readonly string[], io: CommandIo = {}): Promise
   }
   const controller = new AbortController();
   let received: Signal | undefined;
-  const listeners = (["SIGINT", "SIGTERM"] as const).map((signal) => {
+  const listeners = SIGNALS.map((signal) => {
     const listener = (): void => {
       received ??= signal;
       controller.abort();

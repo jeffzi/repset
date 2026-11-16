@@ -8,6 +8,9 @@ import type { FailedResult, MeasuredResult, Result } from "./report.js";
 /** Time units from nanoseconds up, each a thousand of the one before. */
 const TIME_UNITS = ["ns", "µs", "ms", "s"] as const;
 
+/** How many of one time unit make one of the next. */
+const UNIT_STEP = 1000;
+
 const SIGNIFICANT_DIGITS = 3;
 
 const COLUMN_GAP = "  ";
@@ -30,8 +33,8 @@ function formatTime(ns: number): string {
   let value = ns;
   let unit = 0;
   // Compare the rounded value, so 999.7 ns prints as 1.00 µs rather than 1000 ns.
-  while (unit < TIME_UNITS.length - 1 && Math.abs(Number(significant(value))) >= 1000) {
-    value /= 1000;
+  while (unit < TIME_UNITS.length - 1 && Math.abs(Number(significant(value))) >= UNIT_STEP) {
+    value /= UNIT_STEP;
     unit += 1;
   }
   return `${significant(value)} ${TIME_UNITS[unit]}`;
@@ -42,7 +45,7 @@ function formatTime(ns: number): string {
  *
  * @param result - The measured result.
  * @returns Its id, median, mean, min, max and sample count, the times per call.
- * @throws {Error} When the result's process holds no statistics, which a measured result always has.
+ * @throws {@link Error} When the result's process holds no statistics, which a measured result always has.
  */
 function measuredCells(result: MeasuredResult): string[] {
   const stats = result.processes[0]?.stats;
@@ -100,7 +103,7 @@ function sectionLines(results: readonly Result[]): string[] {
  *
  * @param results - The results that finished, in run order.
  * @returns The table, ending in a newline, or the empty string when there is no result.
- * @throws {Error} When a measured result's process holds no statistics.
+ * @throws {@link Error} When a measured result's process holds no statistics.
  */
 export function formatTable(results: readonly Result[]): string {
   if (results.length === 0) return "";

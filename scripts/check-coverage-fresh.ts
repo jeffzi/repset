@@ -8,10 +8,6 @@ function isSourceFile(name: string): boolean {
   return name.endsWith(".ts") && !name.endsWith(".d.ts");
 }
 
-function exists(path: string): boolean {
-  return statSync(path, { throwIfNoEntry: false }) !== undefined;
-}
-
 /**
  * @param dir - Root to walk.
  * @returns `dir`, every directory below it, and every `.ts` source; directories count because
@@ -29,7 +25,7 @@ function listInputs(dir: string): string[] {
  * Fail when `src/`, `tests/`, a directory or `.ts` file below them, or `vitest.config.ts` is
  * newer than the coverage report. A missing report passes.
  *
- * @param projectRoot - Directory holding `src/` and `coverage/`.
+ * @param projectRoot - Directory holding `src/`, `tests/`, `vitest.config.ts` and `coverage/`.
  * @throws Error naming each stale input, or the filesystem error.
  */
 export function checkCoverageFresh(projectRoot: string): void {
@@ -38,12 +34,10 @@ export function checkCoverageFresh(projectRoot: string): void {
     return;
   }
 
-  const testsDir = join(projectRoot, "tests");
-  const vitestConfig = join(projectRoot, VITEST_CONFIG);
   const inputs = [
     ...listInputs(join(projectRoot, "src")),
-    ...(exists(testsDir) ? listInputs(testsDir) : []),
-    ...(exists(vitestConfig) ? [vitestConfig] : []),
+    ...listInputs(join(projectRoot, "tests")),
+    join(projectRoot, VITEST_CONFIG),
   ];
   const stale = inputs
     .filter((path) => statSync(path).mtimeMs > coverage.mtimeMs)

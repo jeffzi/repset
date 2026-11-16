@@ -15,14 +15,14 @@ const READING: RepsetReading = {
 
 /** Readers for every scenario: baseline medians of 1000, and repset readings above the floors. */
 const READERS: Readers = {
-  repset: async () => READING,
-  baseline: async () => 1000,
+  repset: () => READING,
+  baseline: () => 1000,
 };
 
 describe("runCheck", () => {
   describe("when every scenario passes", () => {
-    it("returns 0", async () => {
-      const status = await runCheck(READERS, () => undefined);
+    it("returns 0", () => {
+      const status = runCheck(READERS, () => undefined);
 
       expect(status).toBe(0);
     });

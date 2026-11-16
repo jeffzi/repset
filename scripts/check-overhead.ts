@@ -21,7 +21,6 @@ import type { Report } from "../src/report.js";
 import { isRecord, thrownMessage } from "../src/utils.js";
 import { BODY_NAMES, type BodyName } from "./check-overhead/bodies.js";
 import {
-  exitStatus,
   judgeScenario,
   type Pairs,
   type RoundSummary,
@@ -57,13 +56,13 @@ export type BaselineCounts = Pick<RepsetReading, "callsPerSample" | "sampleCount
 
 /** The two sides of a pair: each takes one reading of a scenario. */
 export interface Readers {
-  readonly repset: (scenario: Scenario) => RepsetReading | Promise<RepsetReading>;
+  readonly repset: (scenario: Scenario) => RepsetReading;
   /** Returns the baseline loop's median in nanoseconds per call. */
-  readonly baseline: (scenario: Scenario, counts: BaselineCounts) => number | Promise<number>;
+  readonly baseline: (scenario: Scenario, counts: BaselineCounts) => number;
 }
 
 /** One round of a scenario: its pairs, and the repset readings behind them in pair order. */
-export interface Round {
+interface Round {
   readonly pairs: Pairs;
   readonly readings: readonly RepsetReading[];
 }
@@ -118,7 +117,7 @@ function isReport(value: unknown): value is Report {
  *   `REPSET_CALLS_PER_SAMPLE=1` for a one-call scenario, and the variable removed for a calibrated
  *   one.
  */
-export function repsetCommand(
+function repsetCommand(
   scenario: Scenario,
   outPath: string,
   env: NodeJS.ProcessEnv,
@@ -201,7 +200,7 @@ function onlyResult(
  *   unreadable or not a report holding exactly one measured result; the result failed, naming its
  *   phase and message; or the process's count does not match the scenario's.
  */
-export function repsetReading(
+function repsetReading(
   scenario: Scenario,
   status: number | null,
   reportPath: string,
@@ -227,44 +226,30 @@ export function repsetReading(
 }
 
 /**
- * Checks one run of the baseline child.
+ * Checks one run of the baseline child and reads the median from its `{"median": <ns per call>}`
+ * line.
  *
  * @param scenario - The scenario the run read.
  * @param status - The child's exit status, `null` when a signal ended it.
- * @param stdout - What the child printed: its `{"median": <ns per call>}` line.
- * @returns The median the child printed.
- * @throws Error naming the scenario when the child exited non-zero or printed no finite median.
+ * @param stdout - What the child printed.
+ * @returns The median the child printed, in nanoseconds per call.
+ * @throws Error naming the scenario when the child exited non-zero, or printed something that is
+ *   not JSON or holds no finite numeric median.
  */
-export function checkedBaselineMedian(
-  scenario: Scenario,
-  status: number | null,
-  stdout: string,
-): number {
+function checkedBaselineMedian(scenario: Scenario, status: number | null, stdout: string): number {
   const name = scenarioName(scenario);
   if (status !== 0) throw new Error(`${name}: the baseline child ${exitDescription(status)}`);
-  const median = printedMedian(stdout);
-  if (!Number.isFinite(median)) {
+  let printed: unknown;
+  try {
+    printed = JSON.parse(stdout);
+  } catch {
+    printed = undefined;
+  }
+  const median = isRecord(printed) ? printed["median"] : undefined;
+  if (typeof median !== "number" || !Number.isFinite(median)) {
     throw new Error(`${name}: the baseline child printed no finite median`);
   }
   return median;
-}
-
-/**
- * Reads the median from the baseline child's `{"median": <ns per call>}` line.
- *
- * @param stdout - What the baseline child printed.
- * @returns The median in nanoseconds per call; `NaN` when the output is not JSON or holds no
- *   numeric median.
- */
-function printedMedian(stdout: string): number {
-  try {
-    const printed: unknown = JSON.parse(stdout);
-    return isRecord(printed) && typeof printed["median"] === "number"
-      ? printed["median"]
-      : Number.NaN;
-  } catch {
-    return Number.NaN;
-  }
 }
 
 /**
@@ -312,7 +297,7 @@ const RUNTIME_COMMANDS: Readonly<Record<Runtime, readonly [string, readonly stri
  * @returns The driver's own Node with tsx for a Node scenario, or the `bun` on `PATH` for a Bun
  *   scenario, as repset's children run, and the arguments: the body, then the two counts.
  */
-export function baselineCommand(
+function baselineCommand(
   scenario: Scenario,
   counts: BaselineCounts,
 ): { readonly executable: string; readonly args: readonly string[] } {
@@ -347,10 +332,6 @@ const REAL_READERS: Readers = { repset: readRepset, baseline: readBaseline };
 // Rounds
 // ---------------------------------------------------------------------------
 
-function countsOf(reading: RepsetReading): BaselineCounts {
-  return { callsPerSample: reading.callsPerSample, sampleCount: reading.sampleCount };
-}
-
 /**
  * Takes one round of a scenario: twelve pairs, back to back.
  *
@@ -367,7 +348,7 @@ function countsOf(reading: RepsetReading): BaselineCounts {
  *   `i`, and its repset readings.
  * @throws Whatever a reader throws.
  */
-export async function takeRound(scenario: Scenario, readers: Readers): Promise<Round> {
+function takeRound(scenario: Scenario, readers: Readers): Round {
   const baseline: number[] = [];
   const perCallResolutions: number[] = [];
   const readings: RepsetReading[] = [];
@@ -375,13 +356,13 @@ export async function takeRound(scenario: Scenario, readers: Readers): Promise<R
   for (let pair = 0; pair < PAIRS; pair += 1) {
     let baselineCounts: BaselineCounts;
     if (latest === undefined || pair % 2 === 0) {
-      latest = await readers.repset(scenario);
-      baselineCounts = countsOf(latest);
-      baseline.push(await readers.baseline(scenario, baselineCounts));
+      latest = readers.repset(scenario);
+      baselineCounts = latest;
+      baseline.push(readers.baseline(scenario, baselineCounts));
     } else {
-      baselineCounts = countsOf(latest);
-      baseline.push(await readers.baseline(scenario, baselineCounts));
-      latest = await readers.repset(scenario);
+      baselineCounts = latest;
+      baseline.push(readers.baseline(scenario, baselineCounts));
+      latest = readers.repset(scenario);
     }
     readings.push(latest);
     perCallResolutions.push(
@@ -540,28 +521,26 @@ function scenarioReport(
  *   filesystem errors from creating or removing its temporary directory, which name no scenario;
  *   whatever a caller-supplied reader throws; and whatever `print` throws.
  */
-export async function runCheck(
+export function runCheck(
   readers: Readers = REAL_READERS,
   print: (text: string) => void = console.log,
-): Promise<0 | 1> {
-  const verdicts: ScenarioVerdict[] = [];
-  let broken = false;
+): 0 | 1 {
+  let failed = false;
   for (const scenario of SCENARIOS) {
-    const first = await takeRound(scenario, readers);
+    const first = takeRound(scenario, readers);
     const rounds = [first];
-    const verdict = await judgeScenario(first.pairs, async () => {
-      const confirmation = await takeRound(scenario, readers);
+    const verdict = judgeScenario(first.pairs, () => {
+      const confirmation = takeRound(scenario, readers);
       rounds.push(confirmation);
       return confirmation.pairs;
     });
-    verdicts.push(verdict);
     const report = scenarioReport(scenario, verdict, rounds);
-    broken ||= report.floorBreaks.length > 0;
+    failed ||= !verdict.passed || report.floorBreaks.length > 0;
     print(report.lines.join("\n"));
   }
-  return broken ? 1 : exitStatus(verdicts);
+  return failed ? 1 : 0;
 }
 
 if (import.meta.main) {
-  process.exitCode = await runCheck();
+  process.exitCode = runCheck();
 }

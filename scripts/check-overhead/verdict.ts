@@ -134,15 +134,12 @@ function summarizeWithDirection(pairs: Pairs): {
  * @throws RangeError when a round's arrays are empty or differ in length; any error from
  * `confirmationRound` propagates.
  */
-export async function judgeScenario(
-  first: Pairs,
-  confirmationRound: () => Pairs | Promise<Pairs>,
-): Promise<ScenarioVerdict> {
+export function judgeScenario(first: Pairs, confirmationRound: () => Pairs): ScenarioVerdict {
   const firstRound = summarizeWithDirection(first);
   if (firstRound.summary.pValue >= SIGNIFICANCE) {
     return { passed: true, first: firstRound.summary };
   }
-  const confirmation = summarizeWithDirection(await confirmationRound());
+  const confirmation = summarizeWithDirection(confirmationRound());
   const differenceConfirmed =
     confirmation.summary.pValue < SIGNIFICANCE && confirmation.direction === firstRound.direction;
   return {
@@ -150,14 +147,4 @@ export async function judgeScenario(
     first: firstRound.summary,
     confirmation: confirmation.summary,
   };
-}
-
-/**
- * Process exit status for a set of scenario verdicts.
- *
- * @param verdicts - Every scenario's verdict.
- * @returns 1 when any scenario failed, 0 otherwise.
- */
-export function exitStatus(verdicts: readonly ScenarioVerdict[]): 0 | 1 {
-  return verdicts.some((verdict) => !verdict.passed) ? 1 : 0;
 }

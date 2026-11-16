@@ -10,10 +10,8 @@
  * around them (VISION #1), since any of those changes how the engine compiles the loop. Error
  * handling and teardown belong to the caller.
  *
- * The module imports only `../utils.js` and reads no Node builtin, so it loads in a browser page.
+ * The module imports nothing and reads no Node builtin, so it loads in a browser page.
  */
-
-import { performanceNow, type StrictOmit, timerResolutionMs } from "../utils.js";
 
 /** Every sample spans at least this many multiples of the timer resolution once warmup calibrates its count. */
 const MIN_RESOLUTIONS_PER_SAMPLE = 200;
@@ -63,25 +61,6 @@ export interface Sampling {
   readonly callsPerSample?: number | undefined;
 }
 
-/** A sampler's own clock and resolution, each defaulting when absent. */
-export type SamplerClock = Partial<Pick<Sampling, "now" | "resolutionMs">>;
-
-/**
- * Fills in a sampler's clock and resolution where it gave none.
- *
- * @param clock - The sampler's own clock and resolution, each optional.
- * @returns The given clock, or `performance.now()` when absent, and the given resolution, or a
- *   probe of that clock when absent.
- */
-export function resolvedClock(clock: SamplerClock): {
-  readonly now: () => number;
-  readonly resolutionMs: number;
-} {
-  const now = clock.now ?? performanceNow;
-  const resolutionMs = clock.resolutionMs ?? timerResolutionMs(now);
-  return { now, resolutionMs };
-}
-
 /**
  * What a body sampler's timing attempt must pass before it stops: both, unless the sample buffer fills
  * first. The empty run takes neither.
@@ -96,9 +75,7 @@ export interface TimedMinimums {
   readonly minSamples: number;
 }
 
-/** `now` defaults to `performance.now()`, and `resolutionMs` to a probe of `now`. */
-export interface SharedStateOptions<State>
-  extends StrictOmit<Sampling, "now" | "resolutionMs">, SamplerClock, TimedMinimums {
+export interface SharedStateOptions<State> extends Sampling, TimedMinimums {
   readonly fn: (state: State) => unknown;
   /** The one state every sample runs on; the caller builds and tears it down. */
   readonly state: State;
@@ -501,8 +478,7 @@ function grownCount(count: number, spans: Float64Array, resolutionMs: number): n
  *   runs taken.
  */
 export function sampleSharedState<State>(options: SharedStateOptions<State>): SamplerResult {
-  const { fn, state, callsPerSample } = options;
-  const { now, resolutionMs } = resolvedClock(options);
+  const { fn, state, callsPerSample, now, resolutionMs } = options;
   const timed: Timed<State> = { now, fn, state };
   const warmed = warmup(timed, resolutionMs, callsPerSample);
   const spans = sampleBuffer(

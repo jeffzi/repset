@@ -12,20 +12,17 @@
  * handling and teardown on a throw belong to the caller, which finds the state in flight in
  * `inFlight`.
  *
- * The module imports only `../utils.js` and sibling `measure` modules and reads no Node builtin, so
- * it loads in a browser page.
+ * The module imports only the sampler module and reads no Node builtin, so it loads in a browser
+ * page.
  */
 
-import type { StrictOmit } from "../utils.js";
 import {
   calibratedSampleMs,
   recordWarmup,
-  resolvedClock,
   sampleBuffer,
   startWarmup,
   warmedUp,
   WARMUP_MIN_SAMPLES,
-  type SamplerClock,
   type SamplerResult,
   type Sampling,
   type TimedMinimums,
@@ -68,15 +65,13 @@ export function releaseInFlight<State>(inFlight: InFlight<State>): void {
   inFlight.state = undefined;
 }
 
-/** `now` defaults to `performance.now()`, and `resolutionMs` to a probe of `now`. */
-export interface PerCallOptions<State>
-  extends StrictOmit<Sampling, "now" | "resolutionMs">, SamplerClock, TimedMinimums {
+export interface PerCallOptions<State> extends Sampling, TimedMinimums {
   /** Builds the fresh state one body call consumes. */
   readonly setup: () => State;
   /** The benchmark body; every call receives a state built for it alone. */
   readonly fn: (state: State) => void;
-  /** Tears down a state once its body call returned; defaults to doing nothing. */
-  readonly teardown?: (state: State) => void;
+  /** Tears down a state once its body call returned. */
+  readonly teardown: (state: State) => void;
   /** Receives the state in flight; no two states are ever alive at once. */
   readonly inFlight?: InFlight<State>;
 }
@@ -206,9 +201,7 @@ function timeSamples<State>(
  *   sample runs it.
  */
 export function samplePerCall<State>(options: PerCallOptions<State>): SamplerResult {
-  const { setup, fn, collect, callsPerSample } = options;
-  const { now, resolutionMs } = resolvedClock(options);
-  const teardown = options.teardown ?? keep;
+  const { setup, fn, teardown, collect, callsPerSample, now, resolutionMs } = options;
   const inFlight = options.inFlight ?? { held: false, state: undefined };
   const perCall: PerCall<State> = { now, setup, fn, teardown, inFlight };
   const warmed = warmup(perCall, resolutionMs, callsPerSample);

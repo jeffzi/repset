@@ -12,12 +12,15 @@
 
 import { performanceNow, thrownMessage, timerResolutionMs } from "../utils.js";
 import { type GcDuringTiming, observeCollections, type TimingWindow } from "./collections.js";
-import { empty, type EmptyResult, type Lifecycle, sampleEmpty } from "./empty.js";
 import { holdInFlight, type InFlight, keep, releaseInFlight, samplePerCall } from "./per-call.js";
 import { runningRuntime } from "./runtime.js";
 import {
   CalibrationError,
+  recordWarmup,
   sampleSharedState,
+  startWarmup,
+  WARMUP_MIN_MS,
+  WARMUP_MIN_SAMPLES,
   type SamplerResult,
   type Sampling,
   type TimedMinimums,
@@ -39,7 +42,7 @@ export const DEFAULT_MIN_SAMPLES = 64;
 // ---------------------------------------------------------------------------
 
 /** Keeps the engine from inlining `fn` into its callers, as Bun's `bun:jsc` `noInline` does. */
-export type NoInline = typeof import("bun:jsc").noInline;
+type NoInline = typeof import("bun:jsc").noInline;
 
 /**
  * A benchmark: how to build its state, the body to time, and how to release the state.
@@ -58,8 +61,6 @@ export interface Case<State> {
 export interface MeasureOptions {
   /** Calls per sample to run instead of calibrating one, for the empty body and the body alike. */
   readonly callsPerSample?: number;
-  /** Replaces the runtime's `noInline`: `bun:jsc`'s under Bun, none on Node. */
-  readonly noInline?: NoInline;
   /** The clock, in milliseconds; defaults to `performance.now()`. */
   readonly now?: () => number;
   /**
@@ -103,23 +104,13 @@ export interface Measurement extends Statistics {
   readonly timingMs: number;
 }
 
-/** Each value is described by {@link Phase}. */
-export const PHASES = [
-  "setup",
-  "fn",
-  "teardown",
-  "optimized-away",
-  "calibration",
-  "child",
-] as const;
-
 /**
  * Where a case failed: `setup`, `fn` or `teardown` threw (`fn` also for a first call that returned
  * a thenable); `optimized-away`, the body is too close to the empty body to tell apart;
  * `calibration`, a count passed the cap or a third timing attempt was discarded; `child`, the
  * runtime lacks what measuring needs.
  */
-export type Phase = (typeof PHASES)[number];
+export type Phase = "setup" | "fn" | "teardown" | "optimized-away" | "calibration" | "child";
 
 /**
  * A failure of `measure`: the phase it failed in, and as `cause` the value a callback, the loader or
@@ -166,7 +157,7 @@ interface BodySampling extends Sampling, TimedMinimums {}
  * body: some bodies read up to 78 % slow.
  *
  * @param benchmark - The benchmark to measure.
- * @param options - A fixed count, an injected `noInline`, a clock to read, and the `minTime` and
+ * @param options - A fixed count, a clock to read, and the `minTime` and
  *   `minSamples` the body's timing attempts must pass, {@link DEFAULT_MIN_TIME} and
  *   {@link DEFAULT_MIN_SAMPLES} when absent; the empty body always takes the fixed count of timed
  *   samples {@link sampleEmpty} runs.
@@ -192,7 +183,7 @@ export async function measure<State>(
   options: MeasureOptions = {},
 ): Promise<Measurement> {
   const gc = exposedGc();
-  const noInline = options.noInline ?? (await runtimeNoInline());
+  const noInline = await runtimeNoInline();
   noInline?.(benchmark.fn);
   noInline?.(empty);
 
@@ -209,7 +200,11 @@ export async function measure<State>(
     },
   };
 
-  const bodySampling: BodySampling = { ...sampling, ...timedMinimums(options) };
+  const bodySampling: BodySampling = {
+    ...sampling,
+    minTime: options.minTime ?? DEFAULT_MIN_TIME,
+    minSamples: options.minSamples ?? DEFAULT_MIN_SAMPLES,
+  };
 
   const observer = observeCollections();
   let run: SamplerResult;
@@ -244,20 +239,6 @@ export async function measure<State>(
     timingAttempts: run.timingAttempts,
     warmupSamples: run.warmupSamples,
     timingMs: run.timingMs,
-  };
-}
-
-/**
- * The `minTime` and `minSamples` the body's timing attempts must pass.
- *
- * @param options - The options `measure` was given.
- * @returns The given `minTime` and `minSamples`, {@link DEFAULT_MIN_TIME} and
- *   {@link DEFAULT_MIN_SAMPLES} when absent.
- */
-function timedMinimums(options: MeasureOptions): TimedMinimums {
-  return {
-    minTime: options.minTime ?? DEFAULT_MIN_TIME,
-    minSamples: options.minSamples ?? DEFAULT_MIN_SAMPLES,
   };
 }
 
@@ -574,6 +555,116 @@ function tearDownCatching<State>(
 }
 
 // ---------------------------------------------------------------------------
+// The empty run
+// ---------------------------------------------------------------------------
+
+// The empty run times a body that does nothing, in a benchmark's own lifecycle, so `measure` can
+// tell a body from the loop around it. Spans are in milliseconds.
+//
+// Its loops are functions of their own, never `sampleSharedState` or `samplePerCall`: on Node, a
+// sampling loop that has already run the body reads the empty body about six times slow. The loops
+// keep the shape of the body's samplers, so they time what the body's loops cost.
+
+/** The empty run's timed samples, whatever `minTime` and `minSamples` the body ran on. */
+const TIMED_SAMPLES = 64;
+
+/** The empty body the body's reading is compared against. */
+function empty(): void {
+  // Times the sampling loop alone.
+}
+
+type EmptyResult = Pick<SamplerResult, "spans" | "sampleCount" | "callsPerSample">;
+
+/** How a benchmark builds the state its body runs on: one shared by every call, or one per call. */
+type Lifecycle = "sharedState" | "perCall";
+
+interface EmptyOptions extends Sampling {
+  /** `sharedState` times batched calls between one pair of clock reads; `perCall` sums per-call spans. */
+  readonly kind: Lifecycle;
+}
+
+// The empty body is reached through `fn`, as the samplers reach theirs, so these loops compile
+// as theirs do.
+interface Timed {
+  readonly now: () => number;
+  readonly fn: () => unknown;
+}
+
+/** Holds what the batched loop's last empty call returned, as the shared-state sampler does. */
+const consumed: { value: unknown } = { value: undefined };
+
+/**
+ * Times `count` consecutive empty calls between one pair of clock reads, then keeps what the last
+ * call returned, as a shared-state sample does.
+ *
+ * @param timed - The clock and the empty body.
+ * @param count - Calls in this sample.
+ * @returns The span, in milliseconds.
+ */
+function batched(timed: Timed, count: number): number {
+  const { now, fn } = timed;
+  let last: unknown;
+  const started = now();
+  for (let call = 0; call < count; call++) {
+    last = fn();
+  }
+  const spanMs = now() - started;
+  consumed.value = last;
+  return spanMs;
+}
+
+/**
+ * Times each of `count` empty calls between its own pair of clock reads and sums the spans, as a
+ * per-call sample does.
+ *
+ * @param timed - The clock and the empty body.
+ * @param count - Calls in this sample.
+ * @returns The summed span, in milliseconds.
+ */
+function summed(timed: Timed, count: number): number {
+  const { now, fn } = timed;
+  let total = 0;
+  for (let call = 0; call < count; call++) {
+    const started = now();
+    fn();
+    total += now() - started;
+  }
+  return total;
+}
+
+/**
+ * Times the empty body: warmup samples until both {@link WARMUP_MIN_MS} ms on the clock and
+ * {@link WARMUP_MIN_SAMPLES} samples have passed, calibrating the count unless one is fixed, then
+ * one collection, then {@link TIMED_SAMPLES} timed samples.
+ *
+ * The time minimum keeps the timed samples on the code the engine settles on: Bun can compile the
+ * empty loop partway through a shorter warmup, and the timed samples then read two speeds.
+ *
+ * @param options - The lifecycle to time it in, the clock, its resolution, the forced GC, and the
+ *   fixed count if one was given.
+ * @returns The {@link TIMED_SAMPLES} timed spans and the calls per sample they ran.
+ * @throws Whatever `collect` throws, and CalibrationError when warmup's count would pass
+ *   `ceil(200 × resolution / 0.1 ns)`, naming the count asked for and the cap.
+ */
+function sampleEmpty(options: EmptyOptions): EmptyResult {
+  const { kind, now, resolutionMs, collect, callsPerSample } = options;
+  const span = kind === "sharedState" ? batched : summed;
+  const timed: Timed = { now, fn: empty };
+  const progress = startWarmup(resolutionMs, callsPerSample);
+  const started = now();
+  while (progress.samples < WARMUP_MIN_SAMPLES || now() - started < WARMUP_MIN_MS) {
+    recordWarmup(progress, span(timed, progress.count));
+  }
+  const count = progress.count;
+  const spans = new Float64Array(TIMED_SAMPLES);
+  collect();
+  for (let stored = 0; stored < spans.length; stored++) {
+    spans[stored] = span(timed, count);
+  }
+  return { spans, sampleCount: spans.length, callsPerSample: count };
+}
+
+// ---------------------------------------------------------------------------
 // Statistics
 // ---------------------------------------------------------------------------
 
@@ -631,10 +722,7 @@ export function summarize(
     .subarray(0, stored)
     .toSorted()
     .map((spanMs) => (spanMs / callsPerSample) * NS_PER_MS);
-  let total = 0;
-  for (const time of sorted) {
-    total += time;
-  }
+  const total = sorted.reduce((sum, time) => sum + time, 0);
   return {
     min: quantile(sorted, 0),
     p25: quantile(sorted, 0.25),

@@ -88,21 +88,12 @@ function summarizeCollections(entries: readonly PerformanceEntry[]): GcDuringTim
   let totalMs = 0;
   let maxMs = 0;
   for (const entry of entries) {
-    const kind = gcKind(entry);
+    // The kind Node records in a `gc` entry's `detail`.
+    const kind = property(Reflect.get(entry, "detail"), "kind");
     if (kind === GC_MINOR) minor += 1;
     if (kind === GC_MAJOR) major += 1;
     totalMs += entry.duration;
     maxMs = Math.max(maxMs, entry.duration);
   }
   return { count: entries.length, minor, major, totalMs, maxMs };
-}
-
-/**
- * Reads the forced GC kind Node records in a `gc` entry's `detail`.
- *
- * @param entry - A `gc` performance entry.
- * @returns The entry's `detail.kind`, or `undefined` when it carries none.
- */
-function gcKind(entry: PerformanceEntry): unknown {
-  return property(Reflect.get(entry, "detail"), "kind");
 }

@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  describe as describeValue,
-  slashed,
-  thrownMessage,
-  timerResolutionMs,
-} from "../src/utils.js";
+import { describe as describeValue, thrownMessage, timerResolutionMs } from "../src/utils.js";
 
 const RESOLUTION = 0.125;
 const COARSE_TRANSITIONS = 2000;
@@ -53,14 +48,6 @@ describe("the describe function", () => {
 
       expect(described).toBe("a function");
     });
-  });
-});
-
-describe("slashed", () => {
-  it("replaces every Windows separator with a slash", () => {
-    expect(slashed(String.raw`benchmarks\nested\sort.bench.ts`, "\\")).toBe(
-      "benchmarks/nested/sort.bench.ts",
-    );
   });
 });
 

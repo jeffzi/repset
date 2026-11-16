@@ -5,13 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  type Case,
-  measure,
-  MeasureError,
-  type NoInline,
-  summarize,
-} from "../../src/measure/measure.js";
+import { type Case, measure, MeasureError, summarize } from "../../src/measure/measure.js";
 import { CalibrationError, cappedCount } from "../../src/measure/sampler.js";
 import { errorOf } from "../error-of.js";
 import { requiresRealBunHere } from "../real-bun.js";
@@ -80,8 +74,6 @@ interface Bench {
   readonly now: () => number;
   readonly log: string[];
   readonly live: Set<World>;
-  readonly noInline: NoInline;
-  readonly inlined: unknown[];
   readonly setupError: Error;
   readonly fnError: string;
   readonly teardownError: unknown;
@@ -105,7 +97,6 @@ function bench(kind: Kind, options: BenchOptions = {}): Bench {
   let teardownCalls = 0;
   const log: string[] = [];
   const live = new Set<World>();
-  const inlined: unknown[] = [];
   const setupError = new Error("banana");
   const fnError = "apple";
   const teardownError = "teardownThrows" in options ? options.teardownThrows : { name: "cherry" };
@@ -153,10 +144,6 @@ function bench(kind: Kind, options: BenchOptions = {}): Bench {
     now: clock.now,
     log,
     live,
-    noInline: (fn) => {
-      inlined.push(fn);
-    },
-    inlined,
     setupError,
     fnError,
     teardownError,
@@ -165,7 +152,7 @@ function bench(kind: Kind, options: BenchOptions = {}): Bench {
 
 /** Measures a benchmark on its scripted clock at a fixed count of one call per sample. */
 function run(fake: Bench): ReturnType<typeof measure> {
-  return measure(fake.benchmark, { now: fake.now, callsPerSample: 1, noInline: fake.noInline });
+  return measure(fake.benchmark, { now: fake.now, callsPerSample: 1 });
 }
 
 /**
@@ -195,7 +182,7 @@ function runOnUndefined(fake: Bench): ReturnType<typeof measure> {
       teardown(built());
     },
   };
-  return measure(benchmark, { now: fake.now, callsPerSample: 1, noInline: fake.noInline });
+  return measure(benchmark, { now: fake.now, callsPerSample: 1 });
 }
 
 /** The log entries naming a body call. */
@@ -615,16 +602,6 @@ describe("measure", () => {
     });
   });
 
-  describe("when given a noInline", () => {
-    it("hands an injected noInline the body itself", async () => {
-      const fake = bench("sharedState", { bodyMs: 200 });
-
-      await run(fake);
-
-      expect(fake.inlined).toContain(fake.benchmark.fn);
-    });
-  });
-
   describe("when comparing the body with the empty body", () => {
     // The empty body spans one resolution per sample, 125000 ns per call at one call per sample.
     it("fails a run whose body costs under 1.42 times the empty body in phase optimized-away, naming both readings", async () => {
@@ -647,9 +624,7 @@ describe("measure", () => {
     it("fails a shared-state run whose empty body asks for more calls per sample than the cap in phase calibration", async () => {
       const fake = bench("sharedState");
 
-      const error = await failure(
-        measure(fake.benchmark, { now: fake.now, noInline: fake.noInline }),
-      );
+      const error = await failure(measure(fake.benchmark, { now: fake.now }));
 
       expect(error.phase).toBe("calibration");
     });
@@ -680,7 +655,6 @@ describe("measure", () => {
       const result = await measure(fake.benchmark, {
         now: fake.now,
         callsPerSample: 1,
-        noInline: fake.noInline,
         minTime: 2950,
         minSamples: 10,
       });
@@ -926,30 +900,15 @@ console.log(JSON.stringify({
   );
 
   it(
-    "hands bun:jsc's noInline the body itself",
+    "hands bun:jsc's noInline the body and one other function, the empty body",
     () => {
       const bun = bunTestWithNoInlineMock(`
   await measure({ kind: "sharedState", setup, fn });
-  console.log("REPORT " + JSON.stringify({ fn: received.includes(fn) }));
+  console.log("REPORT " + JSON.stringify({ fn: received.includes(fn), handed: received.length }));
 `);
 
       expect(bun.status).toBe(0);
-      expect(bun.report).toStrictEqual({ fn: true });
-    },
-    BUN_TIMEOUT_MS,
-  );
-
-  it(
-    "leaves bun:jsc's noInline unused when one is injected",
-    () => {
-      const bun = bunTestWithNoInlineMock(`
-  const injected = [];
-  await measure({ kind: "sharedState", setup, fn }, { noInline: (fn) => { injected.push(fn); } });
-  console.log("REPORT " + JSON.stringify({ bunJsc: received.length, injected: injected.length }));
-`);
-
-      expect(bun.status).toBe(0);
-      expect(bun.report).toStrictEqual({ bunJsc: 0, injected: 2 });
+      expect(bun.report).toStrictEqual({ fn: true, handed: 2 });
     },
     BUN_TIMEOUT_MS,
   );

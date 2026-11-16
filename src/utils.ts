@@ -21,18 +21,17 @@ export function performanceNow(): number {
 }
 
 /**
- * Reads `now` until it has seen a given number of transitions, reads that differ from the
- * previous one, and measures the smallest change between them.
+ * Reads `now` until it has seen {@link TRANSITIONS_PER_PASS} transitions, reads that differ from
+ * the previous one, and measures the smallest change between them.
  *
  * @param now - The clock to read, in milliseconds.
- * @param transitions - How many transitions to measure.
  * @returns The smallest change across the measured transitions, in milliseconds.
  */
-function smallestChange(now: () => number, transitions: number): number {
+function smallestChange(now: () => number): number {
   let smallest = Number.POSITIVE_INFINITY;
   let previous = now();
   let seen = 0;
-  while (seen < transitions) {
+  while (seen < TRANSITIONS_PER_PASS) {
     const current = now();
     if (current !== previous) {
       smallest = Math.min(smallest, current - previous);
@@ -50,24 +49,12 @@ function smallestChange(now: () => number, transitions: number): number {
  * more than one resolution; the resolution is the smallest change across the second pass. Blocks
  * until the clock has advanced through both passes, so a clock that never changes never returns.
  *
- * @param now - The clock to probe, in milliseconds. Defaults to {@link performanceNow}.
+ * @param now - The clock to probe, in milliseconds.
  * @returns The clock's resolution in milliseconds.
  */
-export function timerResolutionMs(now: () => number = performanceNow): number {
-  smallestChange(now, TRANSITIONS_PER_PASS);
-  return smallestChange(now, TRANSITIONS_PER_PASS);
-}
-
-/**
- * Rewrites a path with `/` separators, whatever the OS.
- *
- * @param path - The path to rewrite.
- * @param separator - The OS's own separator, `sep` from `node:path`: the caller passes it so this
- *   module reads no Node builtin.
- * @returns `path` with every `separator` replaced by `/`.
- */
-export function slashed(path: string, separator: string): string {
-  return path.split(separator).join("/");
+export function timerResolutionMs(now: () => number): number {
+  smallestChange(now);
+  return smallestChange(now);
 }
 
 /** Names `value` in an error message without printing a function's source or an object's body. */

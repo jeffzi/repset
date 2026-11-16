@@ -29,7 +29,7 @@ import {
   type SelectInput,
 } from "./run.js";
 import { formatTable, metricLine, teardownLines } from "./table.js";
-import { slashed, type StrictOmit, thrownMessage } from "./utils.js";
+import { type StrictOmit, thrownMessage } from "./utils.js";
 
 /** Where the command prints: `process.stdout` and `process.stderr` fit. */
 export interface Output {
@@ -256,7 +256,7 @@ function announcing(context: Context): typeof realStartChild {
   const { cwd, stderr, startChild } = context;
   return async (runtime, request, options) => {
     if (request.mode === "list") {
-      stderr.write(`listing ${slashed(relative(cwd, request.file), sep)}\n`);
+      stderr.write(`listing ${relative(cwd, request.file).replaceAll(sep, "/")}\n`);
     } else {
       const verb = request.mode === "once" ? "running" : "measuring";
       stderr.write(`${verb} ${request.id} on ${runtime.runtime}\n`);

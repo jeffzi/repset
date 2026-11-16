@@ -108,7 +108,7 @@ function harness(costs: Costs): Harness {
 
 interface RunOptions {
   readonly resolutionMs: number;
-  readonly callsPerSample?: number | undefined;
+  readonly callsPerSample?: number;
   readonly inFlight?: InFlight<World>;
   readonly minTime?: number;
   readonly minSamples?: number;
@@ -226,22 +226,14 @@ describe("samplePerCall", () => {
         expect(fake.collectsAt).toStrictEqual([1000]);
       });
 
-      it.each([{ count: "a calibrated", callsPerSample: undefined }])(
-        "stops timing $count count at the store's size, `time` in samples of 200 times the resolution, rounded up, plus `samples`",
-        ({ callsPerSample }) => {
-          const fake = harness({ bodyMs: (_sample, timed) => (timed ? 0.125 : 1) });
+      it("stops timing a calibrated count at the store's size, `time` in samples of 200 times the resolution, rounded up, plus `samples`", () => {
+        const fake = harness({ bodyMs: (_sample, timed) => (timed ? 0.125 : 1) });
 
-          const result = run(fake, {
-            resolutionMs: FINE_RESOLUTION,
-            callsPerSample,
-            minTime: 100.1,
-            minSamples: 10,
-          });
+        const result = run(fake, { resolutionMs: FINE_RESOLUTION, minTime: 100.1, minSamples: 10 });
 
-          expect(result.spans).toHaveLength(523);
-          expect(result.sampleCount).toBe(523);
-        },
-      );
+        expect(result.spans).toHaveLength(523);
+        expect(result.sampleCount).toBe(523);
+      });
     });
   });
 

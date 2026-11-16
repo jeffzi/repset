@@ -690,7 +690,7 @@ describe("measure", () => {
   });
 
   describe("when it returns a result", () => {
-    it("returns the timed statistics with the resolution, the fixed count, the forced GC and the ratio to the empty body", async () => {
+    it("returns the timed statistics with the resolution, the fixed count, the collections seen while timing and the ratio to the empty body", async () => {
       const fake = bench("sharedState");
 
       const result = await measure(fake.benchmark, { now: fake.now, callsPerSample: 2 });
@@ -787,11 +787,15 @@ describe("measure", () => {
 });
 
 describe("summarize", () => {
-  describe("when the spans are stored ascending", () => {
-    it("reports per-call nanoseconds with percentiles interpolated between ranks", () => {
-      const spans = Float64Array.of(4, 8, 12, 16);
+  it.each([
+    { order: "ascending", spans: [4, 8, 12, 16] },
+    { order: "out of order", spans: [12, 4, 16, 8] },
+  ])(
+    "reports per-call nanoseconds with percentiles interpolated between ranks when the spans are stored $order",
+    ({ spans }) => {
+      const store = Float64Array.from(spans);
 
-      const statistics = summarize(spans, 4, 4);
+      const statistics = summarize(store, 4, 4);
 
       expect(statistics).toStrictEqual({
         min: 1_000_000,
@@ -803,18 +807,8 @@ describe("summarize", () => {
         mean: 2_500_000,
         sampleCount: 4,
       });
-    });
-  });
-
-  describe("when the spans are stored out of order", () => {
-    it("reports the same statistics as the ascending store", () => {
-      const ascending = summarize(Float64Array.of(4, 8, 12, 16), 4, 4);
-
-      const shuffled = summarize(Float64Array.of(12, 4, 16, 8), 4, 4);
-
-      expect(shuffled).toStrictEqual(ascending);
-    });
-  });
+    },
+  );
 
   describe("when the store is only partly filled", () => {
     it("ignores the slots past the stored count", () => {

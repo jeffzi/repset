@@ -407,8 +407,8 @@ describe("run", () => {
   });
 
   describe("when the config file sets a relative nodeImport", () => {
-    it("starts every child under timeout with the nodeImport resolved against the config's directory", async () => {
-      const resolved = fileURLToPath(new URL("fixtures/config/nested/loader.mjs", import.meta.url));
+    it("starts every child under timeout with the nodeImport as the file URL beside the config", async () => {
+      const resolved = new URL("fixtures/config/nested/loader.mjs", import.meta.url).href;
       const echoOptions: StartChild = async (_runtime, request, options) => {
         const asked = `${request.mode} ${String(options.nodeImport)} ${String(options.timeout)}`;
         return request.mode === "list"

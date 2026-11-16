@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
@@ -250,15 +250,15 @@ describe("resolveOptions", () => {
       {
         name: "nested/dot-import.ts",
         written: "./loader.mjs",
-        resolved: fixture("nested/loader.mjs"),
+        resolved: pathToFileURL(fixture("nested/loader.mjs")).href,
       },
       {
         name: "nested/parent-import.ts",
         written: "../loader.mjs",
-        resolved: fixture("loader.mjs"),
+        resolved: pathToFileURL(fixture("loader.mjs")).href,
       },
     ])(
-      "resolves the config file's $written against its directory, keeping it as written",
+      "resolves the config file's $written to the file URL beside it, keeping it as written",
       async ({ name, written, resolved }) => {
         const options = await resolveHere({ config: name });
 

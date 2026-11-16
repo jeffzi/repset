@@ -260,7 +260,10 @@ function resolvedNodeImport(
   if (caller !== undefined) return { written: caller, resolved: caller };
   if (fromFile === undefined || file === undefined) return undefined;
   const relative = fromFile.startsWith("./") || fromFile.startsWith("../");
-  return { written: fromFile, resolved: relative ? resolve(dirname(file), fromFile) : fromFile };
+  // Node's `--import` parses its argument as a URL: a bare path breaks on `#`, `?` or `%` in a
+  // directory name, and on a Windows drive letter.
+  const resolved = relative ? pathToFileURL(resolve(dirname(file), fromFile)).href : fromFile;
+  return { written: fromFile, resolved };
 }
 
 /**
@@ -271,7 +274,7 @@ function resolvedNodeImport(
  * `.mjs`. Each value is checked whether the config file or the caller gave it, and a key holding
  * `undefined` counts as absent. `include` is relative to the config file's directory, or to
  * `options.cwd` when no config file was read. A `nodeImport` from the config file that starts
- * `./` or `../` is resolved against the config file's directory.
+ * `./` or `../` becomes the file URL of that path beside the config file.
  *
  * @param options - The caller's options, the config to read and the working directory.
  * @returns The checked and merged options.

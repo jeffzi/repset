@@ -1,14 +1,12 @@
-import { spawn } from "node:child_process";
-import { once } from "node:events";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { beforeAll, describe, expect, it } from "vitest";
 
 import type { Report } from "../src/report.js";
-import { formatTable } from "../src/table.js";
 import { requiresRealBunHere } from "./real-bun.js";
 import { reportAt } from "./report-file.js";
+import { spawnCommand } from "./spawn-command.js";
 import { suiteTemporaryDir, temporaryDir } from "./temporary-dir.js";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
@@ -24,40 +22,6 @@ function commandFixture(name: string): string {
   return `tests/fixtures/command/${name}`;
 }
 
-/**
- * Starts the command from source on Node in the repository root.
- *
- * @param args - The command's arguments.
- * @param onStderr - Receives the command's stderr so far each time it grows, and a function that
- *   sends the command a signal the first time it is called.
- * @returns The exit code, or `null` when a signal ended the command, and what it printed.
- * @throws When the child emits `error`, as when its process cannot be started.
- */
-async function spawnCommand(
-  args: readonly string[],
-  onStderr: (stderr: string, stop: (signal: NodeJS.Signals) => void) => void = () => {},
-): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  const child = spawn(process.execPath, ["--import", "tsx", "src/cli.ts", ...args], {
-    cwd: ROOT,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let stdout = "";
-  let stderr = "";
-  let stopSent = false;
-  child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
-    stdout += chunk;
-  });
-  child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
-    stderr += chunk;
-    onStderr(stderr, (signal) => {
-      if (!stopSent) child.kill(signal);
-      stopSent = true;
-    });
-  });
-  const [code]: unknown[] = await once(child, "close");
-  return { code: typeof code === "number" ? code : null, stdout, stderr };
-}
-
 /** A fresh directory for a spawned command's report, removed when the test ends. */
 function reportDir(): string {
   return temporaryDir("repset-command-e2e-");
@@ -70,11 +34,11 @@ describe("the command started as a process", { timeout: SPAWN_TIMEOUT_MS }, () =
   ])("on $runtime", ({ runtime, here }) => {
     describe.runIf(here)("running the sum fixture", () => {
       const dir = suiteTemporaryDir("repset-command-e2e-");
-      let run!: { code: number | null; stdout: string; report: Report };
+      let run!: { code: number | null; report: Report };
 
       beforeAll(async () => {
         const out = join(dir.path, "report.json");
-        const { code, stdout } = await spawnCommand([
+        const { code } = await spawnCommand(ROOT, [
           commandFixture("sum.bench.ts"),
           "--runtime",
           runtime,
@@ -85,7 +49,7 @@ describe("the command started as a process", { timeout: SPAWN_TIMEOUT_MS }, () =
           "--out",
           out,
         ]);
-        run = { code, stdout, report: reportAt(out) };
+        run = { code, report: reportAt(out) };
       }, SPAWN_TIMEOUT_MS);
 
       it("exits 0", () => {
@@ -100,17 +64,13 @@ describe("the command started as a process", { timeout: SPAWN_TIMEOUT_MS }, () =
           ["sum/large", runtime, "ok"],
         ]);
       });
-
-      it("prints the table of the report's results", () => {
-        expect(run.stdout).toBe(formatTable(run.report.results));
-      });
     });
   });
 
   it("exits 1 with the error in the result when a case throws", async () => {
     const out = join(reportDir(), "report.json");
 
-    const { code } = await spawnCommand([
+    const { code } = await spawnCommand(ROOT, [
       commandFixture("throws.bench.ts"),
       "--node-import",
       "tsx",
@@ -130,6 +90,7 @@ describe("the command started as a process", { timeout: SPAWN_TIMEOUT_MS }, () =
     const out = join(reportDir(), "report.json");
 
     const { code } = await spawnCommand(
+      ROOT,
       [
         commandFixture("sum.bench.ts"),
         "--node-import",

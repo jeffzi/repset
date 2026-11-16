@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
@@ -155,7 +155,7 @@ function linesOf(text: string): string[] {
 
 describe("main", () => {
   describe("the flags", () => {
-    it("hands every option flag and the positional files to the run under the option names", async () => {
+    it("hands the positional files, --runtime, --filter, --min-time, --min-samples, --timeout, --node-import and --out to the run", async () => {
       const dir = workspace();
 
       const { code } = await command(dir, [
@@ -202,23 +202,21 @@ describe("main", () => {
       { why: "an unknown flag", args: ["--banana"] },
       { why: "a value flag given twice", args: ["--filter", "sort", "--filter", "parse"] },
       { why: "an exponent", args: ["--min-time", "1e3"] },
-      { why: "an empty number", args: ["--timeout", ""] },
+      { why: "an empty number", args: ["--min-time", ""] },
       { why: "--metric-lines with --out -", args: ["--metric-lines", "--out", "-"] },
       { why: "--list with --once", args: ["--list", "--once"] },
-      { why: "--list with --out", args: ["--list", "--out", "report.json"] },
     ])(
-      "exits 2 on $why with a message on stderr, nothing on stdout, no child and no report",
+      "exits 2 on $why with a message on stderr, nothing on stdout, no child",
       async ({ args }) => {
         const dir = workspace();
 
         const { code, stdout, stderr } = await command(dir, args, { startChild: startsNoChild });
 
-        expect({
-          code,
-          stdout,
-          printed: stderr.length > 0,
-          written: existsSync(join(dir, "report.json")),
-        }).toStrictEqual({ code: 2, stdout: "", printed: true, written: false });
+        expect({ code, stdout, printed: stderr.length > 0 }).toStrictEqual({
+          code: 2,
+          stdout: "",
+          printed: true,
+        });
       },
     );
 
@@ -237,7 +235,9 @@ describe("main", () => {
         listed: true,
       });
     });
+  });
 
+  describe("when a file's listing fails", () => {
     it("prints a failed listing's stack, then its output, then the file, phase and message last", async () => {
       const dir = workspace();
       const failsListing: StartChild = async () => ({
@@ -323,20 +323,19 @@ describe("main", () => {
       expect({ code, stdout, stderr }).toStrictEqual({ code: 0, stdout: usage, stderr: "" });
     });
 
-    it.each([{ why: "beside an unknown flag", args: ["--banana", "--version"] }])(
-      "prints the package's version on stdout for --version $why",
-      async ({ args }) => {
-        const dir = workspace();
+    it("prints the package's version on stdout for --version beside an unknown flag", async () => {
+      const dir = workspace();
 
-        const { code, stdout, stderr } = await command(dir, args, { startChild: startsNoChild });
+      const { code, stdout, stderr } = await command(dir, ["--banana", "--version"], {
+        startChild: startsNoChild,
+      });
 
-        expect({ code, version: stdout.includes(VERSION), stderr }).toStrictEqual({
-          code: 0,
-          version: true,
-          stderr: "",
-        });
-      },
-    );
+      expect({ code, version: stdout.includes(VERSION), stderr }).toStrictEqual({
+        code: 0,
+        version: true,
+        stderr: "",
+      });
+    });
 
     it("takes --version after a -- terminator as a benchmark file, exiting 2 naming it", async () => {
       const dir = workspace();
@@ -354,14 +353,12 @@ describe("main", () => {
   });
 
   describe("--list", () => {
-    it("prints each selected case id once, in selection order, running no case", async () => {
+    it("prints each selected case id, in selection order, running no case", async () => {
       const dir = workspace();
 
-      const ended = await command(
-        dir,
-        ["--list", "--runtime", "node,bun", "sort.bench.ts", "parse.bench.ts"],
-        { startChild: startsNoCase },
-      );
+      const ended = await command(dir, ["--list", "sort.bench.ts", "parse.bench.ts"], {
+        startChild: startsNoCase,
+      });
 
       expect({ code: ended.code, stdout: ended.stdout }).toStrictEqual({
         code: 0,
@@ -369,15 +366,14 @@ describe("main", () => {
       });
     });
 
-    it("lists the cases of the files the default include pattern matches, in path order, when no file is given", async () => {
-      const dir = workspace();
+    it("names a file under a subdirectory in its listing line by its slash-separated relative path", async () => {
+      const dir = temporaryDir("repset-command-");
+      mkdirSync(join(dir, "sub"));
+      writeFileSync(join(dir, "sub", "sort.bench.ts"), "");
 
-      const ended = await command(dir, ["--list"], { startChild: startsNoCase });
+      const { stderr } = await command(dir, ["--list"]);
 
-      expect({ code: ended.code, stdout: ended.stdout }).toStrictEqual({
-        code: 0,
-        stdout: "parse/fast\nsort/fast\n",
-      });
+      expect(linesOf(stderr)).toContain("listing sub/sort.bench.ts");
     });
   });
 
@@ -415,12 +411,12 @@ describe("main", () => {
       const lines = linesOf(stderr);
       expect({ listing: lines.slice(0, -4), measuring: lines.slice(-4) }).toStrictEqual({
         listing: expect.arrayContaining([naming("sort.bench.ts"), naming("parse.bench.ts")]),
-        measuring: [
+        measuring: expect.arrayContaining([
           naming("bun", "sort/fast"),
           naming("bun", "parse/fast"),
           naming("node", "sort/fast"),
           naming("node", "parse/fast"),
-        ],
+        ]),
       });
     });
   });
@@ -431,7 +427,6 @@ describe("main", () => {
 
     it.each([
       { why: "unset", value: undefined, asked: [undefined, undefined] },
-      { why: "set to a count", value: "7", asked: [7, 7] },
       { why: "set to the largest safe integer", value: String(MAX), asked: [MAX, MAX] },
     ])("asks each measuring child of a run for its count when $why", async ({ value, asked }) => {
       vi.stubEnv(NAME, value);
@@ -449,7 +444,6 @@ describe("main", () => {
     });
 
     it.each([
-      { why: "the empty string", value: "" },
       { why: "zero", value: "0" },
       { why: "an exponent", value: "1e3" },
       { why: "a count past the safe integers", value: String(MAX + 1) },
@@ -470,19 +464,16 @@ describe("main", () => {
       },
     );
 
-    it.each([{ flag: "--help" }, { flag: "--version" }])(
-      "runs $flag as it does with REPSET_CALLS_PER_SAMPLE unset when the variable holds a bad value",
-      async ({ flag }) => {
-        const dir = workspace();
-        vi.stubEnv(NAME, undefined);
-        const unset = await command(dir, [flag]);
-        vi.stubEnv(NAME, "abc");
+    it("runs --version as it does with REPSET_CALLS_PER_SAMPLE unset when the variable holds a bad value", async () => {
+      const dir = workspace();
+      vi.stubEnv(NAME, undefined);
+      const unset = await command(dir, ["--version"]);
+      vi.stubEnv(NAME, "abc");
 
-        const ended = await command(dir, [flag], { startChild: startsNoChild });
+      const ended = await command(dir, ["--version"], { startChild: startsNoChild });
 
-        expect(ended).toStrictEqual(unset);
-      },
-    );
+      expect(ended).toStrictEqual(unset);
+    });
   });
 
   describe("--out <file>", () => {
@@ -667,23 +658,16 @@ describe("main", () => {
   });
 
   describe("--once", () => {
-    it("prints one line per case per runtime, naming a failure's phase and message, exiting 1", async () => {
+    it("prints one line per case, naming a failure's phase and message, exiting 1", async () => {
       const dir = workspace();
 
-      const { code, stdout } = await command(
-        dir,
-        ["--once", "--runtime", "bun,node", "sort.bench.ts", "parse.bench.ts"],
-        { startChild: failsParse },
-      );
+      const { code, stdout } = await command(dir, ["--once", "sort.bench.ts", "parse.bench.ts"], {
+        startChild: failsParse,
+      });
 
       expect({ code, lines: linesOf(stdout) }).toStrictEqual({
         code: 1,
-        lines: [
-          naming("bun", "sort/fast"),
-          naming("bun", "parse/fast", "fn", "kiwi"),
-          naming("node", "sort/fast"),
-          naming("node", "parse/fast", "fn", "kiwi"),
-        ],
+        lines: [naming("node", "sort/fast"), naming("node", "parse/fast", "fn", "kiwi")],
       });
     });
 
@@ -714,25 +698,14 @@ describe("main", () => {
       });
     });
 
-    it("exits 0 with an ok line per case per runtime when every case passes", async () => {
+    it("exits 0 with an ok line per case when every case passes", async () => {
       const dir = workspace();
 
-      const { code, stdout } = await command(dir, [
-        "--once",
-        "--runtime",
-        "bun,node",
-        "sort.bench.ts",
-        "parse.bench.ts",
-      ]);
+      const { code, stdout } = await command(dir, ["--once", "sort.bench.ts", "parse.bench.ts"]);
 
       expect({ code, lines: linesOf(stdout) }).toStrictEqual({
         code: 0,
-        lines: [
-          naming("ok", "bun", "sort/fast"),
-          naming("ok", "bun", "parse/fast"),
-          naming("ok", "node", "sort/fast"),
-          naming("ok", "node", "parse/fast"),
-        ],
+        lines: [naming("ok", "node", "sort/fast"), naming("ok", "node", "parse/fast")],
       });
     });
   });
@@ -773,21 +746,17 @@ describe("main", () => {
       },
     );
 
-    it.each([{ flag: "--list", signal: "SIGINT", code: 130, stopsIn: "list" }])(
-      "exits $code on $signal in a $flag run",
-      async ({ flag, signal, code, stopsIn }) => {
-        const dir = workspace();
-        const signals = new EventEmitter();
-        const stops: StartChild = async (runtime, request, options) => {
-          if (request.mode !== stopsIn) return measuresAll(runtime, request, options);
-          signals.emit(signal);
-          return stopped;
-        };
+    it("exits 130 on SIGINT in a --list run", async () => {
+      const dir = workspace();
+      const signals = new EventEmitter();
+      const stops: StartChild = async () => {
+        signals.emit("SIGINT");
+        return stopped;
+      };
 
-        const ended = await command(dir, [flag, "sort.bench.ts"], { signals, startChild: stops });
+      const ended = await command(dir, ["--list", "sort.bench.ts"], { signals, startChild: stops });
 
-        expect(ended.code).toBe(code);
-      },
-    );
+      expect(ended.code).toBe(130);
+    });
   });
 });

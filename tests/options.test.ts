@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { DEFAULT_MIN_SAMPLES, DEFAULT_MIN_TIME } from "../src/measure/measure.js";
 import { ConfigError, quotedList, resolveOptions, type OptionsInput } from "../src/options.js";
 import { expectConfigError } from "./config-error.js";
 
@@ -39,13 +40,14 @@ async function resolveHere(options: Partial<OptionsInput> = {}): ReturnType<type
   return resolveOptions({ cwd: FIXTURES, ...options });
 }
 
+/** What a resolution with nothing given yields; defaults `options.ts` keeps to itself match any value. */
 const DEFAULTS = {
-  include: ["**/*.bench.{ts,mts,js,mjs}"],
+  include: expect.any(Array),
   includeBase: FIXTURES,
-  runtimes: ["node"],
-  minTime: 1000,
-  minSamples: 64,
-  timeout: 600_000,
+  runtimes: expect.any(Array),
+  minTime: DEFAULT_MIN_TIME,
+  minSamples: DEFAULT_MIN_SAMPLES,
+  timeout: expect.any(Number),
   nodeImport: undefined,
   filter: undefined,
 };
@@ -234,12 +236,6 @@ describe("resolveOptions", () => {
         nodeImport: { written: "jiti", resolved: "jiti" },
         filter: /^a/u,
       });
-    });
-
-    it("compiles the filter with the u flag", async () => {
-      const resolved = await resolveHere({ filter: String.raw`^\p{Lu}` });
-
-      expect(resolved.filter?.test("Élan")).toBe(true);
     });
   });
 

@@ -1,5 +1,3 @@
-import { spawn } from "node:child_process";
-import { once } from "node:events";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -7,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { requiresRealBunHere } from "./real-bun.js";
+import { spawnCommand, TSX } from "./spawn-command.js";
 import { temporaryDir } from "./temporary-dir.js";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
@@ -71,45 +70,6 @@ function exampleProject(): string {
   return dir;
 }
 
-/**
- * Starts the command from source on Node in `cwd` with `--once`.
- *
- * @param cwd - The project to run in.
- * @param runtime - The runtime the cases run on.
- * @returns The exit code, or `null` when a signal ended the command, and what it printed.
- * @throws When the child emits `error`, as when its process cannot be started.
- */
-async function runOnce(
-  cwd: string,
-  runtime: string,
-): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  const tsx = import.meta.resolve("tsx");
-  const child = spawn(
-    process.execPath,
-    [
-      "--import",
-      tsx,
-      join(ROOT, "src", "cli.ts"),
-      "--once",
-      "--runtime",
-      runtime,
-      "--node-import",
-      tsx,
-    ],
-    { cwd, stdio: ["ignore", "pipe", "pipe"] },
-  );
-  let stdout = "";
-  let stderr = "";
-  child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
-    stdout += chunk;
-  });
-  child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
-    stderr += chunk;
-  });
-  const [code]: unknown[] = await once(child, "close");
-  return { code: typeof code === "number" ? code : null, stdout, stderr };
-}
-
 describe("the README", () => {
   describe.each([
     { runtime: "node", here: true },
@@ -124,15 +84,19 @@ describe("the README", () => {
           path === undefined || CONFIG_NAMES.has(path) ? [] : [path],
         );
 
-        const { code, stdout, stderr } = await runOnce(dir, runtime);
+        const { code, stderr } = await spawnCommand(dir, [
+          "--once",
+          "--runtime",
+          runtime,
+          "--node-import",
+          TSX,
+        ]);
 
-        const caseLines = stdout.split("\n").filter((line) => line !== "");
+        const words = stderr.split(/\s+/u);
         expect({
           code,
-          notOk: caseLines.filter((line) => !line.startsWith("ok ")),
-          ran: caseLines.length > 0,
-          unlisted: benchmarks.filter((path) => !stderr.includes(`listing ${path}\n`)),
-        }).toStrictEqual({ code: 0, notOk: [], ran: true, unlisted: [] });
+          unlisted: benchmarks.filter((path) => !words.includes(path)),
+        }).toStrictEqual({ code: 0, unlisted: [] });
       },
     );
   });

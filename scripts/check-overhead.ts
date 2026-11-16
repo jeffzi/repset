@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import type { SamplingReport } from "../src/child.js";
 import { CALLS_PER_SAMPLE } from "../src/command.js";
 import { RUNTIMES, type Runtime } from "../src/measure/runtime.js";
+import { MIN_RESOLUTIONS_PER_SAMPLE } from "../src/measure/sampler.js";
 import type { Report } from "../src/report.js";
 import { isRecord, thrownMessage } from "../src/utils.js";
 import { BODY_NAMES, type BodyName } from "./check-overhead/bodies.js";
@@ -73,9 +74,6 @@ const BENCH_FILE = "scripts/check-overhead/overhead.bench.ts";
 const BASELINE_CHILD = join(ROOT, "scripts", "check-overhead", "baseline-child.ts");
 
 const PAIRS = 12;
-
-/** The span, in timer resolutions, a calibrated reading's median timed sample reaches at least. */
-const MIN_SPAN_RESOLUTIONS = 200;
 
 const COUNT_MODES: readonly Scenario["countMode"][] = ["calibrated", "one-call"];
 
@@ -452,9 +450,9 @@ function floorBreaks(name: string, rounds: readonly Round[]): string[] {
       const where = pairPlace(name, roundIndex, index);
       const span = spanInResolutions(reading);
       const lines: string[] = [];
-      if (span < MIN_SPAN_RESOLUTIONS) {
+      if (span < MIN_RESOLUTIONS_PER_SAMPLE) {
         lines.push(
-          `${where} median sample spans ${span.toFixed(1)} resolutions, under ${String(MIN_SPAN_RESOLUTIONS)}`,
+          `${where} median sample spans ${span.toFixed(1)} resolutions, under ${String(MIN_RESOLUTIONS_PER_SAMPLE)}`,
         );
       }
       if (reading.timingMs < reading.minTime) {

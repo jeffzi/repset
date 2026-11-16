@@ -14,7 +14,7 @@
  */
 
 /** Every sample spans at least this many multiples of the timer resolution once warmup calibrates its count. */
-const MIN_RESOLUTIONS_PER_SAMPLE = 200;
+export const MIN_RESOLUTIONS_PER_SAMPLE = 200;
 
 /** A warmup sample that read no clock change multiplies its count by this: a zero span gives no ratio. */
 const ZERO_STEP_GROWTH = 100;

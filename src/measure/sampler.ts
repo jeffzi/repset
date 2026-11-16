@@ -1,6 +1,9 @@
 /**
- * The shared-state sampler: warmup that calibrates the calls per sample, then timing attempts, each
- * after a collection, every sample on the caller's single state. Spans are in milliseconds.
+ * The contract every sampler shares, and the shared-state sampler: the `Sampling` options, the
+ * `SamplerResult` a sampler returns, the clock and the warmup and calibration code the per-call and
+ * empty samplers reuse, then `sampleSharedState` itself. That sampler warms up to calibrate the calls
+ * per sample, then takes timing attempts, each after a collection, every sample on the caller's
+ * single state. Spans are in milliseconds.
  *
  * Every function from `sampleSharedState` down to the body is plain synchronous code: no `try`,
  * `catch`, `finally`, `async` function, generator or Promise encloses the timed calls or the loops
@@ -10,7 +13,7 @@
  * The module imports only `../utils.js` and reads no Node builtin, so it loads in a browser page.
  */
 
-import { performanceNow, timerResolutionMs } from "../utils.js";
+import { performanceNow, type StrictOmit, timerResolutionMs } from "../utils.js";
 
 /** Every sample spans at least this many multiples of the timer resolution once warmup calibrates its count. */
 const MIN_RESOLUTIONS_PER_SAMPLE = 200;
@@ -95,8 +98,7 @@ export interface TimedMinimums {
 
 /** `now` defaults to `performance.now()`, and `resolutionMs` to a probe of `now`. */
 export interface SharedStateOptions<State>
-  extends Omit<Sampling, "now" | "resolutionMs">, SamplerClock, TimedMinimums {
-  /** The benchmark body; every call receives `state`. */
+  extends StrictOmit<Sampling, "now" | "resolutionMs">, SamplerClock, TimedMinimums {
   readonly fn: (state: State) => unknown;
   /** The one state every sample runs on; the caller builds and tears it down. */
   readonly state: State;
@@ -334,7 +336,8 @@ interface SharedStateWarmup extends WarmupResult {
 }
 
 /**
- * Runs warmup samples until both 250 ms and 16 samples have passed, calibrating the count unless
+ * Runs warmup samples until both {@link WARMUP_MIN_MS} ms and
+ * {@link WARMUP_MIN_SAMPLES} samples have passed, calibrating the count unless
  * one was fixed.
  *
  * @param timed - The clock, the body, and its state.
@@ -411,7 +414,7 @@ function timeSamples<State>(
  * @param timed - The clock, the body, and its state.
  * @param count - Calls per sample.
  * @param spans - Preallocated storage for the spans, in milliseconds.
- * @param hooks - The `collect` callback that runs before the samples, the `afterTiming` callback
+ * @param attempt - The `collect` callback that runs before the samples, the `afterTiming` callback
  *   that runs after the last sample, before the run is checked (absent means nothing), and the
  *   `minTime` and `minSamples` the run must pass.
  * @returns How many entries of `spans` were filled, whether the store filled first, and the run's
@@ -422,11 +425,11 @@ function timingAttempt<State>(
   timed: Timed<State>,
   count: number,
   spans: Float64Array,
-  hooks: Pick<SharedStateOptions<State>, "collect" | "afterTiming" | "minTime" | "minSamples">,
+  attempt: Pick<SharedStateOptions<State>, "collect" | "afterTiming" | "minTime" | "minSamples">,
 ): TimedAttempt {
-  hooks.collect();
-  const run = timeSamples(timed, count, spans, hooks);
-  hooks.afterTiming?.();
+  attempt.collect();
+  const run = timeSamples(timed, count, spans, attempt);
+  attempt.afterTiming?.();
   return run;
 }
 
@@ -510,26 +513,18 @@ export function sampleSharedState<State>(options: SharedStateOptions<State>): Sa
   let warmupSamples = warmed.warmupSamples;
   let timingAttempts = 1;
   let run = timingAttempt(timed, calls, spans, options);
-  if (callsPerSample !== undefined) {
-    return {
-      spans,
-      sampleCount: run.stored,
-      callsPerSample: calls,
-      timingAttempts,
-      warmupSamples,
-      timingMs: run.lengthMs,
-    };
-  }
-  while (!isKept(spans, run, resolutionMs)) {
-    calls = grownCount(calls, spans.subarray(0, run.stored), resolutionMs);
-    if (timingAttempts === MAX_TIMING_ATTEMPTS) {
-      throw new CalibrationError(
-        `${String(timingAttempts)} timing attempts were discarded; the next would need ${String(calls)} calls per sample`,
-      );
+  if (callsPerSample === undefined) {
+    while (!isKept(spans, run, resolutionMs)) {
+      calls = grownCount(calls, spans.subarray(0, run.stored), resolutionMs);
+      if (timingAttempts === MAX_TIMING_ATTEMPTS) {
+        throw new CalibrationError(
+          `${String(timingAttempts)} timing attempts were discarded; the next would need ${String(calls)} calls per sample`,
+        );
+      }
+      warmupSamples += run.stored;
+      run = timingAttempt(timed, calls, spans, options);
+      timingAttempts += 1;
     }
-    warmupSamples += run.stored;
-    run = timingAttempt(timed, calls, spans, options);
-    timingAttempts += 1;
   }
   return {
     spans,

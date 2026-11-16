@@ -3,14 +3,22 @@
  * prints what a person or a tool reads, returning the exit code.
  */
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, relative, resolve } from "node:path";
+import { dirname, relative, resolve, sep } from "node:path";
 import { parseArgs } from "node:util";
 
 import { findRuntime as realFindRuntime, startChild as realStartChild } from "./children.js";
 import type { Runtime } from "./measure/runtime.js";
-import { ConfigError, isRuntime, type OptionsInput, resolveOptions } from "./options.js";
+import {
+  ConfigError,
+  isRuntime,
+  type OptionsInput,
+  QUOTED_RUNTIMES,
+  resolveOptions,
+} from "./options.js";
 import type { Report, Result } from "./report.js";
 import {
+  type ChildFunctionOverrides,
+  type ChildFunctions,
   ListingError,
   packageVersion,
   run,
@@ -19,8 +27,8 @@ import {
   selectCases,
   type SelectInput,
 } from "./run.js";
-import { formatTable, metricLine } from "./table.js";
-import { thrownMessage } from "./utils.js";
+import { formatTable, metricLine, teardownLines } from "./table.js";
+import { slashed, type StrictOmit, thrownMessage } from "./utils.js";
 
 /** Where the command prints: `process.stdout` and `process.stderr` fit. */
 export interface Output {
@@ -28,7 +36,9 @@ export interface Output {
 }
 
 /** The signals that interrupt a run. */
-type Signal = "SIGINT" | "SIGTERM";
+const SIGNALS = ["SIGINT", "SIGTERM"] as const;
+
+type Signal = (typeof SIGNALS)[number];
 
 /** What delivers the interrupting signals: `process` fits. */
 export interface SignalSource {
@@ -37,14 +47,12 @@ export interface SignalSource {
 }
 
 /** What the command reads from and prints to, and the functions it starts children with. */
-export interface CommandIo {
+export interface CommandIo extends ChildFunctionOverrides {
   /** The directory positional files, `--out` and `--config` are relative to; `process.cwd()` by default. */
   readonly cwd?: string | undefined;
   readonly stdout?: Output | undefined;
   readonly stderr?: Output | undefined;
   readonly signals?: SignalSource | undefined;
-  readonly findRuntime?: typeof realFindRuntime | undefined;
-  readonly startChild?: typeof realStartChild | undefined;
 }
 
 /** The exit code of a run interrupted by each signal: 128 plus the signal's number. */
@@ -66,7 +74,9 @@ const FLAGS = {
   version: { type: "boolean" },
 } as const;
 
-const EXCLUSIVE: readonly (readonly [string, string])[] = [
+type FlagName = keyof typeof FLAGS;
+
+const EXCLUSIVE: readonly (readonly [FlagName, FlagName])[] = [
   ["list", "once"],
   ["list", "out"],
   ["list", "metric-lines"],
@@ -76,6 +86,12 @@ const EXCLUSIVE: readonly (readonly [string, string])[] = [
 
 /** Decimal digits with an optional fraction: `Number` alone reads `""` as 0 and accepts `1e3`. */
 const DECIMAL = /^\d+(?:\.\d+)?$/;
+
+/** The environment variable that fixes the calls per sample of every measuring child of a run. */
+export const CALLS_PER_SAMPLE = "REPSET_CALLS_PER_SAMPLE";
+
+/** The `--out` value that sends the report to stdout instead of a file. */
+const OUT_STDOUT = "-";
 
 const USAGE = `Usage: repset [options] [file...]
 
@@ -97,23 +113,31 @@ Options:
   --version               Print the version
 `;
 
+interface CommandInput extends StrictOmit<OptionsInput, "cwd"> {
+  readonly files: readonly string[] | undefined;
+}
+
 interface Command {
   readonly mode: "run" | "list" | "once";
-  readonly input: Omit<OptionsInput, "cwd"> & { readonly files: readonly string[] | undefined };
+  readonly input: CommandInput;
   /** The `--out` value as written: a file relative to the working directory, or `-` for stdout. */
   readonly out: string | undefined;
   readonly metricLines: boolean;
+  /** The calls per sample `REPSET_CALLS_PER_SAMPLE` fixes for a run, or `undefined` when unset. */
+  readonly callsPerSample: number | undefined;
 }
 
 /** The command's streams, working directory, stop signal and child functions, defaults applied. */
-interface Context {
+interface Context extends ChildFunctions {
   readonly cwd: string;
   readonly stdout: Output;
   readonly stderr: Output;
   readonly signal: AbortSignal;
-  readonly findRuntime: typeof realFindRuntime;
-  readonly startChild: typeof realStartChild;
 }
+
+// ---------------------------------------------------------------------------
+// Command-line parsing
+// ---------------------------------------------------------------------------
 
 /** Whether `flag` is among the arguments before a `--` terminator. */
 function flagged(args: readonly string[], flag: string): boolean {
@@ -121,7 +145,14 @@ function flagged(args: readonly string[], flag: string): boolean {
   return (end === -1 ? args : args.slice(0, end)).includes(flag);
 }
 
-/** The value of a number flag, or `undefined` when it is absent. */
+/**
+ * Reads the value of a number flag.
+ *
+ * @param flag - The flag's name, without the leading dashes, which the error names.
+ * @param text - The flag's value, or `undefined` when the flag is absent.
+ * @returns The number, or `undefined` when the flag is absent.
+ * @throws {@link ConfigError} When `text` is not decimal digits with an optional fraction.
+ */
 function decimal(flag: string, text: string | undefined): number | undefined {
   if (text === undefined) return undefined;
   if (!DECIMAL.test(text)) {
@@ -130,24 +161,51 @@ function decimal(flag: string, text: string | undefined): number | undefined {
   return Number(text);
 }
 
-/** The runtimes of a `--runtime` list, or `undefined` when it is absent. */
+/**
+ * The calls per sample the environment fixes.
+ *
+ * @param text - The value of `REPSET_CALLS_PER_SAMPLE`, or `undefined` when it is unset.
+ * @returns The count, or `undefined` when the variable is unset, which leaves the count to each
+ *   measuring child.
+ * @throws {ConfigError} When the value, the empty string included, is not decimal digits naming a
+ *   safe integer of 1 or more.
+ */
+function fixedCallsPerSample(text: string | undefined): number | undefined {
+  if (text === undefined) return undefined;
+  const count = /^\d+$/.test(text) ? Number(text) : Number.NaN;
+  if (!Number.isSafeInteger(count) || count < 1) {
+    throw new ConfigError(
+      `${CALLS_PER_SAMPLE} must be a whole number of 1 or more, got ${JSON.stringify(text)}`,
+    );
+  }
+  return count;
+}
+
+/**
+ * Reads the runtimes of a `--runtime` list.
+ *
+ * @param text - The comma-separated list, or `undefined` when the flag is absent.
+ * @returns The runtimes in the order given, or `undefined` when the flag is absent.
+ * @throws {@link ConfigError} When an entry of the list is not a runtime.
+ */
 function runtimeList(text: string | undefined): Runtime[] | undefined {
   if (text === undefined) return undefined;
   const names = text.split(",");
   const runtimes = names.filter((name) => isRuntime(name));
   if (runtimes.length !== names.length) {
-    throw new ConfigError(`--runtime must list "node" and "bun", got ${JSON.stringify(text)}`);
+    throw new ConfigError(`--runtime must list ${QUOTED_RUNTIMES}, got ${JSON.stringify(text)}`);
   }
   return runtimes;
 }
 
 /**
- * Reads the command line, past `--help` and `--version`.
+ * Reads the command line and `REPSET_CALLS_PER_SAMPLE`, past `--help` and `--version`.
  *
  * @param args - The command's arguments.
- * @returns What the command line asks for.
+ * @returns What the command line and the environment ask for.
  * @throws {ConfigError} When a flag is unknown, given twice, missing its value or holding a value
- *   that is not a decimal number where one is due, or when two flags conflict.
+ *   that is not a decimal number where one is due, when two flags conflict, or when
+ *   `REPSET_CALLS_PER_SAMPLE` holds a bad value.
  */
 function parseCommand(args: readonly string[]): Command {
   let parsed;
@@ -163,7 +221,7 @@ function parseCommand(args: readonly string[]): Command {
     if (given.has(token.name)) throw new ConfigError(`--${token.name} is given more than once`);
     given.add(token.name);
   }
-  if (values["metric-lines"] === true && values.out === "-") {
+  if (values["metric-lines"] === true && values.out === OUT_STDOUT) {
     throw new ConfigError("--metric-lines cannot be used with --out -");
   }
   const conflict = EXCLUSIVE.find(([one, other]) => given.has(one) && given.has(other));
@@ -187,18 +245,24 @@ function parseCommand(args: readonly string[]): Command {
     },
     out: values.out,
     metricLines: values["metric-lines"] === true,
+    callsPerSample: fixedCallsPerSample(process.env[CALLS_PER_SAMPLE]),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Child functions and report output
+// ---------------------------------------------------------------------------
 
 /** A child starter that prints a progress line on stderr before it starts each child. */
 function announcing(context: Context): typeof realStartChild {
   const { cwd, stderr, startChild } = context;
   return async (runtime, request, options) => {
-    const line =
-      request.mode === "list"
-        ? `listing ${relative(cwd, request.file)}`
-        : `${request.mode === "once" ? "running" : "measuring"} ${request.id} on ${runtime.runtime}`;
-    stderr.write(`${line}\n`);
+    if (request.mode === "list") {
+      stderr.write(`listing ${slashed(relative(cwd, request.file), sep)}\n`);
+    } else {
+      const verb = request.mode === "once" ? "running" : "measuring";
+      stderr.write(`${verb} ${request.id} on ${runtime.runtime}\n`);
+    }
     return startChild(runtime, request, options);
   };
 }
@@ -215,6 +279,16 @@ function childInput(
   };
 }
 
+/** The report as a file or stdout holds it: JSON indented by two spaces, and a newline. */
+function reportText(report: Report): string {
+  return `${JSON.stringify(report, null, 2)}\n`;
+}
+
+/** The message for a report that could not be written to `shown`, the path as the user wrote it. */
+function reportWriteFailure(shown: string, error: unknown): string {
+  return `cannot write the report to ${shown}: ${thrownMessage(error)}`;
+}
+
 /**
  * Writes `report` to `path` through a temporary file in the same directory renamed over it, so
  * the file always holds a whole report, creating the directory first when it is missing.
@@ -228,7 +302,7 @@ function writeReport(path: string, report: Report): void {
   mkdirSync(dirname(path), { recursive: true });
   const temporary = `${path}.${String(process.pid)}.tmp`;
   try {
-    writeFileSync(temporary, `${JSON.stringify(report, null, 2)}\n`);
+    writeFileSync(temporary, reportText(report));
     renameSync(temporary, path);
   } catch (error) {
     rmSync(temporary, { force: true });
@@ -245,9 +319,7 @@ function reportWrites(path: string, shown: string): Pick<RunInput, "onSelected" 
       try {
         writeReport(path, head);
       } catch (error) {
-        throw new ConfigError(`cannot write the report to ${shown}: ${thrownMessage(error)}`, {
-          cause: error,
-        });
+        throw new ConfigError(reportWriteFailure(shown, error), { cause: error });
       }
     },
     onResult: (result) => {
@@ -263,6 +335,10 @@ function reportWrites(path: string, shown: string): Pick<RunInput, "onSelected" 
   };
 }
 
+// ---------------------------------------------------------------------------
+// Actions
+// ---------------------------------------------------------------------------
+
 /**
  * Measures the selected cases, printing the table, the metric lines and the report where the
  * flags send them.
@@ -275,12 +351,15 @@ function reportWrites(path: string, shown: string): Pick<RunInput, "onSelected" 
  */
 async function measure(command: Command, context: Context): Promise<number> {
   const { stdout, stderr } = context;
-  const toFile = command.out !== undefined && command.out !== "-";
-  const path = toFile ? resolve(context.cwd, command.out) : undefined;
-  const writes = path === undefined ? undefined : reportWrites(path, String(command.out));
+  const { out } = command;
+  const toStdout = out === OUT_STDOUT;
+  const file =
+    out === undefined || toStdout ? undefined : { name: out, path: resolve(context.cwd, out) };
+  const writes = file === undefined ? undefined : reportWrites(file.path, file.name);
   const report = await run({
     ...command.input,
     ...childInput(context),
+    callsPerSample: command.callsPerSample,
     onSelected: writes?.onSelected,
     onResult: (result: Result) => {
       const line = command.metricLines ? metricLine(result) : undefined;
@@ -288,17 +367,15 @@ async function measure(command: Command, context: Context): Promise<number> {
       writes?.onResult?.(result);
     },
   });
-  const tableOut = command.out === "-" || command.metricLines ? stderr : stdout;
+  const tableOut = toStdout || command.metricLines ? stderr : stdout;
   tableOut.write(formatTable(report.results));
-  if (command.out === "-") stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  if (toStdout) stdout.write(reportText(report));
   let written = true;
-  if (path !== undefined) {
+  if (file !== undefined) {
     try {
-      writeReport(path, report);
+      writeReport(file.path, report);
     } catch (error) {
-      stderr.write(
-        `repset: cannot write the report to ${String(command.out)}: ${thrownMessage(error)}\n`,
-      );
+      stderr.write(`repset: ${reportWriteFailure(file.name, error)}\n`);
       written = false;
     }
   }
@@ -327,8 +404,12 @@ async function list(command: Command, context: Context): Promise<number> {
   return 0;
 }
 
+/** Where a once run's teardown line starts, beneath the failed line it follows. */
+const ONCE_INDENT = "  ";
+
 /**
- * Runs every selected case once per runtime, printing a line per case and runtime.
+ * Runs every selected case once per runtime, printing a line per case and runtime, and a labelled
+ * line beneath a failed one whose cleanup teardown failed too.
  *
  * @param command - What the command line asks for.
  * @param context - The streams, the working directory, the stop signal and the child functions.
@@ -339,14 +420,24 @@ async function once(command: Command, context: Context): Promise<number> {
   const outcome = await runOnce({ ...command.input, ...childInput(context) });
   for (const result of outcome.results) {
     const ran = `${result.id} on ${result.runtime}`;
+    if (result.status === "ok") {
+      context.stdout.write(`ok ${ran}\n`);
+      continue;
+    }
+    const { phase, message, teardownError } = result.error;
+    const teardown = teardownError === null ? [] : teardownLines(teardownError, ONCE_INDENT);
     context.stdout.write(
-      result.status === "ok"
-        ? `ok ${ran}\n`
-        : `failed ${ran}: phase ${result.error.phase}: ${result.error.message}\n`,
+      [`failed ${ran}: phase ${phase}: ${message}`, ...teardown]
+        .map((line) => `${line}\n`)
+        .join(""),
     );
   }
   return outcome.results.some((result) => result.status === "failed") ? 1 : 0;
 }
+
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
 
 /** Prints a `ConfigError`; a failed listing's stack and output tail come before its message. */
 function printError(stderr: Output, error: ConfigError): void {
@@ -384,7 +475,7 @@ export async function main(args: readonly string[], io: CommandIo = {}): Promise
   }
   const controller = new AbortController();
   let received: Signal | undefined;
-  const listeners = (["SIGINT", "SIGTERM"] as const).map((signal) => {
+  const listeners = SIGNALS.map((signal) => {
     const listener = (): void => {
       received ??= signal;
       controller.abort();

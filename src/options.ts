@@ -9,12 +9,24 @@ import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import type { Config } from "./config.js";
-import type { Runtime } from "./measure/runtime.js";
-import { describe, thrownMessage } from "./utils.js";
+import { DEFAULT_MIN_SAMPLES, DEFAULT_MIN_TIME } from "./measure/measure.js";
+import { RUNTIMES, type Runtime } from "./measure/runtime.js";
+import { describe, property, thrownMessage } from "./utils.js";
 
 /** A config that cannot be found, loaded or checked, or an option value that is out of range. */
 export class ConfigError extends Error {
-  override readonly name = "ConfigError";
+  override readonly name: string = "ConfigError";
+}
+
+/**
+ * Builds the `ConfigError` for an operation that threw.
+ *
+ * @param message - What failed, without the cause.
+ * @param error - The thrown value, kept as the error's `cause`.
+ * @returns A `ConfigError` reading `<message>: <the thrown value's message>`.
+ */
+function failedWith(message: string, error: unknown): ConfigError {
+  return new ConfigError(`${message}: ${thrownMessage(error)}`, { cause: error });
 }
 
 /** What the caller passes: the options of {@link Config}, plus the ones only a run takes. */
@@ -48,6 +60,10 @@ export interface ResolvedOptions {
   readonly filter: RegExp | undefined;
 }
 
+// ---------------------------------------------------------------------------
+// Config file loading
+// ---------------------------------------------------------------------------
+
 type OptionName = keyof Config;
 
 const CONFIG_NAMES = [
@@ -57,31 +73,38 @@ const CONFIG_NAMES = [
   "repset.config.mjs",
 ];
 
-const OPTION_NAMES: ReadonlySet<string> = new Set<OptionName>([
-  "include",
-  "runtimes",
-  "minTime",
-  "minSamples",
-  "timeout",
-  "nodeImport",
-]);
+/** Every key of {@link Config}: a key missing here fails to compile. */
+const OPTION_KEYS: Readonly<Record<OptionName, true>> = {
+  include: true,
+  runtimes: true,
+  minTime: true,
+  minSamples: true,
+  timeout: true,
+  nodeImport: true,
+};
 
-const RUNTIMES: ReadonlySet<string> = new Set<Runtime>(["node", "bun"]);
+const OPTION_NAMES: ReadonlySet<string> = new Set(Object.keys(OPTION_KEYS));
 
 /** The largest delay a Node timer keeps; a larger one fires after 1 ms. */
 const MAX_TIMEOUT = 2_147_483_647;
 
 const DEFAULT_INCLUDE = ["**/*.bench.{ts,mts,js,mjs}"];
 const DEFAULT_RUNTIMES: readonly Runtime[] = ["node"];
-const DEFAULT_MIN_TIME = 1000;
-const DEFAULT_MIN_SAMPLES = 64;
 const DEFAULT_TIMEOUT = 600_000;
 
-function isFile(path: string): boolean {
+/**
+ * Whether `path` names a file; a path that does not exist is not one.
+ *
+ * @param path - The path to check.
+ * @returns `true` for a file, `false` for a missing path or a directory.
+ * @throws {@link ConfigError} When the path exists but cannot be read, such as for a permission
+ *   error.
+ */
+export function isFile(path: string): boolean {
   try {
     return statSync(path, { throwIfNoEntry: false })?.isFile() ?? false;
   } catch (error) {
-    throw new ConfigError(`cannot read ${path}: ${thrownMessage(error)}`, { cause: error });
+    throw failedWith(`cannot read ${path}`, error);
   }
 }
 
@@ -111,14 +134,9 @@ async function loadConfig(file: string): Promise<Readonly<Record<string, unknown
     // A file URL, unlike a path, imports a Windows path or a name holding `#` or `?`.
     namespace = await import(pathToFileURL(file).href);
   } catch (error) {
-    throw new ConfigError(`cannot load the config file ${file}: ${thrownMessage(error)}`, {
-      cause: error,
-    });
+    throw failedWith(`cannot load the config file ${file}`, error);
   }
-  const exported: unknown =
-    typeof namespace === "object" && namespace !== null
-      ? Reflect.get(namespace, "default")
-      : undefined;
+  const exported = property(namespace, "default");
   if (!isPlainObject(exported)) {
     throw new ConfigError(
       `the config file ${file} must export a plain object as default, got ${describe(exported)}`,
@@ -129,9 +147,7 @@ async function loadConfig(file: string): Promise<Readonly<Record<string, unknown
     // Reading every value once here turns a getter that throws into this file's error.
     entries = Object.entries(exported);
   } catch (error) {
-    throw new ConfigError(`cannot read the config file ${file}: ${thrownMessage(error)}`, {
-      cause: error,
-    });
+    throw failedWith(`cannot read the config file ${file}`, error);
   }
   for (const [key, value] of entries) {
     if (value !== undefined && !OPTION_NAMES.has(key)) {
@@ -140,6 +156,10 @@ async function loadConfig(file: string): Promise<Readonly<Record<string, unknown
   }
   return Object.fromEntries(entries);
 }
+
+// ---------------------------------------------------------------------------
+// Value checks
+// ---------------------------------------------------------------------------
 
 function invalid(option: string, rule: string, value: unknown): ConfigError {
   return new ConfigError(`${option} must be ${rule}, got ${describe(value)}`);
@@ -155,8 +175,17 @@ function checkedInclude(value: unknown): readonly string[] {
 
 /** Whether `value` names a runtime repset runs on. */
 export function isRuntime(value: unknown): value is Runtime {
-  return typeof value === "string" && RUNTIMES.has(value);
+  return RUNTIMES.some((runtime) => runtime === value);
 }
+
+/** The names, each quoted, joined with ", " and a final " and ": `"a", "b" and "c"`. */
+export function quotedList(names: readonly [string, string, ...string[]]): string {
+  const quoted = names.map((name) => `"${name}"`);
+  return `${quoted.slice(0, -1).join(", ")} and ${quoted.slice(-1).join("")}`;
+}
+
+/** Every runtime repset runs on, as {@link quotedList} writes them. */
+export const QUOTED_RUNTIMES = quotedList(RUNTIMES);
 
 function checkedRuntimes(value: unknown): readonly Runtime[] {
   if (!Array.isArray(value)) throw invalid("runtimes", "an array of runtimes", value);
@@ -164,7 +193,7 @@ function checkedRuntimes(value: unknown): readonly Runtime[] {
   if (names.length === 0) throw new ConfigError("runtimes must name at least one runtime, got []");
   const runtimes: Runtime[] = [];
   for (const name of names) {
-    if (!isRuntime(name)) throw invalid("runtimes", 'an array of "node" and "bun"', name);
+    if (!isRuntime(name)) throw invalid("runtimes", `an array of ${QUOTED_RUNTIMES}`, name);
     if (runtimes.includes(name)) throw new ConfigError(`runtimes names ${describe(name)} twice`);
     runtimes.push(name);
   }
@@ -202,10 +231,7 @@ function checkedFilter(value: unknown): RegExp {
   try {
     return new RegExp(source, "u");
   } catch (error) {
-    throw new ConfigError(
-      `filter must be a regular expression, got ${describe(source)}: ${thrownMessage(error)}`,
-      { cause: error },
-    );
+    throw failedWith(`filter must be a regular expression, got ${describe(source)}`, error);
   }
 }
 
@@ -223,6 +249,10 @@ function checkedConfig(values: Readonly<Partial<Record<OptionName, unknown>>>): 
     nodeImport: given(values.nodeImport, (value) => checkedString("nodeImport", value)),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Resolution
+// ---------------------------------------------------------------------------
 
 function resolvedNodeImport(
   caller: string | undefined,

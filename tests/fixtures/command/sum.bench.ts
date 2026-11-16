@@ -1,6 +1,10 @@
-import { bench } from "../../../src/bench.js";
+import { bench } from "../../../src/child.js";
 
 const VALUES = [3, 1, 2];
 
-bench("sum/small", () => VALUES.reduce((total, value) => total + value, 0));
-bench("sum/large", () => [...VALUES, ...VALUES].reduce((total, value) => total + value, 0));
+function sum(values: readonly number[]): number {
+  return values.reduce((total, value) => total + value, 0);
+}
+
+bench("sum/small", () => sum(VALUES));
+bench("sum/large", () => sum([...VALUES, ...VALUES]));

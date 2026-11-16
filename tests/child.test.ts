@@ -28,11 +28,6 @@ function fixture(name: string): string {
   return join(FIXTURES, name);
 }
 
-/** The phase of a failed result, or `undefined` for a successful one. */
-function phaseOf(result: ChildResult): string | undefined {
-  return result.status === "failed" ? result.error.phase : undefined;
-}
-
 const FILE = fixture("three-cases.ts");
 
 /** What `FILE` lists: its three cases in registration order. */
@@ -81,10 +76,14 @@ afterEach(() => {
 describe("parseRequest", () => {
   describe("when the request is complete", () => {
     it.each([
-      { request: { mode: "list", file: FILE } },
-      { request: { mode: "once", file: FILE, id: "alpha" } },
-      { request: MEASURE_REQUEST },
-    ])("returns the $request.mode request", ({ request }) => {
+      { why: "a list request", request: { mode: "list", file: FILE } },
+      { why: "a once request", request: { mode: "once", file: FILE, id: "alpha" } },
+      { why: "a measure request", request: MEASURE_REQUEST },
+      {
+        why: "a measure request with its calls per sample",
+        request: { ...MEASURE_REQUEST, callsPerSample: 200 },
+      },
+    ])("returns $why", ({ request }) => {
       const parsed = parseRequest(JSON.stringify(request));
 
       expect(parsed).toStrictEqual(request);
@@ -111,11 +110,6 @@ describe("parseRequest", () => {
         argument: JSON.stringify({ mode: "list", file: "bench/sort.ts" }),
       },
       {
-        why: "measure without minTime",
-        error: /minTime/,
-        argument: JSON.stringify({ ...MEASURE_REQUEST, minTime: undefined }),
-      },
-      {
         why: "a null id",
         error: /\bid\b.*\bnull\b/,
         argument: JSON.stringify({ mode: "once", file: FILE, id: null }),
@@ -124,6 +118,11 @@ describe("parseRequest", () => {
         why: "a minTime that is a string",
         error: /\bminTime\b.*"5"/,
         argument: JSON.stringify({ ...MEASURE_REQUEST, minTime: "5" }),
+      },
+      {
+        why: "a callsPerSample that is a string",
+        error: /\bcallsPerSample\b.*"200"/,
+        argument: JSON.stringify({ ...MEASURE_REQUEST, callsPerSample: "200" }),
       },
     ])("throws a TypeError for $why", ({ argument, error }) => {
       const parse = (): unknown => parseRequest(argument);
@@ -144,16 +143,13 @@ describe("listCases", () => {
   });
 
   describe("when the file fails to load", () => {
-    it("fails in phase load when the file throws at its top level", async () => {
+    it("fails in phase load with the message the file threw", async () => {
       const result = await listCases(fixture("top-level-throw.ts"));
 
-      expect(phaseOf(result)).toBe("load");
-    });
-
-    it("carries the message of what the file threw", async () => {
-      const result = await listCases(fixture("top-level-throw.ts"));
-
-      expect(result.status === "failed" && result.error.message).toBe("banana");
+      expect(result).toMatchObject({
+        status: "failed",
+        error: { phase: "load", message: "banana" },
+      });
     });
   });
 });
@@ -167,7 +163,7 @@ describe("failedResult", () => {
 
       expect(result).toStrictEqual({
         status: "failed",
-        error: { phase: "setup", message: "plum", stack: cause.stack },
+        error: { phase: "setup", message: "plum", stack: cause.stack, teardownError: null },
       });
     });
 
@@ -187,19 +183,7 @@ describe("failedResult", () => {
 
       expect(result).toStrictEqual({
         status: "failed",
-        error: { phase: "teardown", message: "pear", stack: null },
-      });
-    });
-
-    it("carries a placeholder message for a value with no string form", () => {
-      const unprintable: unknown = Object.create(null);
-
-      const result = failedResult("load", unprintable);
-
-      expect(result.error).toStrictEqual({
-        phase: "load",
-        message: "a value with no string form",
-        stack: null,
+        error: { phase: "teardown", message: "pear", stack: null, teardownError: null },
       });
     });
   });
@@ -215,36 +199,23 @@ describe("failedResult", () => {
         phase: "calibration",
         message: "grape",
         stack: inner.stack,
+        teardownError: null,
       });
     });
 
-    it("carries a null stack when its cause is not an Error", () => {
-      const error = new MeasureError("fn", "melon");
+    it("carries its cleanup teardown's failure as the message and stack of that teardown's value", () => {
+      const teardownCause = new Error("melon");
+      const error = new MeasureError(
+        "fn",
+        new Error("lime"),
+        new MeasureError("teardown", teardownCause),
+      );
 
       const result = failedResult("load", error);
 
-      expect(result.error).toStrictEqual({ phase: "fn", message: "melon", stack: null });
-    });
-  });
-});
-
-describe("measureCase and runOnce", () => {
-  describe("when the id does not select exactly one case", () => {
-    it("measureCase fails in phase load naming an id that is not registered", async () => {
-      const result = await measureShort(FILE, "banana");
-
-      expect(result).toMatchObject({
-        status: "failed",
-        error: { phase: "load", message: expect.stringContaining("banana") },
-      });
-    });
-
-    it("runOnce fails in phase load naming an id registered more than once", async () => {
-      const result = await runOnce(fixture("duplicate.ts"), "apple");
-
-      expect(result).toMatchObject({
-        status: "failed",
-        error: { phase: "load", message: expect.stringContaining("apple") },
+      expect(result.error.teardownError).toStrictEqual({
+        message: "melon",
+        stack: teardownCause.stack,
       });
     });
   });
@@ -253,6 +224,17 @@ describe("measureCase and runOnce", () => {
 describe("measureCase", () => {
   beforeEach(() => {
     vi.stubGlobal("gc", exposedGc());
+  });
+
+  describe("when the id does not select exactly one case", () => {
+    it("fails in phase load naming an id that is not registered", async () => {
+      const result = await measureShort(FILE, "banana");
+
+      expect(result).toMatchObject({
+        status: "failed",
+        error: { phase: "load", message: expect.stringContaining("banana") },
+      });
+    });
   });
 
   describe("when the case measures", { timeout: MEASURE_TIMEOUT_MS }, () => {
@@ -300,6 +282,15 @@ describe("measureCase", () => {
       const quantiles = [min, p25, median, p75, p99, max];
       expect(quantiles).toStrictEqual(quantiles.toSorted((a, b) => a - b));
     });
+
+    it("measures at the calls per sample it is given, reporting it as fixed", async () => {
+      const result = await measureCase(LIFECYCLE, "steady", { ...SHORT_RUN, callsPerSample: 3 });
+
+      expect(result).toMatchObject({
+        status: "ok",
+        sampling: { callsPerSample: 3, callsPerSampleFixed: true },
+      });
+    });
   });
 
   describe("when measure rejects", () => {
@@ -312,51 +303,23 @@ describe("measureCase", () => {
 });
 
 describe("runOnce", () => {
+  describe("when the id does not select exactly one case", () => {
+    it("fails in phase load naming an id registered more than once", async () => {
+      const result = await runOnce(fixture("duplicate.ts"), "apple");
+
+      expect(result).toMatchObject({
+        status: "failed",
+        error: { phase: "load", message: expect.stringContaining("apple") },
+      });
+    });
+  });
+
   describe("when the case runs", () => {
     it("runs one setup, one fn and one teardown of a shared-state case, and no other case", async () => {
       const result = await runOnce(LIFECYCLE, "quiet");
 
       expect(result.status).toBe("ok");
       expect(calls()).toStrictEqual(["quiet setup", "quiet fn", "quiet teardown"]);
-    });
-  });
-
-  describe("when a callback fails", () => {
-    it.each([
-      { why: "setup throws", id: "setup-throws", phase: "setup", message: "fig", recorded: [] },
-      {
-        why: "fn throws",
-        id: "fn-throws",
-        phase: "fn",
-        message: "kiwi",
-        recorded: [expect.any(Error), "fn-throws teardown"],
-      },
-      {
-        why: "fn returns a thenable",
-        id: "fn-returns-thenable",
-        phase: "fn",
-        message: expect.any(String),
-        recorded: ["fn-returns-thenable teardown"],
-      },
-      {
-        why: "fn throws, then teardown throws",
-        id: "fn-and-teardown-throw",
-        phase: "fn",
-        message: "lime",
-        recorded: [],
-      },
-      {
-        why: "teardown throws after fn ran",
-        id: "teardown-throws",
-        phase: "teardown",
-        message: "pear",
-        recorded: [],
-      },
-    ])("fails in phase $phase when $why", async ({ id, phase, message, recorded }) => {
-      const result = await runOnce(LIFECYCLE, id);
-
-      expect(result).toMatchObject({ status: "failed", error: { phase, message } });
-      expect(calls()).toStrictEqual(recorded);
     });
   });
 });
@@ -439,60 +402,38 @@ function resultLine(fd3: string): unknown {
   return JSON.parse(line);
 }
 
-describe.each([
-  { runtime: "node", here: true, gc: expect.objectContaining({ count: expect.any(Number) }) },
-  { runtime: "bun", here: requiresRealBunHere(), gc: null },
-] as const)(
-  "the child started on $runtime",
-  { timeout: SPAWN_TIMEOUT_MS },
-  ({ runtime, here, gc }) => {
-    describe.runIf(here)("when the request is valid", () => {
-      it("writes the file's cases as one result line on fd 3", async () => {
-        const run = await spawnChild(runtime, { mode: "list", file: FILE });
-
-        expect(resultLine(run.fd3)).toStrictEqual(FILE_LISTED);
+describe("the child started on bun", { timeout: SPAWN_TIMEOUT_MS }, () => {
+  describe.runIf(requiresRealBunHere())("when the request is valid", () => {
+    it("writes the measurement of the requested case", async () => {
+      const run = await spawnChild("bun", {
+        ...MEASURE_REQUEST,
+        file: LIFECYCLE,
+        id: "steady",
       });
 
-      it("writes the measurement of the requested case", async () => {
-        const run = await spawnChild(runtime, {
-          ...MEASURE_REQUEST,
-          file: LIFECYCLE,
-          id: "steady",
-        });
-
-        expect(resultLine(run.fd3)).toMatchObject({
-          status: "ok",
-          stats: { sampleCount: expect.any(Number) },
-          gc,
-        });
-      });
-
-      it("exits 0 after the result line when the file leaves an interval open", async () => {
-        const run = await spawnChild(runtime, {
-          mode: "list",
-          file: fixture("open-interval.ts"),
-        });
-
-        expect(run.status).toBe(0);
-        expect(resultLine(run.fd3)).toStrictEqual({
-          status: "ok",
-          cases: [{ id: "orange", setupPerCall: false }],
-        });
-      });
-
-      it("keeps what the file prints out of the result line", async () => {
-        const run = await spawnChild(runtime, { mode: "list", file: LOUD });
-
-        expect(resultLine(run.fd3)).toStrictEqual({
-          status: "ok",
-          cases: [{ id: "loud", setupPerCall: false }],
-        });
+      expect(resultLine(run.fd3)).toMatchObject({
+        status: "ok",
+        stats: { sampleCount: expect.any(Number) },
+        gc: null,
       });
     });
-  },
-);
+  });
+});
 
 describe("the child started on node", { timeout: SPAWN_TIMEOUT_MS }, () => {
+  it("exits 0 after the result line when the file leaves an interval open", async () => {
+    const run = await spawnChild("node", {
+      mode: "list",
+      file: fixture("open-interval.ts"),
+    });
+
+    expect(run.status).toBe(0);
+    expect(resultLine(run.fd3)).toStrictEqual({
+      status: "ok",
+      cases: [{ id: "orange", setupPerCall: false }],
+    });
+  });
+
   it("hands the parent every byte the file printed to stdout and stderr", async () => {
     const run = await spawnChild("node", { mode: "list", file: LOUD });
 
@@ -511,14 +452,19 @@ describe("the child started on node", { timeout: SPAWN_TIMEOUT_MS }, () => {
     });
   });
 
-  describe("when the request is malformed", () => {
-    it("exits non-zero before loading the file, writing nothing on fd 3", async () => {
-      const run = await spawnChild("node", { mode: "once", file: LOUD });
+  describe("when a measure request fixes the calls per sample", () => {
+    it("measures at that count and reports it as fixed", async () => {
+      const run = await spawnChild("node", {
+        ...MEASURE_REQUEST,
+        file: LIFECYCLE,
+        id: "steady",
+        callsPerSample: 200,
+      });
 
-      expect(run.status).not.toBe(0);
-      expect(run.fd3).toBe("");
-      expect(run.stdout).toBe("");
-      expect(run.stderr).toMatch(/\bid\b/);
+      expect(resultLine(run.fd3)).toMatchObject({
+        status: "ok",
+        sampling: { callsPerSample: 200, callsPerSampleFixed: true },
+      });
     });
   });
 

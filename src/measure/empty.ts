@@ -16,7 +16,7 @@ import {
   WARMUP_MIN_SAMPLES,
   type SamplerResult,
   type Sampling,
-} from "./shared-state.js";
+} from "./sampler.js";
 
 /** The empty run's timed samples, whatever `minTime` and `minSamples` the body ran on. */
 const TIMED_SAMPLES = 64;
@@ -26,7 +26,6 @@ export function empty(): void {
   // Times the sampling loop alone.
 }
 
-/** The empty run's timed spans and the calls per sample they ran. */
 export type EmptyResult = Pick<SamplerResult, "spans" | "sampleCount" | "callsPerSample">;
 
 /** How a benchmark builds the state its body runs on: one shared by every call, or one per call. */
@@ -87,15 +86,16 @@ function summed(timed: Timed, count: number): number {
 }
 
 /**
- * Times the empty body: warmup samples until both 250 ms on the clock and 16 samples have passed,
- * calibrating the count unless one is fixed, then one collection, then 64 timed samples.
+ * Times the empty body: warmup samples until both {@link WARMUP_MIN_MS} ms on the clock and
+ * {@link WARMUP_MIN_SAMPLES} samples have passed, calibrating the count unless one is fixed, then
+ * one collection, then {@link TIMED_SAMPLES} timed samples.
  *
  * The time minimum keeps the timed samples on the code the engine settles on: Bun can compile the
  * empty loop partway through a shorter warmup, and the timed samples then read two speeds.
  *
- * @param options - The lifecycle to time it in, the clock, its resolution, the forced GC, and the fixed
- *   count if one was given.
- * @returns The 64 timed spans and the calls per sample they ran.
+ * @param options - The lifecycle to time it in, the clock, its resolution, the forced GC, and the
+ *   fixed count if one was given.
+ * @returns The {@link TIMED_SAMPLES} timed spans and the calls per sample they ran.
  * @throws Whatever `collect` throws, and CalibrationError when warmup's count would pass
  *   `ceil(200 × resolution / 0.1 ns)`, naming the count asked for and the cap.
  */

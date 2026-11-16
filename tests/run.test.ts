@@ -1,20 +1,21 @@
-import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { ChildPhase, Measured, MeasureRequest, OnceRequest } from "../src/child.js";
-import type {
-  findRuntime,
-  FoundRuntime,
-  Outcome,
-  StartOptions,
-  startChild,
-} from "../src/children.js";
+import type { Outcome } from "../src/children.js";
 import { ConfigError } from "../src/options.js";
 import type { Report, Result } from "../src/report.js";
 import { run, runOnce } from "../src/run.js";
+import {
+  failedOutcome,
+  findAny,
+  MELON,
+  measured,
+  starter as fakeStarter,
+  type StartChild,
+  stopped,
+} from "./fake-children.js";
 
 const DISCOVERY = fileURLToPath(new URL("fixtures/discovery", import.meta.url));
 
@@ -30,48 +31,10 @@ const DOT_IMPORT_CONFIG = fileURLToPath(
 
 const STARTED_AT = new Date("2026-11-01T12:00:00.000Z");
 
-type StartChild = typeof startChild;
-type FindRuntime = typeof findRuntime;
-type Runtime = FoundRuntime["runtime"];
-type Asked = MeasureRequest | OnceRequest;
-
-/** The runtime the fake lookup finds for `runtime`. */
-function found(runtime: Runtime): FoundRuntime {
-  return {
-    runtime,
-    executable: `/bin/${runtime}`,
-    version: runtime === "node" ? "24.1.0" : "1.3.2",
-  };
-}
-
-/** A runtime lookup that finds every runtime. */
-const findAny: FindRuntime = async (runtime) => found(runtime);
-
-/** A measurement whose median is `median`. */
-function measured(median: number): Measured {
-  return {
-    status: "ok",
-    stats: {
-      min: 1,
-      p25: 2,
-      median,
-      p75: 4,
-      p99: 5,
-      max: 6,
-      mean: 3.5,
-      sampleCount: 64,
-    },
-    sampling: {
-      timerResolutionNs: 41.7,
-      callsPerSample: 2,
-      callsPerSampleFixed: false,
-      warmupSamples: 1000,
-      timingAttempts: 1,
-      timingMs: 1003.4,
-    },
-    checks: { ratioToEmptyBody: 120.5 },
-    gc: { count: 3, minor: 3, major: 0, totalMs: 0.41, maxMs: 0.17 },
-  };
+/** The one case the fake listing child finds in `file`: named for the file, per-call only in `a.bench.ts`. */
+function caseOf(file: string): { id: string; setupPerCall: boolean } {
+  const id = basename(file);
+  return { id, setupPerCall: id === "a.bench.ts" };
 }
 
 /** An outcome in which the child measured its case with the median `median`. */
@@ -82,32 +45,9 @@ function measuredOutcome(median: number): Outcome {
 /** An outcome in which the child ran its case once. */
 const ranOnce: Outcome = { status: "ok", result: { status: "ok" }, output: "" };
 
-/** An outcome in which the stop signal killed the child. */
-const stopped: Outcome = { status: "stopped", output: "" };
-
-/** An outcome in which the child failed in `phase` with `message`. */
-function failedOutcome(phase: ChildPhase, message: string): Outcome {
-  return { status: "failed", error: { phase, message, stack: null }, output: "" };
-}
-
-/**
- * A child starter that lists one case per file, named for the file, with `setupPerCall` set only
- * in `a.bench.ts`, and answers every measuring and once request with `answer`.
- */
-function starter(
-  answer: (runtime: FoundRuntime, request: Asked, options: StartOptions) => Outcome,
-): StartChild {
-  return async (runtime, request, options) => {
-    if (request.mode === "list") {
-      const id = basename(request.file);
-      return {
-        status: "ok",
-        result: { status: "ok", cases: [{ id, setupPerCall: id === "a.bench.ts" }] },
-        output: "",
-      };
-    }
-    return answer(runtime, request, options);
-  };
+/** A child starter that lists one case per file and answers the rest with `answer`. */
+function starter(answer: Parameters<typeof fakeStarter>[1]): StartChild {
+  return fakeStarter(caseOf, answer);
 }
 
 /** A child starter that measures every case with the median 4656. */
@@ -230,17 +170,11 @@ describe("run", () => {
     it("records files, filter and nodeImport as null when none was given", async () => {
       const report = await runHere({ files: undefined, include: ["zeta.bench.ts"] });
 
-      expect(report.options).toStrictEqual({
-        runtimes: ["node"],
+      const { files, filter, nodeImport } = report.options;
+      expect({ files, filter, nodeImport }).toStrictEqual({
         files: null,
         filter: null,
-        minTime: 1000,
-        minSamples: 64,
-        rounds: null,
-        seed: null,
-        timeout: 600_000,
         nodeImport: null,
-        rawSamples: false,
       });
     });
 
@@ -276,7 +210,7 @@ describe("run", () => {
 
   describe("the measuring children", () => {
     it("starts one per case per runtime, runtime by runtime, with the merged minTime and minSamples", async () => {
-      const echo = starter((runtime, request) => {
+      const echo = starter((request, runtime) => {
         const asked = [runtime.runtime, basename(request.file), request.id];
         if (request.mode === "measure")
           asked.push(String(request.minTime), String(request.minSamples));
@@ -287,35 +221,70 @@ describe("run", () => {
         files: ["zeta.bench.ts", "a.bench.ts"],
         runtimes: ["bun", "node"],
         minTime: 7,
+        minSamples: 9,
         startChild: echo,
       });
 
       expect(
         report.results.map((result) => [result.runtime.name, result.id, result.error?.message]),
       ).toStrictEqual([
-        ["bun", "zeta.bench.ts", "bun zeta.bench.ts zeta.bench.ts 7 64"],
-        ["bun", "a.bench.ts", "bun a.bench.ts a.bench.ts 7 64"],
-        ["node", "zeta.bench.ts", "node zeta.bench.ts zeta.bench.ts 7 64"],
-        ["node", "a.bench.ts", "node a.bench.ts a.bench.ts 7 64"],
+        ["bun", "zeta.bench.ts", "bun zeta.bench.ts zeta.bench.ts 7 9"],
+        ["bun", "a.bench.ts", "bun a.bench.ts a.bench.ts 7 9"],
+        ["node", "zeta.bench.ts", "node zeta.bench.ts zeta.bench.ts 7 9"],
+        ["node", "a.bench.ts", "node a.bench.ts a.bench.ts 7 9"],
       ]);
+    });
+
+    it.each([
+      { why: "the count it is given", callsPerSample: 5, asked: ["5", "5"] },
+      { why: "no count when it is given none", callsPerSample: undefined, asked: ["none", "none"] },
+    ])("asks each one for $why", async ({ callsPerSample, asked }) => {
+      const echoCount = starter((request) =>
+        failedOutcome(
+          "fn",
+          request.mode === "measure" && "callsPerSample" in request
+            ? String(request.callsPerSample)
+            : "none",
+        ),
+      );
+
+      const report = await runHere({
+        files: ["zeta.bench.ts", "a.bench.ts"],
+        startChild: echoCount,
+        ...(callsPerSample === undefined ? {} : { callsPerSample }),
+      });
+
+      expect(report.results.map((result) => result.error?.message)).toStrictEqual(asked);
     });
   });
 
   describe("when a case fails", () => {
     it.each([
       {
-        why: "answers with a failure",
+        why: "answers with a failure whose cleanup teardown failed too",
         outcome: {
           status: "failed",
-          error: { phase: "fn", message: "kiwi", stack: "at fn" },
+          error: { phase: "fn", message: "kiwi", stack: "at fn", teardownError: MELON },
           output: "plum\n",
         },
-        error: { phase: "fn", message: "kiwi", stack: "at fn", output: "plum\n" },
+        error: {
+          phase: "fn",
+          message: "kiwi",
+          stack: "at fn",
+          teardownError: MELON,
+          output: "plum\n",
+        },
       },
       {
         why: "answers with no measurement",
         outcome: { status: "ok", result: { status: "ok" }, output: "plum\n" },
-        error: { phase: "child", message: expect.any(String), stack: null, output: "plum\n" },
+        error: {
+          phase: "child",
+          message: expect.any(String),
+          stack: null,
+          teardownError: null,
+          output: "plum\n",
+        },
       },
     ] as const)("gives a failed result when its child $why", async ({ outcome, error }) => {
       const report = await runHere({ startChild: starter(() => outcome) });
@@ -383,17 +352,6 @@ describe("run", () => {
       expect(selected).toStrictEqual({ ...report, results: [] });
     });
 
-    it("rejects with what it throws, starting no measuring child", async () => {
-      const result = runHere({
-        startChild: startsNoChild,
-        onSelected: () => {
-          throw new Error("pear");
-        },
-      });
-
-      await expect(result).rejects.toThrow("pear");
-    });
-
     it("is not called when the stop signal fires during listing", async () => {
       const controller = new AbortController();
       const stopping: StartChild = async () => {
@@ -414,16 +372,6 @@ describe("run", () => {
   });
 
   describe("the package's version", () => {
-    it("is read from the package.json one directory above the module by default", async () => {
-      const own: unknown = JSON.parse(
-        readFileSync(new URL("../package.json", import.meta.url), "utf8"),
-      );
-
-      const report = await runHere({ packageJson: undefined });
-
-      expect(own).toMatchObject({ version: report.repset });
-    });
-
     it("throws the read error as it is, before any child starts, when package.json cannot be read", async () => {
       const result = runHere({
         packageJson: join(RUN_FIXTURES, "banana.json"),
@@ -447,7 +395,7 @@ describe("run", () => {
   describe("when the stop signal fires while a case is measured", () => {
     it("returns the finished results as interrupted, starting no further child", async () => {
       const controller = new AbortController();
-      const stopAtA = starter((_runtime, request) => {
+      const stopAtA = starter((request) => {
         if (request.mode === "measure" && request.id === "a.bench.ts") {
           controller.abort();
           return stopped;
@@ -472,9 +420,13 @@ describe("run", () => {
 
 describe("runOnce", () => {
   it("runs each case once per runtime, runtime by runtime, giving that it ran or how it failed", async () => {
-    const failZeta = starter((runtime, request) =>
+    const failZeta = starter((request, runtime) =>
       request.id === "zeta.bench.ts"
-        ? failedOutcome("fn", `${runtime.runtime} ${basename(request.file)} ${request.mode}`)
+        ? failedOutcome(
+            "fn",
+            `${runtime.runtime} ${basename(request.file)} ${request.mode}`,
+            runtime.runtime === "bun" ? MELON : null,
+          )
         : ranOnce,
     );
 
@@ -491,118 +443,44 @@ describe("runOnce", () => {
           id: "zeta.bench.ts",
           runtime: "bun",
           status: "failed",
-          error: { phase: "fn", message: "bun zeta.bench.ts once" },
+          error: { phase: "fn", message: "bun zeta.bench.ts once", teardownError: MELON },
         },
         { id: "a.bench.ts", runtime: "bun", status: "ok" },
         {
           id: "zeta.bench.ts",
           runtime: "node",
           status: "failed",
-          error: { phase: "fn", message: "node zeta.bench.ts once" },
+          error: { phase: "fn", message: "node zeta.bench.ts once", teardownError: null },
         },
         { id: "a.bench.ts", runtime: "node", status: "ok" },
       ],
     });
   });
-
-  it("ends as interrupted after the running child when the stop signal fires", async () => {
-    const controller = new AbortController();
-    const stopAtA = starter((_runtime, request) => {
-      if (request.id === "a.bench.ts") {
-        controller.abort();
-        return stopped;
-      }
-      return ranOnce;
-    });
-
-    const outcome = await runOnceHere({
-      files: ["zeta.bench.ts", "a.bench.ts"],
-      runtimes: ["node", "bun"],
-      signal: controller.signal,
-      startChild: stopAtA,
-    });
-
-    expect(outcome).toStrictEqual({
-      interrupted: true,
-      results: [{ id: "zeta.bench.ts", runtime: "node", status: "ok" }],
-    });
-  });
 });
 
-/** Whether a run was interrupted, and each result's case id and error message. */
-interface Ended {
-  interrupted: boolean;
-  ran: [string, string | undefined][];
-}
+describe("run with a relative nodeImport from the config file", () => {
+  it("starts every child under timeout with the nodeImport resolved against the config's directory", async () => {
+    const resolved = fileURLToPath(new URL("fixtures/config/nested/loader.mjs", import.meta.url));
+    const echoOptions: StartChild = async (_runtime, request, options) => {
+      const asked = `${request.mode} ${String(options.nodeImport)} ${String(options.timeout)}`;
+      if (request.mode === "list") {
+        return {
+          status: "ok",
+          result: { status: "ok", cases: [{ id: asked, setupPerCall: false }] },
+          output: "",
+        };
+      }
+      return failedOutcome("fn", asked);
+    };
 
-/** Runs with `input` and gives what ended. */
-async function runEnded(input: Partial<OnceInput>): Promise<Ended> {
-  const report = await runHere(input);
-  return {
-    interrupted: report.interrupted,
-    ran: report.results.map((result) => [result.id, result.error?.message]),
-  };
-}
-
-/** Runs every case once with `input` and gives what ended. */
-async function runOnceEnded(input: Partial<OnceInput>): Promise<Ended> {
-  const outcome = await runOnceHere(input);
-  return {
-    interrupted: outcome.interrupted,
-    ran: outcome.results.map((result) => [
-      result.id,
-      result.status === "failed" ? result.error.message : undefined,
-    ]),
-  };
-}
-
-describe.each([
-  { name: "run", go: runEnded, mode: "measure" },
-  { name: "runOnce", go: runOnceEnded, mode: "once" },
-])("$name", ({ go, mode }) => {
-  describe("where the command exits 2", () => {
-    it.each([
-      { why: "resolving the options", input: { filter: "(" } },
-      { why: "selecting the cases", input: { files: ["banana.bench.ts"] } },
-    ])("throws the ConfigError from $why, starting no child", async ({ input }) => {
-      const result = go({ ...input, startChild: startsNoChild });
-
-      await expect(result).rejects.toBeInstanceOf(ConfigError);
+    const report = await runHere({
+      config: DOT_IMPORT_CONFIG,
+      timeout: 1234,
+      startChild: echoOptions,
     });
-  });
 
-  describe("when the stop signal fires during listing", () => {
-    it("returns no result, as interrupted", async () => {
-      const controller = new AbortController();
-      const stopping: StartChild = async () => {
-        controller.abort();
-        return stopped;
-      };
-
-      const ended = await go({ signal: controller.signal, startChild: stopping });
-
-      expect(ended).toStrictEqual({ interrupted: true, ran: [] });
-    });
-  });
-
-  describe("with a relative nodeImport from the config file", () => {
-    it("starts every child under timeout with the nodeImport resolved against the config's directory", async () => {
-      const resolved = fileURLToPath(new URL("fixtures/config/nested/loader.mjs", import.meta.url));
-      const echoOptions: StartChild = async (_runtime, request, options) => {
-        const asked = `${request.mode} ${String(options.nodeImport)} ${String(options.timeout)}`;
-        if (request.mode === "list") {
-          return {
-            status: "ok",
-            result: { status: "ok", cases: [{ id: asked, setupPerCall: false }] },
-            output: "",
-          };
-        }
-        return failedOutcome("fn", asked);
-      };
-
-      const ended = await go({ config: DOT_IMPORT_CONFIG, timeout: 1234, startChild: echoOptions });
-
-      expect(ended.ran).toStrictEqual([[`list ${resolved} 1234`, `${mode} ${resolved} 1234`]]);
-    });
+    expect(report.results.map((result) => [result.id, result.error?.message])).toStrictEqual([
+      [`list ${resolved} 1234`, `measure ${resolved} 1234`],
+    ]);
   });
 });

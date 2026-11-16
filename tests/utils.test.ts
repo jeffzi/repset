@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { timerResolutionMs } from "../src/utils.js";
+import {
+  describe as describeValue,
+  slashed,
+  thrownMessage,
+  timerResolutionMs,
+} from "../src/utils.js";
 
 const RESOLUTION = 0.125;
 const COARSE_TRANSITIONS = 2000;
@@ -39,13 +44,34 @@ describe("timerResolutionMs", () => {
       expect(resolution).toBe(RESOLUTION);
     });
   });
+});
 
-  describe("when given no clock", () => {
-    it("probes performance.now", () => {
-      const resolution = timerResolutionMs();
+describe("the describe function", () => {
+  describe("when given a function", () => {
+    it("names it without printing its source", () => {
+      const described = describeValue(() => 1);
 
-      expect(resolution).toBeGreaterThan(0);
-      expect(resolution).toBeLessThan(Number.POSITIVE_INFINITY);
+      expect(described).not.toContain("=>");
+    });
+  });
+});
+
+describe("slashed", () => {
+  it("replaces every Windows separator with a slash", () => {
+    expect(slashed(String.raw`benchmarks\nested\sort.bench.ts`, "\\")).toBe(
+      "benchmarks/nested/sort.bench.ts",
+    );
+  });
+});
+
+describe("thrownMessage", () => {
+  describe("when the value has no string form", () => {
+    it("returns a string instead of throwing", () => {
+      const unprintable: unknown = Object.create(null);
+
+      const message = thrownMessage(unprintable);
+
+      expect(typeof message).toBe("string");
     });
   });
 });

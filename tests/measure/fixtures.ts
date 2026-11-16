@@ -24,16 +24,3 @@ export function exposedGc(options?: NodeJS.GCOptions & { execution?: "sync" }): 
     Reflect.apply(gc, undefined, args);
   };
 }
-
-/** Returns the Error a call throws, failing the test when it throws nothing or a non-Error. */
-export function errorOf(call: () => unknown): Error {
-  try {
-    call();
-  } catch (error) {
-    if (error instanceof Error) {
-      return error;
-    }
-    throw new Error("threw a non-Error value", { cause: error });
-  }
-  throw new Error("did not throw");
-}

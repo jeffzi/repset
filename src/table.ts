@@ -3,10 +3,14 @@
  *
  * Pure functions from the report's types to text; nothing here prints.
  */
+import type { TeardownFailure } from "./child.js";
 import type { FailedResult, MeasuredResult, Result } from "./report.js";
 
 /** Time units from nanoseconds up, each a thousand of the one before. */
 const TIME_UNITS = ["ns", "µs", "ms", "s"] as const;
+
+/** How many of one time unit make one of the next. */
+const UNIT_STEP = 1000;
 
 const SIGNIFICANT_DIGITS = 3;
 
@@ -30,8 +34,8 @@ function formatTime(ns: number): string {
   let value = ns;
   let unit = 0;
   // Compare the rounded value, so 999.7 ns prints as 1.00 µs rather than 1000 ns.
-  while (unit < TIME_UNITS.length - 1 && Math.abs(Number(significant(value))) >= 1000) {
-    value /= 1000;
+  while (unit < TIME_UNITS.length - 1 && Math.abs(Number(significant(value))) >= UNIT_STEP) {
+    value /= UNIT_STEP;
     unit += 1;
   }
   return `${significant(value)} ${TIME_UNITS[unit]}`;
@@ -42,11 +46,9 @@ function formatTime(ns: number): string {
  *
  * @param result - The measured result.
  * @returns Its id, median, mean, min, max and sample count, the times per call.
- * @throws {Error} When the result's process holds no statistics, which a measured result always has.
  */
 function measuredCells(result: MeasuredResult): string[] {
-  const stats = result.processes[0]?.stats;
-  if (stats == null) throw new Error(`the measured case ${result.id} holds no statistics`);
+  const { stats } = result.processes[0];
   return [
     result.id,
     formatTime(result.median),
@@ -71,12 +73,40 @@ function alignRows(rows: readonly (readonly string[])[], idWidth: number): strin
   );
 }
 
-/** The lines of a failed case: its row, then each further line of its message beneath it. */
-function failedLines(result: FailedResult, idWidth: number): string[] {
-  const [first = "", ...rest] = result.error.message.split("\n");
-  const lead = `${result.id.padEnd(idWidth)}${COLUMN_GAP}failed in ${result.error.phase}: `;
+const TEARDOWN_LABEL = "teardown also failed: ";
+
+/** `message` after `lead`, each further line of it beneath its first. */
+function leadLines(lead: string, message: string): string[] {
+  const [first = "", ...rest] = message.split("\n");
   const continuation = " ".repeat(lead.length);
   return [`${lead}${first}`, ...rest.map((line) => `${continuation}${line}`)];
+}
+
+/**
+ * The labelled lines of a cleanup teardown's failure, shown beneath the failure it cleaned up after.
+ *
+ * @param teardownError - The teardown's failure.
+ * @param indent - What opens the first line: the column the lines start at.
+ * @returns The label and the teardown's message, each further line of the message beneath its first.
+ */
+export function teardownLines(teardownError: TeardownFailure, indent: string): string[] {
+  return leadLines(`${indent}${TEARDOWN_LABEL}`, teardownError.message);
+}
+
+/**
+ * The lines of a failed case.
+ *
+ * @param result - The failed result.
+ * @param idWidth - The width the case id is padded to.
+ * @returns Its row, then each further line of its message beneath it, then the labelled lines of
+ *   its cleanup teardown's failure when that teardown threw too.
+ */
+function failedLines(result: FailedResult, idWidth: number): string[] {
+  const lead = `${result.id.padEnd(idWidth)}${COLUMN_GAP}failed in ${result.error.phase}: `;
+  const { message, teardownError } = result.error;
+  const teardown =
+    teardownError === null ? [] : teardownLines(teardownError, " ".repeat(lead.length));
+  return [...leadLines(lead, message), ...teardown];
 }
 
 /** The lines of one runtime's section: its heading, the column header, then a row per case. */
@@ -100,7 +130,6 @@ function sectionLines(results: readonly Result[]): string[] {
  *
  * @param results - The results that finished, in run order.
  * @returns The table, ending in a newline, or the empty string when there is no result.
- * @throws {Error} When a measured result's process holds no statistics.
  */
 export function formatTable(results: readonly Result[]): string {
   if (results.length === 0) return "";

@@ -1,0 +1,2 @@
+# Check text out with LF on every platform: the tests parse README.md by its newlines.
+* text=auto eol=lf

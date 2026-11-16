@@ -1,9 +1,12 @@
 {
   "name": "repset",
   "version": "0.0.0",
-  "private": true,
-  "description": "",
+  "description": "repset times synchronous JavaScript and TypeScript functions on Node and Bun.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jeffzi/repset.git"
+  },
   "bin": {
     "repset": "./dist/cli.js"
   },
@@ -43,6 +46,6 @@
     }
   },
   "engines": {
-    "node": ">=22"
+    "node": "^26"
   }
 }

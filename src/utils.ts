@@ -4,6 +4,9 @@
  * The `measure` modules import it and load in a browser page, so it reads no Node builtin.
  */
 
+/** Like `Omit`, but `K` must be a key of `T`, so a misspelled or removed key fails to compile. */
+export type StrictOmit<T, K extends keyof T> = Omit<T, K>;
+
 const TRANSITIONS_PER_PASS = 2000;
 
 /**
@@ -55,6 +58,18 @@ export function timerResolutionMs(now: () => number = performanceNow): number {
   return smallestChange(now, TRANSITIONS_PER_PASS);
 }
 
+/**
+ * Rewrites a path with `/` separators, whatever the OS.
+ *
+ * @param path - The path to rewrite.
+ * @param separator - The OS's own separator, `sep` from `node:path`: the caller passes it so this
+ *   module reads no Node builtin.
+ * @returns `path` with every `separator` replaced by `/`.
+ */
+export function slashed(path: string, separator: string): string {
+  return path.split(separator).join("/");
+}
+
 /** Names `value` in an error message without printing a function's source or an object's body. */
 export function describe(value: unknown): string {
   if (Array.isArray(value)) return "an array";
@@ -68,6 +83,22 @@ export function describe(value: unknown): string {
     default:
       return String(value);
   }
+}
+
+/**
+ * Reads one property of a value, for a value that may not be an object.
+ *
+ * @param value - The value to read from.
+ * @param key - The property to read.
+ * @returns The property's value when `value` is a non-null object, `undefined` otherwise.
+ */
+export function property(value: unknown, key: PropertyKey): unknown {
+  return typeof value === "object" && value !== null ? Reflect.get(value, key) : undefined;
+}
+
+/** Whether `value` is a non-null, non-array object, narrowed to read its fields as `unknown`. */
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /**

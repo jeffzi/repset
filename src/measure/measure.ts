@@ -11,8 +11,9 @@
  */
 
 import { performanceNow, thrownMessage, timerResolutionMs } from "../utils.js";
+import { type GcDuringTiming, observeCollections, type TimingWindow } from "./collections.js";
 import { empty, type EmptyResult, type Lifecycle, sampleEmpty } from "./empty.js";
-import { type InFlight, keep, samplePerCall } from "./per-call.js";
+import { holdInFlight, type InFlight, keep, releaseInFlight, samplePerCall } from "./per-call.js";
 import { runningRuntime } from "./runtime.js";
 import {
   CalibrationError,
@@ -20,24 +21,18 @@ import {
   type SamplerResult,
   type Sampling,
   type TimedMinimums,
-} from "./shared-state.js";
+} from "./sampler.js";
 
 const NS_PER_MS = 1_000_000;
 
 /** The run fails when the body's mean per call is below this multiple of the empty body's. */
 const MIN_RATIO_TO_EMPTY_BODY = 1.42;
 
-/** `detail.kind` of a Node `gc` performance entry for a scavenge (`NODE_PERFORMANCE_GC_MINOR`). */
-const GC_MINOR = 1;
-
-/** `detail.kind` of a Node `gc` performance entry for a full mark-compact (`NODE_PERFORMANCE_GC_MAJOR`). */
-const GC_MAJOR = 4;
-
 /** The time, in milliseconds, the body's timed samples span at least when `minTime` is absent. */
-const DEFAULT_TIME_MS = 1000;
+export const DEFAULT_MIN_TIME = 1000;
 
 /** The fewest timed samples the body runs when `minSamples` is absent. */
-const DEFAULT_SAMPLES = 64;
+export const DEFAULT_MIN_SAMPLES = 64;
 
 // ---------------------------------------------------------------------------
 // Types and errors
@@ -68,13 +63,13 @@ export interface MeasureOptions {
   /** The clock, in milliseconds; defaults to `performance.now()`. */
   readonly now?: () => number;
   /**
-   * The time, in milliseconds, the body's timed samples span at least; defaults to 1000. Not
-   * validated: the caller passes a finite number of 0 or more.
+   * The time, in milliseconds, the body's timed samples span at least; defaults to
+   * {@link DEFAULT_MIN_TIME}. Not validated: the caller passes a finite number of 0 or more.
    */
   readonly minTime?: number;
   /**
-   * The fewest timed samples the body runs; defaults to 64. Not validated: the caller passes an
-   * integer of 1 or more.
+   * The fewest timed samples the body runs; defaults to {@link DEFAULT_MIN_SAMPLES}. Not
+   * validated: the caller passes an integer of 1 or more.
    */
   readonly minSamples?: number;
 }
@@ -91,22 +86,11 @@ export interface Statistics {
   readonly sampleCount: number;
 }
 
-/** The collections a `gc` performance observer saw while the body's samples were timed. */
-export interface GcDuringTiming {
-  readonly count: number;
-  readonly minor: number;
-  readonly major: number;
-  readonly totalMs: number;
-  readonly maxMs: number;
-}
-
 export interface Measurement extends Statistics {
   readonly timerResolutionNs: number;
   readonly callsPerSample: number;
   /** Whether `callsPerSample` was given rather than calibrated by warmup. */
   readonly callsPerSampleFixed: boolean;
-  /** Whether a collection ran between warmup and timing. */
-  readonly collected: boolean;
   /** The body's mean per call divided by the empty body's. */
   readonly ratioToEmptyBody: number;
   /** Present only where the runtime delivers `gc` performance entries, as Node does. */
@@ -119,13 +103,23 @@ export interface Measurement extends Statistics {
   readonly timingMs: number;
 }
 
+/** Each value is described by {@link Phase}. */
+export const PHASES = [
+  "setup",
+  "fn",
+  "teardown",
+  "optimized-away",
+  "calibration",
+  "child",
+] as const;
+
 /**
  * Where a case failed: `setup`, `fn` or `teardown` threw (`fn` also for a first call that returned
- * a thenable); `optimized-away`, the body is too close to the empty body to tell apart; `calibration`, a count
- * passed the cap or a third timing attempt was discarded; `child`, the runtime lacks what measuring
- * needs.
+ * a thenable); `optimized-away`, the body is too close to the empty body to tell apart;
+ * `calibration`, a count passed the cap or a third timing attempt was discarded; `child`, the
+ * runtime lacks what measuring needs.
  */
-export type Phase = "setup" | "fn" | "teardown" | "optimized-away" | "calibration" | "child";
+export type Phase = (typeof PHASES)[number];
 
 /**
  * A failure of `measure`: the phase it failed in, and as `cause` the value a callback, the loader or
@@ -135,6 +129,11 @@ export type Phase = "setup" | "fn" | "teardown" | "optimized-away" | "calibratio
 export class MeasureError extends Error {
   override name = "MeasureError";
   readonly phase: Phase;
+  /**
+   * The teardown's failure, in phase `teardown`, when the cleanup that tore the state down after
+   * this failure threw too; `null` when that teardown returned or no cleanup ran.
+   */
+  readonly teardownError: MeasureError | null;
 
   /**
    * Builds the error, its message the cause's own when the cause is an `Error`, its string form
@@ -143,21 +142,17 @@ export class MeasureError extends Error {
    * @param phase - Where the case failed.
    * @param cause - The value that was thrown, or the `Error` built for a failure of `measure`'s own;
    *   kept as it is.
+   * @param teardownError - The failure of the cleanup's teardown after this failure, or `null`.
    */
-  constructor(phase: Phase, cause: unknown) {
+  constructor(phase: Phase, cause: unknown, teardownError: MeasureError | null = null) {
     super(thrownMessage(cause), { cause });
     this.phase = phase;
+    this.teardownError = teardownError;
   }
 }
 
 /** What the body's sampler is handed: the empty run's sampling plus `minTime` and `minSamples`. */
 interface BodySampling extends Sampling, TimedMinimums {}
-
-/** The real-time bounds, on the `performance.now()` timeline, of the body's timed samples. */
-interface TimingWindow {
-  startMs: number;
-  endMs: number;
-}
 
 // ---------------------------------------------------------------------------
 // Measurement
@@ -172,8 +167,9 @@ interface TimingWindow {
  *
  * @param benchmark - The benchmark to measure.
  * @param options - A fixed count, an injected `noInline`, a clock to read, and the `minTime` and
- *   `minSamples` the body's timing attempts must pass, 1000 ms and 64 when absent; the empty body
- *   always takes 64 timed samples.
+ *   `minSamples` the body's timing attempts must pass, {@link DEFAULT_MIN_TIME} and
+ *   {@link DEFAULT_MIN_SAMPLES} when absent; the empty body always takes the fixed count of timed
+ *   samples {@link sampleEmpty} runs.
  * @returns The body's per-call statistics in nanoseconds and how they were taken.
  * @throws MeasureError in phase `child` when no garbage collector is exposed, or when Bun is
  *   running but `bun:jsc` cannot be loaded, with the loader's value as cause, before anything runs;
@@ -183,13 +179,13 @@ interface TimingWindow {
  *   state is torn down.
  * @throws MeasureError in phase `setup`, `fn` or `teardown` when that callback throws, with the
  *   thrown value unchanged as cause, after every state left alive is torn down; a teardown error
- *   during that cleanup is discarded, and a per-call state whose teardown threw is not torn down
- *   again.
+ *   during that cleanup is attached to the error as its `teardownError`, and a per-call state whose
+ *   teardown threw is not torn down again.
  * @throws MeasureError in phase `calibration` when warmup's or a grown count would pass the cap (the
  *   body's or the empty run's warmup count, or a count grown after a discarded body run), or when a
  *   sharedState body's third timing attempt is discarded too, naming the count a fourth would need.
- * @throws MeasureError in phase `optimized-away` when the body's mean per call is below 1.42 times the empty
- *   body's, naming both.
+ * @throws MeasureError in phase `optimized-away` when the body's mean per call is below
+ *   {@link MIN_RATIO_TO_EMPTY_BODY} times the empty body's, naming both.
  */
 export async function measure<State>(
   benchmark: Case<State>,
@@ -243,7 +239,6 @@ export async function measure<State>(
     timerResolutionNs: resolutionMs * NS_PER_MS,
     callsPerSample: run.callsPerSample,
     callsPerSampleFixed: options.callsPerSample !== undefined,
-    collected: true,
     ratioToEmptyBody,
     ...(gcDuringTiming === undefined ? {} : { gcDuringTiming }),
     timingAttempts: run.timingAttempts,
@@ -256,12 +251,13 @@ export async function measure<State>(
  * The `minTime` and `minSamples` the body's timing attempts must pass.
  *
  * @param options - The options `measure` was given.
- * @returns The given `minTime` and `minSamples`, 1000 ms and 64 when absent.
+ * @returns The given `minTime` and `minSamples`, {@link DEFAULT_MIN_TIME} and
+ *   {@link DEFAULT_MIN_SAMPLES} when absent.
  */
 function timedMinimums(options: MeasureOptions): TimedMinimums {
   return {
-    minTime: options.minTime ?? DEFAULT_TIME_MS,
-    minSamples: options.minSamples ?? DEFAULT_SAMPLES,
+    minTime: options.minTime ?? DEFAULT_MIN_TIME,
+    minSamples: options.minSamples ?? DEFAULT_MIN_SAMPLES,
   };
 }
 
@@ -274,15 +270,16 @@ function timedMinimums(options: MeasureOptions): TimedMinimums {
  * @returns The body's mean per call divided by the empty body's.
  * @throws MeasureError in phase `calibration` when the empty run's warmup count would pass its cap.
  * @throws MeasureError in phase `child` when the forced GC throws.
- * @throws MeasureError in phase `optimized-away` when the ratio is below 1.42, naming both means.
+ * @throws MeasureError in phase `optimized-away` when the ratio is below
+ *   {@link MIN_RATIO_TO_EMPTY_BODY}, naming both means.
  */
 function checkedRatioToEmptyBody(bodyMeanNs: number, kind: Lifecycle, sampling: Sampling): number {
   let emptyRun: EmptyResult;
   try {
     emptyRun = sampleEmpty({ kind, ...sampling });
   } catch (error) {
-    // The empty body is repset's own: past the cap, only the forced GC is left to throw, and it
-    // throws a MeasureError of its own.
+    // The empty body is repset's own, so `failedIn` never falls back to `child`: it keeps the forced
+    // GC's MeasureError and maps the cap's CalibrationError to `calibration`.
     throw failedIn("child", error);
   }
   const emptyMeanNs = summarize(emptyRun.spans, emptyRun.sampleCount, emptyRun.callsPerSample).mean;
@@ -318,13 +315,27 @@ function collectGarbage(gc: NonNullable<typeof globalThis.gc>): void {
  * @param phase - Where the case failed when `error` is neither a `MeasureError` nor a
  *   `CalibrationError`.
  * @param error - The thrown value.
- * @returns `error` itself when it is a `MeasureError`; a `MeasureError` in phase `calibration` when
- *   it is a `CalibrationError`; otherwise a `MeasureError` in `phase`. The wrapped ones have `error`
- *   as cause.
+ * @param teardownError - The failure of the cleanup's teardown after `error`, or `null`.
+ * @returns `error` itself when it is a `MeasureError` and `teardownError` is `null`, or a copy of
+ *   its phase and cause carrying `teardownError`; a `MeasureError` in phase `calibration` when it is
+ *   a `CalibrationError`; otherwise a `MeasureError` in `phase`. The wrapped ones have `error` as
+ *   cause and carry `teardownError`.
  */
-function failedIn(phase: Phase, error: unknown): MeasureError {
-  if (error instanceof MeasureError) return error;
-  return new MeasureError(error instanceof CalibrationError ? "calibration" : phase, error);
+function failedIn(
+  phase: Phase,
+  error: unknown,
+  teardownError: MeasureError | null = null,
+): MeasureError {
+  if (error instanceof MeasureError) {
+    return teardownError === null
+      ? error
+      : new MeasureError(error.phase, error.cause, teardownError);
+  }
+  return new MeasureError(
+    error instanceof CalibrationError ? "calibration" : phase,
+    error,
+    teardownError,
+  );
 }
 
 /**
@@ -351,7 +362,7 @@ function exposedGc(): NonNullable<typeof globalThis.gc> {
  * @throws MeasureError in phase `child` when Bun is running but `bun:jsc` cannot be loaded,
  *   with whatever the loader rejected with as cause.
  */
-async function runtimeNoInline(): Promise<NoInline | undefined> {
+export async function runtimeNoInline(): Promise<NoInline | undefined> {
   if (runningRuntime() !== "bun") return undefined;
   try {
     const { noInline } = await import("bun:jsc");
@@ -376,10 +387,10 @@ async function runtimeNoInline(): Promise<NoInline | undefined> {
  * @returns What `use` returned.
  * @throws MeasureError in phase `setup` when `setup` throws, before anything else runs.
  * @throws MeasureError in phase `fn` when the body throws or its first call returns a thenable,
- *   after teardown ran; a teardown error then is discarded.
+ *   after teardown ran; a teardown error then is attached to the error as its `teardownError`.
  * @throws MeasureError in phase `calibration` when `use` throws a `CalibrationError`, in the phase
  *   of any `MeasureError` it throws, otherwise in phase `fn`, after teardown ran; a teardown error
- *   then is discarded.
+ *   then is attached to the error as its `teardownError`.
  * @throws MeasureError in phase `teardown` when `teardown` throws and the body succeeded.
  */
 export function withCaseState<State, Result>(
@@ -399,8 +410,7 @@ export function withCaseState<State, Result>(
     requireSynchronous(fn(state));
     result = use(state);
   } catch (error) {
-    tearDownDiscarding(teardown, state);
-    throw failedIn("fn", error);
+    throw failedIn("fn", error, tearDownCatching(teardown, state));
   }
   try {
     teardown(state);
@@ -415,17 +425,17 @@ export function withCaseState<State, Result>(
  * then tears the state down.
  *
  * @param benchmark - The benchmark.
- * @param sampling - The clock, its resolution, the forced GC, the fixed count if one was given, and the
- *   `minTime` and `minSamples` the timing attempts must pass.
- * @param timing - Receives the end of each timing attempt's samples, before the sampler checks the run;
- *   the forced GC before each run records their start.
+ * @param sampling - The clock, its resolution, the forced GC, the fixed count if one was given, and
+ *   the `minTime` and `minSamples` the timing attempts must pass.
+ * @param timing - Receives the end of each timing attempt's samples, before the sampler checks the
+ *   run; the forced GC before each run records their start.
  * @returns What the body's sampler returned.
  * @throws MeasureError in phase `setup` when `setup` throws, before anything else runs.
  * @throws MeasureError in phase `fn` when the body throws or its first call returns a thenable,
- *   after teardown ran; a teardown error then is discarded.
+ *   after teardown ran; a teardown error then is attached to the error as its `teardownError`.
  * @throws MeasureError in phase `calibration` when the sampler refuses a count or a fourth run, and in
- *   phase `child` when the forced GC throws, after teardown ran; a teardown error then is
- *   discarded.
+ *   phase `child` when the forced GC throws, after teardown ran; a teardown error then is attached
+ *   to the error as its `teardownError`.
  * @throws MeasureError in phase `teardown` when `teardown` throws and the body succeeded.
  */
 function measureSharedState<State>(
@@ -450,14 +460,15 @@ function measureSharedState<State>(
  * tearing down the state left alive when anything throws.
  *
  * @param benchmark - The benchmark.
- * @param sampling - The clock, its resolution, the forced GC, the fixed count if one was given, and the
- *   `minTime` and `minSamples` the timing attempts must pass.
+ * @param sampling - The clock, its resolution, the forced GC, the fixed count if one was given, and
+ *   the `minTime` and `minSamples` the timing attempts must pass.
  * @param timing - Receives the end of the timed samples; the forced GC records their start.
  * @returns What the body's sampler returned.
  * @throws MeasureError in phase `setup`, `fn` or `teardown` when that callback throws, `fn` also
  *   when the body's first call returns a thenable, `calibration` when the sampler refuses a count,
  *   and `child` when the forced GC throws, after the state built and not torn down, if any, is torn
- *   down, save one whose teardown threw; a teardown error during that cleanup is discarded.
+ *   down, save one whose teardown threw; a teardown error during that cleanup is attached to the
+ *   error as its `teardownError`.
  */
 function measurePerCall<State>(
   benchmark: Case<State>,
@@ -481,22 +492,19 @@ function measurePerCall<State>(
   const inFlight: InFlight<State> = { held: false, state: undefined };
   try {
     const checked = setup();
-    inFlight.state = checked;
-    inFlight.held = true;
+    holdInFlight(inFlight, checked);
     requireSynchronous(fn(checked));
     trackedTeardown(checked);
-    inFlight.held = false;
-    inFlight.state = undefined;
+    releaseInFlight(inFlight);
     const run = samplePerCall({ ...sampling, setup, fn, teardown: trackedTeardown, inFlight });
     timing.endMs = performance.now();
     return run;
   } catch (error) {
     const phase = perCallPhase(error, inFlight.held, tearingDown);
     // A state whose teardown threw is left alone rather than torn down a second time.
-    if (holds(inFlight) && phase !== "teardown") {
-      tearDownDiscarding(teardown, inFlight.state);
-    }
-    throw failedIn(phase, error);
+    const teardownError =
+      holds(inFlight) && phase !== "teardown" ? tearDownCatching(teardown, inFlight.state) : null;
+    throw failedIn(phase, error, teardownError);
   }
 }
 
@@ -544,18 +552,25 @@ function requireSynchronous(returned: unknown): void {
 }
 
 /**
- * Tears `state` down while an error is already in flight: that error wins, so the teardown's
- * own error is dropped rather than replacing it, which a `finally` would do.
+ * Tears `state` down while an error is already in flight: that error wins, so the teardown's own
+ * error is caught and handed back for the caller to attach, rather than replacing it, which a
+ * `finally` would do.
  *
  * @param teardown - The benchmark's teardown.
  * @param state - The state to release.
+ * @returns A `MeasureError` in phase `teardown` with the teardown's thrown value as cause, whatever
+ *   that value, `null` included; `null` when the teardown returned.
  */
-function tearDownDiscarding<State>(teardown: (state: State) => void, state: State): void {
+function tearDownCatching<State>(
+  teardown: (state: State) => void,
+  state: State,
+): MeasureError | null {
   try {
     teardown(state);
-  } catch {
-    // The error already propagating is the one the caller sees.
+  } catch (error) {
+    return new MeasureError("teardown", error);
   }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -570,7 +585,7 @@ function tearDownDiscarding<State>(teardown: (state: State) => void, state: Stat
  * @returns The time at that rank.
  * @throws RangeError when no time is stored at that rank, as when no span was stored at all.
  */
-function timeAt(sorted: Float64Array, rank: number): number {
+function timeAt(sorted: ArrayLike<number>, rank: number): number {
   const time = sorted[rank];
   if (time === undefined) {
     throw new RangeError(`no stored span at rank ${rank}: ${sorted.length} spans stored`);
@@ -587,7 +602,7 @@ function timeAt(sorted: Float64Array, rank: number): number {
  * @returns The interpolated time.
  * @throws RangeError when no span was stored.
  */
-function quantile(sorted: Float64Array, q: number): number {
+export function quantile(sorted: ArrayLike<number>, q: number): number {
   const position = (sorted.length - 1) * q;
   const lowerRank = Math.floor(position);
   const lowTime = timeAt(sorted, lowerRank);
@@ -630,93 +645,6 @@ export function summarize(
     mean: total / sorted.length,
     sampleCount: sorted.length,
   };
-}
-
-// ---------------------------------------------------------------------------
-// GC observation
-// ---------------------------------------------------------------------------
-
-/** A `gc` performance observer for the body's run. */
-interface CollectionObserver {
-  readonly during: (timing: TimingWindow) => Promise<GcDuringTiming>;
-  readonly disconnect: () => void;
-}
-
-/**
- * Starts observing `gc` performance entries, where the runtime delivers them.
- *
- * @returns The observer, or `undefined` where the runtime has no `gc` entry type, as on Bun or in a
- *   browser.
- */
-function observeCollections(): CollectionObserver | undefined {
-  if (
-    typeof PerformanceObserver === "undefined" ||
-    !PerformanceObserver.supportedEntryTypes.includes("gc")
-  ) {
-    return undefined;
-  }
-  const entries: PerformanceEntry[] = [];
-  const observer = new PerformanceObserver((list) => {
-    entries.push(...list.getEntries());
-  });
-  observer.observe({ entryTypes: ["gc"] });
-  return {
-    during: async (timing) => {
-      // Node queues a gc entry from a native setImmediate callback and dispatches it to observers
-      // after that: two timer turns guarantee the loop has passed its check phase between them.
-      await nextTurn();
-      await nextTurn();
-      entries.push(...observer.takeRecords());
-      return summarizeCollections(
-        entries.filter(
-          (entry) => entry.startTime >= timing.startMs && entry.startTime < timing.endMs,
-        ),
-      );
-    },
-    disconnect: () => {
-      observer.disconnect();
-    },
-  };
-}
-
-/** Resolves after one `setTimeout(0)` turn of the event loop, so pending native callbacks have run. */
-function nextTurn(): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, 0);
-  });
-}
-
-/**
- * Counts collections by kind and sums their durations.
- *
- * @param entries - The `gc` performance entries to count.
- * @returns How many there were, how many were minor and major, and their total and longest
- *   duration in milliseconds.
- */
-function summarizeCollections(entries: readonly PerformanceEntry[]): GcDuringTiming {
-  let minor = 0;
-  let major = 0;
-  let totalMs = 0;
-  let maxMs = 0;
-  for (const entry of entries) {
-    const kind = gcKind(entry);
-    if (kind === GC_MINOR) minor += 1;
-    if (kind === GC_MAJOR) major += 1;
-    totalMs += entry.duration;
-    maxMs = Math.max(maxMs, entry.duration);
-  }
-  return { count: entries.length, minor, major, totalMs, maxMs };
-}
-
-/**
- * Reads the forced GC kind Node records in a `gc` entry's `detail`.
- *
- * @param entry - A `gc` performance entry.
- * @returns The entry's `detail.kind`, or `undefined` when it carries none.
- */
-function gcKind(entry: PerformanceEntry): unknown {
-  const detail: unknown = Reflect.get(entry, "detail");
-  return typeof detail === "object" && detail !== null ? Reflect.get(detail, "kind") : undefined;
 }
 
 // ---------------------------------------------------------------------------

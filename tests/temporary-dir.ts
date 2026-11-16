@@ -4,11 +4,19 @@ import { join } from "node:path";
 
 import { afterAll, beforeAll, onTestFinished } from "vitest";
 
+function createDir(prefix: string): string {
+  return mkdtempSync(join(tmpdir(), prefix));
+}
+
+function removeDir(dir: string): void {
+  rmSync(dir, { recursive: true, force: true });
+}
+
 /** A fresh directory named from `prefix`, removed when the test ends. */
 export function temporaryDir(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
+  const dir = createDir(prefix);
   onTestFinished(() => {
-    rmSync(dir, { recursive: true, force: true });
+    removeDir(dir);
   });
   return dir;
 }
@@ -17,10 +25,10 @@ export function temporaryDir(prefix: string): string {
 export function suiteTemporaryDir(prefix: string): { readonly path: string } {
   let dir = "";
   beforeAll(() => {
-    dir = mkdtempSync(join(tmpdir(), prefix));
+    dir = createDir(prefix);
   });
   afterAll(() => {
-    rmSync(dir, { recursive: true, force: true });
+    removeDir(dir);
   });
   return {
     get path(): string {

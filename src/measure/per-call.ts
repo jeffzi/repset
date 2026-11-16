@@ -2,9 +2,9 @@
  * The per-call sampler: for a body that consumes its state, so every call runs on a fresh one.
  * Each call builds a state, runs the body once on it between a pair of clock reads, then tears it
  * down; a sample's span is the sum of its calls' spans, so no setup or teardown lands inside one.
- * Spans are in milliseconds. The result is `sampleSharedState`'s `SamplerResult`, and `collect`,
- * `now`, `resolutionMs` and `callsPerSample` mean what they mean there, except that `collect` runs once:
- * this sampler takes a single timing attempt.
+ * Spans are in milliseconds. The result is the `SamplerResult` every sampler returns, and `collect`,
+ * `now`, `resolutionMs` and `callsPerSample` mean what they mean there, except that `collect` runs
+ * once: this sampler takes a single timing attempt.
  *
  * Every function from `samplePerCall` down to the body is plain synchronous code: no `try`,
  * `catch`, `finally`, `async` function, generator or Promise encloses the timed calls or the loops
@@ -12,10 +12,11 @@
  * handling and teardown on a throw belong to the caller, which finds the state in flight in
  * `inFlight`.
  *
- * The module imports only sibling `measure` modules and reads no Node builtin, so it loads in a
- * browser page.
+ * The module imports only `../utils.js` and sibling `measure` modules and reads no Node builtin, so
+ * it loads in a browser page.
  */
 
+import type { StrictOmit } from "../utils.js";
 import {
   calibratedSampleMs,
   recordWarmup,
@@ -29,9 +30,9 @@ import {
   type Sampling,
   type TimedMinimums,
   type WarmupResult,
-} from "./shared-state.js";
+} from "./sampler.js";
 
-const WARMUP_MIN_MS = 3000;
+const PER_CALL_WARMUP_MIN_MS = 3000;
 const WARMUP_MAX_SAMPLES = 1000;
 
 /**
@@ -46,9 +47,30 @@ export interface InFlight<State> {
   state: State | undefined;
 }
 
+/**
+ * Records a state built and not yet torn down: `state` first, then `held`.
+ *
+ * @param inFlight - The holder to write.
+ * @param state - The state just built.
+ */
+export function holdInFlight<State>(inFlight: InFlight<State>, state: State): void {
+  inFlight.state = state;
+  inFlight.held = true;
+}
+
+/**
+ * Records that the state in flight was torn down: `held` first, then `state`.
+ *
+ * @param inFlight - The holder to clear.
+ */
+export function releaseInFlight<State>(inFlight: InFlight<State>): void {
+  inFlight.held = false;
+  inFlight.state = undefined;
+}
+
 /** `now` defaults to `performance.now()`, and `resolutionMs` to a probe of `now`. */
 export interface PerCallOptions<State>
-  extends Omit<Sampling, "now" | "resolutionMs">, SamplerClock, TimedMinimums {
+  extends StrictOmit<Sampling, "now" | "resolutionMs">, SamplerClock, TimedMinimums {
   /** Builds the fresh state one body call consumes. */
   readonly setup: () => State;
   /** The benchmark body; every call receives a state built for it alone. */
@@ -87,21 +109,20 @@ function sample<State>(perCall: PerCall<State>, count: number): number {
   let summed = 0;
   for (let call = 0; call < count; call++) {
     const state = setup();
-    inFlight.state = state;
-    inFlight.held = true;
+    holdInFlight(inFlight, state);
     const started = now();
     fn(state);
     summed += now() - started;
     teardown(state);
-    inFlight.held = false;
-    inFlight.state = undefined;
+    releaseInFlight(inFlight);
   }
   return summed;
 }
 
 /**
- * Runs warmup samples until 1000 have run, or until both 3000 ms of wall time, every setup and
- * teardown included, and 16 samples have passed, calibrating the count unless one was fixed.
+ * Runs warmup samples until {@link WARMUP_MAX_SAMPLES} have run, or until both
+ * {@link PER_CALL_WARMUP_MIN_MS} ms of wall time, every setup and teardown included, and
+ * {@link WARMUP_MIN_SAMPLES} samples have passed, calibrating the count unless one was fixed.
  *
  * @param perCall - The clock, the lifecycle, and the holder of the state in flight.
  * @param resolutionMs - The timer resolution, in milliseconds.
@@ -122,7 +143,7 @@ function warmup<State>(
   let elapsedMs = 0;
   while (
     progress.samples < WARMUP_MAX_SAMPLES &&
-    (progress.samples < WARMUP_MIN_SAMPLES || elapsedMs < WARMUP_MIN_MS)
+    (progress.samples < WARMUP_MIN_SAMPLES || elapsedMs < PER_CALL_WARMUP_MIN_MS)
   ) {
     const spanMs = sample(perCall, progress.count);
     elapsedMs = now() - started;
@@ -180,8 +201,9 @@ function timeSamples<State>(
  *   timing attempt or times again), warmup's samples without the forced GC's call, and the
  *   timed run's wall time, every setup and teardown in it included.
  * @throws Whatever `setup`, `fn`, `teardown` or `collect` throws, leaving the state built and not
- *   torn down, if any, in `options.inFlight`; and CalibrationError when warmup's calibrated count would pass
- *   `ceil(200 × resolution / 0.1 ns)`, naming the count asked for and the cap, before any sample runs it.
+ *   torn down, if any, in `options.inFlight`; and CalibrationError when warmup's calibrated count
+ *   would pass `ceil(200 × resolution / 0.1 ns)`, naming the count asked for and the cap, before any
+ *   sample runs it.
  */
 export function samplePerCall<State>(options: PerCallOptions<State>): SamplerResult {
   const { setup, fn, collect, callsPerSample } = options;
@@ -192,13 +214,11 @@ export function samplePerCall<State>(options: PerCallOptions<State>): SamplerRes
   const warmed = warmup(perCall, resolutionMs, callsPerSample);
   const spans = sampleBuffer(options, calibratedSampleMs(resolutionMs));
   const held = setup();
-  inFlight.state = held;
-  inFlight.held = true;
+  holdInFlight(inFlight, held);
   fn(held);
   collect();
   teardown(held);
-  inFlight.held = false;
-  inFlight.state = undefined;
+  releaseInFlight(inFlight);
   const { sampleCount, timingMs } = timeSamples(perCall, warmed.callsPerSample, spans, options);
   return {
     spans,

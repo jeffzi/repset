@@ -13,16 +13,14 @@ interface Point {
 }
 
 /** The bodies' shared state: the points every call moves. */
-export interface Points {
+export interface State {
   readonly points: readonly Point[];
 }
 
 const SIZE = 1000;
 
-/** How many distinct velocities the points cycle through. */
 const VELOCITY_LEVELS = 7;
 
-/** The velocity difference between neighboring levels. */
 const VELOCITY_STEP = 0.001;
 
 export const BODY_NAMES = ["each", "inlined"] as const;
@@ -34,7 +32,7 @@ export type BodyName = (typeof BODY_NAMES)[number];
  *
  * @returns A fresh state.
  */
-export function buildPoints(): Points {
+export function buildState(): State {
   const points: Point[] = [];
   for (let index = 0; index < SIZE; index++)
     points.push({ x: 0, vx: (index % VELOCITY_LEVELS) * VELOCITY_STEP });
@@ -58,7 +56,7 @@ function move(point: Point): void {
   point.x += point.vx;
 }
 
-export const BODIES: Readonly<Record<BodyName, (state: Points) => void>> = {
+export const BODIES: Readonly<Record<BodyName, (state: State) => void>> = {
   each: ({ points }) => {
     each(points, move);
   },
@@ -76,7 +74,7 @@ export const BODIES: Readonly<Record<BodyName, (state: Points) => void>> = {
  * @param state - The points to sum.
  * @returns The sum of their positions.
  */
-export function positionSum(state: Points): number {
+export function positionSum(state: State): number {
   let sum = 0;
   for (const point of state.points) sum += point.x;
   return sum;

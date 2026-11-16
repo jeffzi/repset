@@ -5,7 +5,7 @@
  * `schema` and never a key.
  */
 
-import type { ChildPhase, Measured } from "./child.js";
+import type { ChildPhase, Measured, TeardownFailure } from "./child.js";
 import type { Runtime } from "./measure/runtime.js";
 
 /** Every option that shaped the run, after the caller's options and the config were merged. */
@@ -39,17 +39,30 @@ export interface ResultError {
   readonly phase: ChildPhase;
   readonly message: string;
   readonly stack: string | null;
+  /** The failure of the teardown that cleaned up after this one, or `null` when none threw. */
+  readonly teardownError: TeardownFailure | null;
   readonly output: string;
 }
 
-/** One measuring process of a case; a process that failed holds `null` for what it did not reach. */
-export interface Process {
+/** One measuring process of a measured case, holding its statistics, sampling and checks. */
+export interface MeasuredProcess {
   readonly round: number;
   readonly orderInRound: number;
-  readonly stats: Measured["stats"] | null;
-  readonly sampling: Measured["sampling"] | null;
-  readonly checks: Measured["checks"] | null;
+  readonly stats: Measured["stats"];
+  readonly sampling: Measured["sampling"];
+  readonly checks: Measured["checks"];
   readonly gc: Measured["gc"];
+  readonly rawSamples: null;
+}
+
+/** The process of a failed case, holding `null` for what it did not reach. */
+export interface FailedProcess {
+  readonly round: number;
+  readonly orderInRound: number;
+  readonly stats: null;
+  readonly sampling: null;
+  readonly checks: null;
+  readonly gc: null;
   readonly rawSamples: null;
 }
 
@@ -70,7 +83,7 @@ export interface MeasuredResult extends ResultBase {
   readonly status: "ok";
   readonly error: null;
   readonly median: number;
-  readonly processes: readonly Process[];
+  readonly processes: readonly [MeasuredProcess, ...MeasuredProcess[]];
 }
 
 /** A case that failed: `error` says why, and its one process holds `null` for what it did not reach. */
@@ -78,7 +91,7 @@ export interface FailedResult extends ResultBase {
   readonly status: "failed";
   readonly error: ResultError;
   readonly median: null;
-  readonly processes: readonly Process[];
+  readonly processes: readonly FailedProcess[];
 }
 
 /** One case's result on one runtime. */

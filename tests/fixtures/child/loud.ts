@@ -1,4 +1,4 @@
-import { bench } from "../../../src/bench.js";
+import { bench } from "../../../src/child.js";
 
 const LINE_BYTES = 1024 * 1024 - 1;
 

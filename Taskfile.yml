@@ -19,9 +19,12 @@ tasks:
       - "{{.MISE}} lefthook install"
 
   test:
-    desc: Run the tests with coverage; arguments after -- run only those, without coverage
+    desc:
+      Build, then run the tests with coverage; arguments after -- run only those, without coverage
     deps: [_deps]
     cmds:
+      # Vitest's type check covers scripts/, which imports the built entry.
+      - task: build
       # A partial coverage report would skew the quality check.
       - "{{.MISE}} npx vitest run {{if .CLI_ARGS}}{{.CLI_ARGS}}{{else}}--coverage{{end}}"
 
@@ -51,6 +54,13 @@ tasks:
       - for: [lint, md, fmt]
         task: "_{{.ITEM}}"
       - "{{.MISE}} npx fallow fix --yes --no-create-config"
+
+  check-overhead:
+    desc: Build, then compare repset's timings with a baseline loop; run alone, before a release
+    deps: [_deps]
+    cmds:
+      - task: build
+      - "{{.MISE}} node --import tsx scripts/check-overhead.ts"
 
   check-package:
     desc:
@@ -96,7 +106,7 @@ tasks:
     internal: true
     deps: [_deps]
     cmds:
-      - "{{.MISE}} node scripts/check-mise-lock.ts"
+      - "{{.MISE}} node --import tsx scripts/check-mise-lock.ts"
 
   _lint:
     internal: true
@@ -148,6 +158,8 @@ tasks:
     internal: true
     deps: [_deps]
     cmds:
+      # The overhead check's benchmark file imports the built entry from dist/.
+      - task: build
       - "{{.MISE}} npx tsc -p tsconfig.json"
       - "{{.MISE}} npx oxlint --type-aware --disable-nested-config"
 

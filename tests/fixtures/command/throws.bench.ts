@@ -1,4 +1,4 @@
-import { bench } from "../../../src/bench.js";
+import { bench } from "../../../src/child.js";
 
 bench("throws/always", () => {
   throw new Error("banana");

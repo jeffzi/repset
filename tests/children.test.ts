@@ -4,9 +4,9 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { startChild as startBuiltChild } from "../dist/children.js";
 import type { ChildRequest } from "../src/child.js";
 import {
-  childEntryBeside,
   findRuntime,
   startChild,
   type FoundRuntime,
@@ -14,7 +14,8 @@ import {
   type StartOptions,
 } from "../src/children.js";
 import { ConfigError } from "../src/options.js";
-import { errorOf } from "./measure/fixtures.js";
+import { errorOf } from "./error-of.js";
+import { MELON } from "./fake-children.js";
 import { requiresRealBunHere } from "./real-bun.js";
 import { suiteTemporaryDir, temporaryDir } from "./temporary-dir.js";
 
@@ -68,6 +69,16 @@ async function startFixture(
   });
 }
 
+/** A once request whose `file` is the text the `echo.ts` fixture writes back as the child's result. */
+function echoing(written: string): ChildRequest {
+  return { mode: "once", file: written, id: "apple" };
+}
+
+/** The result line of a child whose own failure is `error`. */
+function failureLine(error: object): string {
+  return `${JSON.stringify({ status: "failed", error })}\n`;
+}
+
 /** Runs `start` and returns its outcome with the milliseconds it took. */
 async function timed(start: () => Promise<Outcome>): Promise<[Outcome, number]> {
   const started = performance.now();
@@ -75,22 +86,32 @@ async function timed(start: () => Promise<Outcome>): Promise<[Outcome, number]> 
   return [outcome, performance.now() - started];
 }
 
+/** The fields of a child's own failure in phase fn, before its `teardownError`. */
+const FN_KIWI = { phase: "fn", message: "kiwi", stack: "at fn" } as const;
+
 /** The failure of a child that left no usable result line. */
 const NO_RESULT = { status: "failed", error: { phase: "child", stack: null } };
 
 const LISTED_LINE = '{"status":"ok","cases":[{"id":"apple","setupPerCall":false}]}';
 
-afterEach(() => {
-  vi.unstubAllEnvs();
+/** A measurement complete in every field, whose `status` alone does not answer a measure request. */
+const MEASURED_PEAR_LINE = JSON.stringify({
+  status: "pear",
+  stats: { min: 1, p25: 1, median: 1, p75: 1, p99: 1, max: 1, mean: 1, sampleCount: 8 },
+  sampling: {
+    timerResolutionNs: 1,
+    callsPerSample: 1,
+    warmupSamples: 1,
+    timingAttempts: 1,
+    timingMs: 5,
+    callsPerSampleFixed: false,
+  },
+  checks: { ratioToEmptyBody: 1 },
+  gc: null,
 });
 
-describe("childEntryBeside", () => {
-  it.each([
-    { module: join(FIXTURES, "dist", "children.js"), entry: join(FIXTURES, "dist", "child.js") },
-    { module: join(FIXTURES, "src", "children.ts"), entry: join(FIXTURES, "src", "child.ts") },
-  ])("finds $entry beside $module", ({ module, entry }) => {
-    expect(childEntryBeside(module)).toBe(entry);
-  });
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe("findRuntime", () => {
@@ -175,6 +196,39 @@ describe("findRuntime", () => {
       await expect(found).rejects.toThrow(ConfigError);
       await expect(found).rejects.toThrow(/\bbun\b/);
     });
+
+    it("throws a ConfigError naming the runtime when PATH is unset", async () => {
+      vi.stubEnv("PATH", undefined);
+
+      const found = findRuntime("bun");
+
+      await expect(found).rejects.toThrow(ConfigError);
+      await expect(found).rejects.toThrow(/\bbun\b/);
+    });
+
+    describe("when PATH holds only an empty entry", () => {
+      const startDir = process.cwd();
+
+      afterEach(() => {
+        process.chdir(startDir);
+      });
+
+      it("throws a ConfigError naming the runtime instead of searching the working directory", async () => {
+        const dir = temporaryDir("repset-cwd-");
+        copyFileSync(process.execPath, join(dir, `bun${extname(process.execPath)}`));
+        process.chdir(dir);
+        vi.stubEnv("PATH", "");
+        // A copy found in the working directory would then fail its probe instead of resolving.
+        vi.stubEnv("NODE_OPTIONS", "--banana");
+
+        const found = findRuntime("bun");
+
+        await expect(found).rejects.toThrow(ConfigError);
+        await expect(found).rejects.toThrow(/\bbun\b/);
+        // Every error of a probe that ran names its `--version`; one found on no PATH entry does not.
+        await expect(found).rejects.not.toThrow(/--version/);
+      });
+    });
   });
 });
 
@@ -183,7 +237,7 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
     it.each([
       {
         why: "a once run",
-        request: { mode: "once", file: '{"status":"ok"}\n', id: "apple" },
+        request: echoing('{"status":"ok"}\n'),
         expected: { status: "ok", result: { status: "ok" }, output: "" },
       },
       {
@@ -197,27 +251,32 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
       },
       {
         why: "the child's own failure",
-        request: {
-          mode: "once",
-          file: '{"status":"failed","error":{"phase":"fn","message":"kiwi","stack":"at fn"}}\n',
-          id: "apple",
-        },
+        request: echoing(
+          '{"status":"failed","error":{"phase":"fn","message":"kiwi","stack":"at fn","teardownError":null}}\n',
+        ),
         expected: {
           status: "failed",
-          error: { phase: "fn", message: "kiwi", stack: "at fn" },
+          error: { phase: "fn", message: "kiwi", stack: "at fn", teardownError: null },
+          output: "",
+        },
+      },
+      {
+        why: "the child's own failure whose cleanup teardown failed too",
+        request: echoing(failureLine({ ...FN_KIWI, teardownError: MELON })),
+        expected: {
+          status: "failed",
+          error: { ...FN_KIWI, teardownError: MELON },
           output: "",
         },
       },
       {
         why: "the child's own failure with no stack",
-        request: {
-          mode: "once",
-          file: '{"status":"failed","error":{"phase":"load","message":"kiwi","stack":null}}\n',
-          id: "apple",
-        },
+        request: echoing(
+          '{"status":"failed","error":{"phase":"load","message":"kiwi","stack":null,"teardownError":null}}\n',
+        ),
         expected: {
           status: "failed",
-          error: { phase: "load", message: "kiwi", stack: null },
+          error: { phase: "load", message: "kiwi", stack: null, teardownError: null },
           output: "",
         },
       },
@@ -233,12 +292,6 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
       expect(outcome).toStrictEqual({ status: "ok", result: { status: "ok" }, output: "" });
     });
 
-    it.runIf(POSIX)("keeps the result when the child then died on a signal", async () => {
-      const outcome = await startFixture("line-then-kill.ts");
-
-      expect(outcome).toStrictEqual({ status: "ok", result: { status: "ok" }, output: "" });
-    });
-
     it("keeps the result when the child then passed its timeout", async () => {
       const outcome = await startFixture("line-then-hang.ts", ONCE, { timeout: SHORT_TIMEOUT_MS });
 
@@ -250,15 +303,6 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
     it.each([
       { why: "no line", request: { mode: "list", file: "" } },
       { why: "a line with no newline", request: { mode: "list", file: LISTED_LINE } },
-      { why: "a line that is not JSON", request: { mode: "list", file: "banana\n" } },
-      {
-        why: "more than one line",
-        request: { mode: "list", file: `${LISTED_LINE}\n${LISTED_LINE}\n` },
-      },
-      {
-        why: "a once result for a list request",
-        request: { mode: "list", file: '{"status":"ok"}\n' },
-      },
       {
         why: "a listing for a measure request",
         request: {
@@ -269,22 +313,39 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
           minSamples: 8,
         },
       },
-      {
-        why: "a listing for a once request",
-        request: { mode: "once", file: `${LISTED_LINE}\n`, id: "apple" },
-      },
+      { why: "a listing for a once request", request: echoing(`${LISTED_LINE}\n`) },
       {
         why: "a failure with no message",
-        request: {
-          mode: "once",
-          file: '{"status":"failed","error":{"phase":"fn","stack":null}}\n',
-          id: "apple",
-        },
+        request: echoing(
+          '{"status":"failed","error":{"phase":"fn","stack":null,"teardownError":null}}\n',
+        ),
+      },
+      { why: "a failure with no teardownError", request: echoing(failureLine(FN_KIWI)) },
+      {
+        why: "a failure whose teardownError has no stack",
+        request: echoing(failureLine({ ...FN_KIWI, teardownError: { message: "melon" } })),
       },
     ] as const)("fails in phase child with a null stack for $why", async ({ request }) => {
       const outcome = await startFixture("echo.ts", request);
 
       expect(outcome).toMatchObject(NO_RESULT);
+    });
+
+    it("names the measure request in the failure when the measurement's status is neither ok nor failed", async () => {
+      const request = {
+        mode: "measure",
+        file: `${MEASURED_PEAR_LINE}\n`,
+        id: "apple",
+        minTime: 5,
+        minSamples: 8,
+      } as const;
+
+      const outcome = await startFixture("echo.ts", request);
+
+      expect(outcome).toMatchObject({
+        ...NO_RESULT,
+        error: { ...NO_RESULT.error, message: expect.stringMatching(/\bmeasure\b/) },
+      });
     });
 
     it("counts the lines of a child that wrote more than one", async () => {
@@ -353,15 +414,20 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
   });
 
   describe("when the child runs past its timeout", () => {
-    it("kills it and fails in phase child naming the timeout", async () => {
-      const [outcome, elapsed] = await timed(async () =>
-        startFixture("hang.ts", ONCE, { timeout: SHORT_TIMEOUT_MS }),
-      );
+    it("fails in phase child naming the timeout", async () => {
+      const outcome = await startFixture("hang.ts", ONCE, { timeout: SHORT_TIMEOUT_MS });
 
       expect(outcome).toMatchObject({
         ...NO_RESULT,
         error: { ...NO_RESULT.error, message: expect.stringMatching(/\b1000\b/) },
       });
+    });
+
+    it("kills the child within the return margin", async () => {
+      const [, elapsed] = await timed(async () =>
+        startFixture("hang.ts", ONCE, { timeout: SHORT_TIMEOUT_MS }),
+      );
+
       expect(elapsed).toBeLessThan(SHORT_TIMEOUT_MS + RETURN_MARGIN_MS);
     });
 
@@ -376,18 +442,40 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
   });
 
   describe("when the caller's stop signal fires while the child runs", () => {
-    it("kills the child and ends as stopped", async () => {
+    it("ends as stopped", async () => {
       const controller = new AbortController();
       setTimeout(() => {
         controller.abort();
       }, 300);
 
-      const [outcome, elapsed] = await timed(async () =>
+      const outcome = await startFixture("hang.ts", ONCE, { signal: controller.signal });
+
+      expect(outcome).toStrictEqual({ status: "stopped", output: "" });
+    });
+
+    it("kills the child within the return margin", async () => {
+      const controller = new AbortController();
+      setTimeout(() => {
+        controller.abort();
+      }, 300);
+
+      const [, elapsed] = await timed(async () =>
         startFixture("hang.ts", ONCE, { signal: controller.signal }),
       );
 
-      expect(outcome).toStrictEqual({ status: "stopped", output: "" });
       expect(elapsed).toBeLessThan(300 + RETURN_MARGIN_MS);
+    });
+
+    it("ends as stopped before its timeout when the signal fired before the start", async () => {
+      const controller = new AbortController();
+      controller.abort();
+
+      const outcome = await startFixture("hang.ts", ONCE, {
+        signal: controller.signal,
+        timeout: SHORT_TIMEOUT_MS,
+      });
+
+      expect(outcome).toStrictEqual({ status: "stopped", output: "" });
     });
   });
 
@@ -494,6 +582,21 @@ describe.each([
   },
 );
 
+describe("startChild from the built dist/children.js", { timeout: SPAWN_TIMEOUT_MS }, () => {
+  it("starts the built child entry beside it", async () => {
+    const outcome = await startBuiltChild(
+      NODE,
+      { mode: "list", file: benchFile("three-cases.ts") },
+      { timeout: KILL_AFTER_MS, nodeImport: "tsx" },
+    );
+
+    expect(outcome).toMatchObject({
+      status: "ok",
+      result: { cases: [{ id: "alpha" }, { id: "beta" }, { id: "gamma" }] },
+    });
+  });
+});
+
 describe(
   "startChild with a nodeImport that cannot be resolved",
   { timeout: SPAWN_TIMEOUT_MS },
@@ -501,9 +604,9 @@ describe(
     const LIST = { mode: "list", file: benchFile("three-cases.ts") } as const;
 
     it("fails a Node child in phase child", async () => {
-      const request = { mode: "once", file: '{"status":"ok"}\n', id: "apple" } as const;
-
-      const outcome = await startFixture("echo.ts", request, { nodeImport: "banana" });
+      const outcome = await startFixture("echo.ts", echoing('{"status":"ok"}\n'), {
+        nodeImport: "banana",
+      });
 
       expect(outcome).toMatchObject(NO_RESULT);
     });

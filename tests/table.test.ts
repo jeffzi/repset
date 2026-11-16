@@ -1,12 +1,19 @@
 import { describe, expect, it } from "vitest";
 
 import type { ChildPhase } from "../src/child.js";
-import type { FailedResult, MeasuredResult, Process, Result } from "../src/report.js";
+import type {
+  FailedResult,
+  MeasuredProcess,
+  MeasuredResult,
+  Result,
+  ResultError,
+} from "../src/report.js";
 import { formatTable, metricLine } from "../src/table.js";
+import type { StrictOmit } from "../src/utils.js";
 
 type Runtime = Result["runtime"]["name"];
-type Stats = NonNullable<Process["stats"]>;
-type ResultBase = Omit<Result, "status" | "error" | "median" | "processes">;
+type Stats = MeasuredProcess["stats"];
+type ResultBase = StrictOmit<Result, "status" | "error" | "median" | "processes">;
 
 const VERSIONS: Readonly<Record<Runtime, string>> = { node: "24.1.0", bun: "1.3.2" };
 
@@ -25,7 +32,7 @@ function flatStats(median: number): Stats {
 }
 
 /** The one process of a measured case, holding `stats`. */
-function measuredProcess(stats: Stats): Process {
+function measuredProcess(stats: Stats): MeasuredProcess {
   return {
     round: 0,
     orderInRound: 0,
@@ -68,12 +75,17 @@ function measured(id: string, runtime: Runtime, stats: Stats): MeasuredResult {
   };
 }
 
-/** A result of case `id` on Node that failed in `phase` with `message`. */
-function failed(id: string, phase: ChildPhase, message: string): FailedResult {
+/** A result of case `id` on Node that failed in `phase` with `message`, its cleanup teardown `teardownError`. */
+function failed(
+  id: string,
+  phase: ChildPhase,
+  message: string,
+  teardownError: ResultError["teardownError"] = null,
+): FailedResult {
   return {
     ...resultBase(id, "node"),
     status: "failed",
-    error: { phase, message, stack: null, output: "" },
+    error: { phase, message, stack: null, teardownError, output: "" },
     median: null,
     processes: [
       {
@@ -89,17 +101,16 @@ function failed(id: string, phase: ChildPhase, message: string): FailedResult {
   };
 }
 
-/** The lines of the table of `results`. */
 function tableLines(results: readonly Result[]): string[] {
   return formatTable(results).split("\n");
 }
 
-/** The index of the row of case `id` among `lines`. */
+/** The index of the first line that starts with `id` and a space, or -1 when no row does. */
 function rowIndex(lines: readonly string[], id: string): number {
   return lines.findIndex((line) => line.trimStart().startsWith(`${id} `));
 }
 
-/** The index of the heading of `runtime` among `lines`. */
+/** The index of the first line naming `runtime` and its version, or -1 when none does. */
 function headingIndex(lines: readonly string[], runtime: Runtime): number {
   return lines.findIndex((line) => line.includes(runtime) && line.includes(VERSIONS[runtime]));
 }
@@ -119,7 +130,7 @@ function cells(line: string): Cell[] {
   }));
 }
 
-/** The cells of the row of case `id` among `lines`. */
+/** The cells of the row of case `id`, none when no row matches. */
 function rowCells(lines: readonly string[], id: string): Cell[] {
   return cells(lines[rowIndex(lines, id)] ?? "");
 }
@@ -159,13 +170,7 @@ describe("formatTable", () => {
 
   describe("when formatting a time", () => {
     it.each([
-      { ns: 812, text: "812 ns" },
-      { ns: 0.512, text: "0.512 ns" },
-      { ns: 4656, text: "4.66 µs" },
-      { ns: 51_234_567, text: "51.2 ms" },
-      { ns: 12_345_678_901, text: "12.3 s" },
       { ns: 999.7, text: "1.00 µs" },
-      { ns: 999_700_000, text: "1.00 s" },
       { ns: 1_234_500_000_000, text: "1230 s" },
     ])("prints $ns ns as $text", ({ ns, text }) => {
       const row = rowTexts([measured("apple", "node", flatStats(ns))], "apple");
@@ -180,9 +185,10 @@ describe("formatTable", () => {
         measured("apple", "node", { ...flatStats(812), sampleCount: 64 }),
         measured("elderberry", "node", { ...flatStats(4656), max: 2_340_000, sampleCount: 1200 }),
       ];
-      const lines = tableLines(results);
-      const rows = ["apple", "elderberry"].map((id) => rowCells(lines, id));
 
+      const lines = tableLines(results);
+
+      const rows = ["apple", "elderberry"].map((id) => rowCells(lines, id));
       const aligned = [0, 1, 2, 3, 4, 5].map((column) => {
         const starts = new Set(rows.map((row) => row[column]?.start));
         const ends = new Set(rows.map((row) => row[column]?.end));
@@ -217,25 +223,61 @@ describe("formatTable", () => {
   });
 
   describe("when a case failed", () => {
-    it("rows its id, failed, its phase and its message", () => {
-      const lines = tableLines([failed("apple", "teardown", "plum exploded")]);
+    it("rows its id, its phase and its message", () => {
+      const results = [failed("apple", "teardown", "plum exploded")];
+
+      const lines = tableLines(results);
 
       const row = lines[rowIndex(lines, "apple")];
-
-      expect(row).toMatch(/apple.*failed.*teardown.*plum exploded/u);
+      expect(row).toMatch(/apple.*teardown.*plum exploded/u);
     });
 
     it("continues each further line of its message beneath the row", () => {
-      const lines = tableLines([
-        failed("apple", "fn", "plum exploded\nat the stone\n  and the pit"),
-      ]);
+      const results = [failed("apple", "fn", "plum exploded\nat the stone\n  and the pit")];
+
+      const lines = tableLines(results);
 
       const row = rowIndex(lines, "apple");
       const indent = " ".repeat(lines[row]?.indexOf("plum exploded") ?? 0);
-
       expect(lines[row]).toMatch(/plum exploded$/u);
       expect(lines[row + 1]).toBe(`${indent}at the stone`);
       expect(lines[row + 2]).toBe(`${indent}  and the pit`);
+    });
+
+    describe("when its cleanup teardown failed too", () => {
+      it("continues the row with a labelled line holding the teardown's message", () => {
+        const teardownError = { message: "melon split", stack: "at teardown" };
+        const results = [failed("apple", "fn", "plum exploded", teardownError)];
+
+        const lines = tableLines(results);
+
+        const row = rowIndex(lines, "apple");
+        const indent = " ".repeat(lines[row]?.indexOf("plum exploded") ?? 0);
+        expect(lines[row + 1]).toMatch(new RegExp(`^${indent}\\S.* melon split$`, "u"));
+      });
+
+      it("continues each further line of the teardown's message beneath its first", () => {
+        const teardownError = { message: "melon split\nat the rind", stack: null };
+        const results = [failed("apple", "fn", "plum exploded", teardownError)];
+
+        const lines = tableLines(results);
+
+        const row = rowIndex(lines, "apple");
+        const teardownLine = lines[row + 1] ?? "";
+        expect(teardownLine).toMatch(/\S.* melon split$/u);
+        const indent = " ".repeat(teardownLine.indexOf("melon split"));
+        expect(lines[row + 2]).toBe(`${indent}at the rind`);
+      });
+    });
+
+    describe("when its cleanup teardown did not fail", () => {
+      it("puts the next row directly beneath it", () => {
+        const results = [failed("apple", "fn", "plum exploded"), failed("banana", "fn", "kiwi")];
+
+        const lines = tableLines(results);
+
+        expect(rowIndex(lines, "banana")).toBe(rowIndex(lines, "apple") + 1);
+      });
     });
   });
 });

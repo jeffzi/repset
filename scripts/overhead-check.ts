@@ -331,27 +331,40 @@ function countsOf(reading: RepsetReading): PlainCounts {
  * The first pair runs repset first and the pairs then alternate. A pair that runs the plain loop
  * first runs it at the previous pair's repset counts, the latest there are.
  *
+ * A pair's step is its repset reading's timer resolution divided by the fewer calls per sample of
+ * its two readings: the coarser of the two sides' steps, so a tie on either side stays a tie.
+ *
  * @param cell - The cell to read.
  * @param readers - The two sides' readers.
- * @returns The round's pairs, `plain[i]` and `repset[i]` from pair `i`, and its repset readings.
+ * @returns The round's pairs, `plain[i]`, `repset[i]` and `steps[i]` from pair `i`, and its repset
+ *   readings.
  * @throws Whatever a reader throws.
  */
 export async function takeRound(cell: Cell, readers: Readers): Promise<Round> {
   const plain: number[] = [];
+  const steps: number[] = [];
   const readings: RepsetReading[] = [];
   let latest: RepsetReading | undefined;
   for (let pair = 0; pair < PAIRS; pair += 1) {
+    let plainCounts: PlainCounts;
     if (latest === undefined || pair % 2 === 0) {
       latest = await readers.repset(cell);
-      readings.push(latest);
-      plain.push(await readers.plain(cell, countsOf(latest)));
+      plainCounts = countsOf(latest);
+      plain.push(await readers.plain(cell, plainCounts));
     } else {
-      plain.push(await readers.plain(cell, countsOf(latest)));
+      plainCounts = countsOf(latest);
+      plain.push(await readers.plain(cell, plainCounts));
       latest = await readers.repset(cell);
-      readings.push(latest);
     }
+    readings.push(latest);
+    steps.push(
+      latest.timerResolutionNs / Math.min(latest.callsPerSample, plainCounts.callsPerSample),
+    );
   }
-  return { pairs: { plain, repset: readings.map((reading) => reading.median) }, readings };
+  return {
+    pairs: { plain, repset: readings.map((reading) => reading.median), steps },
+    readings,
+  };
 }
 
 /** The median timed sample's span in timer resolutions: the median per call times the count. */
@@ -359,12 +372,47 @@ function spanInResolutions(reading: RepsetReading): number {
   return (reading.median * reading.callsPerSample) / reading.timerResolutionNs;
 }
 
-function formatGap(gap: number): string {
-  return `${gap >= 0 ? "+" : ""}${(gap * 100).toFixed(2)}%`;
+/** Formats `value` with two decimals, signed `+` when zero or positive. */
+function formatSigned(value: number): string {
+  return `${value >= 0 ? "+" : ""}${value.toFixed(2)}`;
 }
 
-function summaryLine(name: string, label: string, summary: CellSummary): string {
-  return `${name}  ${label} round  plain ${summary.plainMedian.toFixed(1)} ns  repset ${summary.repsetMedian.toFixed(1)} ns  gap ${formatGap(summary.gap)}  p=${summary.pValue.toFixed(4)}`;
+function roundLabel(roundIndex: number): string {
+  return roundIndex === 0 ? "first" : "fresh";
+}
+
+function pairPlace(name: string, roundIndex: number, pairIndex: number): string {
+  return `${name}  ${roundLabel(roundIndex)} round, pair ${String(pairIndex + 1)}:`;
+}
+
+function summaryLine(name: string, roundIndex: number, summary: CellSummary): string {
+  return `${name}  ${roundLabel(roundIndex)} round  plain ${summary.plainMedian.toFixed(1)} ns  repset ${summary.repsetMedian.toFixed(1)} ns  gap ${formatSigned(summary.gap * 100)}%  mean diff ${formatSigned(summary.meanDifference)} ns  p=${summary.pValue.toFixed(4)}`;
+}
+
+/**
+ * Lays out one round: its summary line, then one line per pair with both medians at full precision.
+ *
+ * @param name - The cell's name.
+ * @param roundIndex - The round's index among the cell's rounds: 0 for the first, 1 for the fresh.
+ * @param summary - The verdict's summary of the round.
+ * @param pairs - The round's pairs.
+ * @returns The summary line, then the pair lines in pair order.
+ * @throws RangeError when `pairs.repset` is shorter than `pairs.plain`.
+ */
+function roundLines(
+  name: string,
+  roundIndex: number,
+  summary: CellSummary,
+  pairs: Pairs,
+): string[] {
+  const pairLines = pairs.plain.map((plain, pairIndex) => {
+    const repset = pairs.repset[pairIndex];
+    if (repset === undefined) {
+      throw new RangeError(`${pairPlace(name, roundIndex, pairIndex)} no repset median`);
+    }
+    return `${pairPlace(name, roundIndex, pairIndex)}  plain ${String(plain)}  repset ${String(repset)}`;
+  });
+  return [summaryLine(name, roundIndex, summary), ...pairLines];
 }
 
 /**
@@ -377,7 +425,7 @@ function summaryLine(name: string, label: string, summary: CellSummary): string 
 function ruleBreaks(name: string, rounds: readonly Round[]): string[] {
   return rounds.flatMap((round, roundIndex) =>
     round.readings.flatMap((reading, index) => {
-      const where = `${name}  ${roundIndex === 0 ? "first" : "fresh"} round, pair ${String(index + 1)}:`;
+      const where = pairPlace(name, roundIndex, index);
       const span = spanInResolutions(reading);
       const breaks: string[] = [];
       if (span < MIN_SPAN_RESOLUTIONS) {
@@ -402,6 +450,8 @@ function ruleBreaks(name: string, rounds: readonly Round[]): string[] {
  * @param verdict - The cell's verdict.
  * @param rounds - The cell's rounds: the first, then the fresh one when it was taken.
  * @returns The lines to print, and the lines of readings that broke the calibrated-run rule.
+ * @throws Error when a fresh round was taken but the verdict holds no confirmation summary, and
+ *   RangeError when a round holds fewer repset medians than plain ones.
  */
 function cellReport(
   cell: Cell,
@@ -409,10 +459,13 @@ function cellReport(
   rounds: readonly Round[],
 ): { readonly lines: readonly string[]; readonly breaks: readonly string[] } {
   const name = cellName(cell);
-  const lines = [summaryLine(name, "first", verdict.first)];
-  if (verdict.confirmation !== undefined) {
-    lines.push(summaryLine(name, "fresh", verdict.confirmation));
-  }
+  const lines = rounds.flatMap((round, roundIndex) => {
+    const summary = roundIndex === 0 ? verdict.first : verdict.confirmation;
+    if (summary === undefined) {
+      throw new Error(`${name}: the fresh round has no confirmation summary`);
+    }
+    return roundLines(name, roundIndex, summary, round.pairs);
+  });
   const outcome = `${name}  ${verdict.passed ? "pass" : "FAIL"}`;
   if (cell.count === "one-call") {
     lines.push(outcome);

@@ -22,35 +22,54 @@ import { temporaryDir } from "./temporary-dir.js";
 const PAIRS = 12;
 /** Two-sided sign-test p-value when all twelve pairs differ in the same direction. */
 const SAME_SIGN_P_VALUE = 2 / 4096;
+/** The step of a pair taken at a 41 ns clock resolution and one call per sample. */
+const ONE_CALL_STEP = 41;
+const ONE_CALL_STEPS = Array.from({ length: PAIRS }, () => ONE_CALL_STEP);
 
-/** Builds a round of twelve pairs with every plain median and every repset median set to one value each. */
-function constantRound(plain: number, repset: number): Pairs {
+/** Builds twelve per-process medians on each side, every plain one and every repset one set to one value each. */
+function constantMedians(plain: number, repset: number): Omit<Pairs, "steps"> {
   return {
     plain: Array.from({ length: PAIRS }, () => plain),
     repset: Array.from({ length: PAIRS }, () => repset),
   };
 }
 
+/** Builds a round of twelve pairs at the one-call step with constant medians on each side. */
+function constantRound(plain: number, repset: number): Pairs {
+  return { ...constantMedians(plain, repset), steps: ONE_CALL_STEPS };
+}
+
 const SLOWER_REPSET = constantRound(100, 110);
 const FASTER_REPSET = constantRound(100, 90);
-const NOISE = {
+const NOISE: Pairs = {
   plain: Array.from({ length: PAIRS }, () => 100),
   repset: Array.from({ length: PAIRS }, (_, index) => (index % 2 === 0 ? 101 : 99)),
+  steps: ONE_CALL_STEPS,
 };
+/** Twelve pairs whose medians differ only by float rounding: the two doubles one timed span of 22 clock ticks read as on Bun. */
+const ROUNDING_ONLY = constantRound(916.9999999585343, 917.0000000153777);
 
 const SLOWER_SUMMARY: CellSummary = {
   plainMedian: 100,
   repsetMedian: 110,
   gap: 0.1,
   pValue: SAME_SIGN_P_VALUE,
+  meanDifference: 10,
 };
 const FASTER_SUMMARY: CellSummary = {
   plainMedian: 100,
   repsetMedian: 90,
   gap: -0.1,
   pValue: SAME_SIGN_P_VALUE,
+  meanDifference: -10,
 };
-const NOISE_SUMMARY: CellSummary = { plainMedian: 100, repsetMedian: 100, gap: 0, pValue: 1 };
+const NOISE_SUMMARY: CellSummary = {
+  plainMedian: 100,
+  repsetMedian: 100,
+  gap: 0,
+  pValue: 1,
+  meanDifference: 0,
+};
 
 const TIED_MEDIAN = 917;
 const TIED_PLAIN = [800, 800, 800, 917, 917, 917, 917, 917, 1000, 1000, 1000, 1000];
@@ -60,16 +79,28 @@ function tiedMedianRound(shift: number): Pairs {
   return {
     plain: TIED_PLAIN,
     repset: TIED_PLAIN.map((value) => (value === TIED_MEDIAN ? value : value + shift)),
+    steps: ONE_CALL_STEPS,
   };
 }
 
-/** Seven pairs differing in one direction and five tied: 2 * 2^5 of the 2^12 sign assignments. */
-const TIED_MEDIAN_SUMMARY: CellSummary = {
-  plainMedian: TIED_MEDIAN,
-  repsetMedian: TIED_MEDIAN,
-  gap: 0,
-  pValue: 64 / 4096,
-};
+/** Seven pairs differing by `shift` and five tied: 2 * 2^5 of the 2^12 sign assignments. */
+function tiedMedianSummary(shift: number): CellSummary {
+  return {
+    plainMedian: TIED_MEDIAN,
+    repsetMedian: TIED_MEDIAN,
+    gap: 0,
+    pValue: 64 / 4096,
+    meanDifference: (7 * shift) / PAIRS,
+  };
+}
+
+/** Six pairs 1 ns apart one way and six 30 ns apart the other, at the one-call step. */
+function splitRound(sign: 1 | -1): Pairs {
+  return {
+    ...constantRound(100, 100),
+    repset: Array.from({ length: PAIRS }, (_, index) => 100 + sign * (index < 6 ? -1 : 30)),
+  };
+}
 
 /** Fresh-round source that fails the test when the verdict asks for a confirmation round. */
 function noFreshRound(): Pairs {
@@ -84,7 +115,7 @@ function createVerdict(passed: boolean): CellVerdict {
 describe("summarizeCell", () => {
   describe("when the pair count is odd", () => {
     it("reports the middle value as each median", () => {
-      const summary = summarizeCell([3, 1, 2], [6, 4, 5]);
+      const summary = summarizeCell([3, 1, 2], [6, 4, 5], [41, 41, 41]);
 
       expect([summary.plainMedian, summary.repsetMedian]).toStrictEqual([2, 5]);
     });
@@ -92,7 +123,7 @@ describe("summarizeCell", () => {
 
   describe("when the pair count is even", () => {
     it("reports the mean of the two middle values as each median", () => {
-      const summary = summarizeCell([4, 1, 3, 2], [8, 2, 6, 4]);
+      const summary = summarizeCell([4, 1, 3, 2], [8, 2, 6, 4], [41, 41, 41, 41]);
 
       expect([summary.plainMedian, summary.repsetMedian]).toStrictEqual([2.5, 5]);
     });
@@ -100,7 +131,7 @@ describe("summarizeCell", () => {
 
   describe("gap", () => {
     it("is the repset median's difference from the plain median, relative to the plain median", () => {
-      const summary = summarizeCell([2], [5]);
+      const summary = summarizeCell([2], [5], [41]);
 
       expect(summary.gap).toBe(1.5);
     });
@@ -125,10 +156,55 @@ describe("summarizeCell", () => {
         repset: [917.0000000153777, 917.0000000153777, 917.0000000153777],
         expected: 1,
       },
-    ])("is $expected for $label", ({ plain, repset, expected }) => {
-      const summary = summarizeCell(plain, repset);
+      // At 8 calls per sample the step is 41/8 ns, so a pair ties within 5.125e-6 ns.
+      {
+        label: "pairs 1/8 ns apart at 8 calls",
+        plain: [1000, 1000, 1000],
+        repset: [1000.125, 1000.125, 1000.125],
+        step: 41 / 8,
+        expected: 0.25,
+      },
+      {
+        label: "pairs just under a millionth of their step apart",
+        plain: [1, 1, 1],
+        repset: [1.0000051, 1.0000051, 1.0000051],
+        step: 41 / 8,
+        expected: 1,
+      },
+      {
+        label: "pairs just over a millionth of their step apart",
+        plain: [1, 1, 1],
+        repset: [1.00000515, 1.00000515, 1.00000515],
+        step: 41 / 8,
+        expected: 0.25,
+      },
+      // 3e-5 ns ties at a 41 ns step and counts at a 41/8 ns one.
+      {
+        label: "each pair judged by its own step",
+        plain: [1, 1, 1],
+        repset: [1.00003, 1.00003, 1.00003],
+        steps: [41 / 8, 41 / 8, 41],
+        expected: 0.5,
+      },
+    ])("is $expected for $label", ({ plain, repset, step = ONE_CALL_STEP, steps, expected }) => {
+      const summary = summarizeCell(plain, repset, steps ?? plain.map(() => step));
 
       expect(summary.pValue).toBe(expected);
+    });
+  });
+
+  describe("mean difference", () => {
+    it.each([
+      {
+        label: "seven pairs 41 ns higher and five tied",
+        round: tiedMedianRound(41),
+        expected: 287 / 12,
+      },
+      { label: "pairs that differ only by float rounding", round: ROUNDING_ONLY, expected: 0 },
+    ])("is $expected ns for $label", ({ round, expected }) => {
+      const summary = summarizeCell(round.plain, round.repset, round.steps);
+
+      expect(summary.meanDifference).toBe(expected);
     });
   });
 });
@@ -178,8 +254,8 @@ describe("judgeCell", () => {
 
       expect(verdict).toStrictEqual({
         passed: false,
-        first: TIED_MEDIAN_SUMMARY,
-        confirmation: TIED_MEDIAN_SUMMARY,
+        first: tiedMedianSummary(41),
+        confirmation: tiedMedianSummary(41),
       });
     });
 
@@ -188,9 +264,30 @@ describe("judgeCell", () => {
 
       expect(verdict).toStrictEqual({
         passed: true,
-        first: TIED_MEDIAN_SUMMARY,
-        confirmation: TIED_MEDIAN_SUMMARY,
+        first: tiedMedianSummary(41),
+        confirmation: tiedMedianSummary(-41),
       });
+    });
+
+    // Six pairs each way: the summed differences, not the count of pairs, give the direction.
+    it.each([
+      { label: "the same round", fresh: splitRound(1), passed: false },
+      { label: "its mirror", fresh: splitRound(-1), passed: true },
+    ])(
+      "is passed: $passed when a split round is confirmed by $label",
+      async ({ fresh, passed }) => {
+        const verdict = await judgeCell(splitRound(1), () => fresh);
+
+        expect([verdict.passed, verdict.first.pValue]).toStrictEqual([passed, 0.031_25]);
+      },
+    );
+  });
+
+  describe("when the pairs differ only by float rounding", () => {
+    it("passes without taking a fresh round", async () => {
+      const verdict = await judgeCell(ROUNDING_ONLY, noFreshRound);
+
+      expect([verdict.passed, verdict.first.pValue]).toStrictEqual([true, 1]);
     });
   });
 });
@@ -598,17 +695,57 @@ describe("takeRound", () => {
     const readers: Readers = {
       repset: async () => {
         calls += 1;
-        return createReading({ median: calls, callsPerSample: calls, sampleCount: 100 + calls });
+        return createReading({
+          median: calls,
+          callsPerSample: calls,
+          sampleCount: 100 + calls,
+          timerResolutionNs: 40 + calls,
+        });
       },
       plain: async (_cell, counts) => counts.callsPerSample * 1000 + counts.sampleCount,
     };
 
     const round = await takeRound(CALIBRATED, readers);
 
+    // Each step is the pair's own resolution over the fewer calls of its two readings.
     expect(round.pairs).toStrictEqual({
       plain: [1101, 1101, 3103, 3103, 5105, 5105, 7107, 7107, 9109, 9109, 11_111, 11_111],
       repset: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+      steps: [
+        41,
+        42,
+        43 / 3,
+        44 / 3,
+        45 / 5,
+        46 / 5,
+        47 / 7,
+        48 / 7,
+        49 / 9,
+        50 / 9,
+        51 / 11,
+        52 / 11,
+      ],
     });
+  });
+
+  it("ties a plain-first pair within a millionth of the step at its plain reading's fewer calls", async () => {
+    // Plain-first pairs read plain at 8 calls and repset at 9: 41e-6 / 8 = 5.125e-6 ns ties 5e-6 ns.
+    let calls = 0;
+    const readers: Readers = {
+      repset: async () => {
+        calls += 1;
+        return createReading({
+          median: 1000.000_005,
+          callsPerSample: calls % 2 === 1 ? 8 : 9,
+          timerResolutionNs: 41,
+        });
+      },
+      plain: async () => 1000,
+    };
+
+    const { pairs } = await takeRound(CALIBRATED, readers);
+
+    expect(summarizeCell(pairs.plain, pairs.repset, pairs.steps).pValue).toBe(1);
   });
 
   it("never takes two readings at once", async () => {
@@ -631,7 +768,7 @@ describe("takeRound", () => {
 
     const round = await takeRound(CALIBRATED, readers);
 
-    expect(round.pairs).toStrictEqual(constantRound(1000, 1000));
+    expect(round.pairs).toMatchObject(constantMedians(1000, 1000));
   });
 });
 
@@ -659,15 +796,20 @@ describe("runCheck", () => {
     expect(lines).toContainEqual(naming("node calibrated each", "1003"));
   });
 
-  it("prints each round's medians, gap and p-value, then the verdict", async () => {
+  it("prints each round's medians, gap, mean difference, p-value and pairs, then the verdict", async () => {
     const readers = createReaders((name) => {
-      if (name === "bun one-call each") return { median: 1100 };
-      if (name === "node one-call inlined") return { median: 900 };
+      if (name === "bun one-call each") return { median: 1100.000_000_1 };
+      if (name === "node one-call inlined") return { median: 899.999_999_9 };
       return {};
     });
     const even = constantRound(1000, 1000);
-    const evenP = summarizeCell(even.plain, even.repset).pValue.toFixed(4);
+    const evenP = summarizeCell(even.plain, even.repset, even.steps).pValue.toFixed(4);
     const confirmedP = SAME_SIGN_P_VALUE.toFixed(4);
+    const pairLines = (name: string, round: string, repset: string): string[] =>
+      Array.from(
+        { length: PAIRS },
+        (_, index) => `${name}  ${round} round, pair ${index + 1}:  plain 1000  repset ${repset}`,
+      );
 
     const { lines } = await checkWith(readers);
 
@@ -679,17 +821,22 @@ describe("runCheck", () => {
       faster: linesOf("node one-call inlined"),
     }).toStrictEqual({
       even: [
-        `node one-call each  first round  plain 1000.0 ns  repset 1000.0 ns  gap +0.00%  p=${evenP}`,
+        `node one-call each  first round  plain 1000.0 ns  repset 1000.0 ns  gap +0.00%  mean diff +0.00 ns  p=${evenP}`,
+        ...pairLines("node one-call each", "first", "1000"),
         "node one-call each  pass",
       ],
       slower: [
-        `bun one-call each  first round  plain 1000.0 ns  repset 1100.0 ns  gap +10.00%  p=${confirmedP}`,
-        `bun one-call each  fresh round  plain 1000.0 ns  repset 1100.0 ns  gap +10.00%  p=${confirmedP}`,
+        `bun one-call each  first round  plain 1000.0 ns  repset 1100.0 ns  gap +10.00%  mean diff +100.00 ns  p=${confirmedP}`,
+        ...pairLines("bun one-call each", "first", "1100.0000001"),
+        `bun one-call each  fresh round  plain 1000.0 ns  repset 1100.0 ns  gap +10.00%  mean diff +100.00 ns  p=${confirmedP}`,
+        ...pairLines("bun one-call each", "fresh", "1100.0000001"),
         "bun one-call each  FAIL",
       ],
       faster: [
-        `node one-call inlined  first round  plain 1000.0 ns  repset 900.0 ns  gap -10.00%  p=${confirmedP}`,
-        `node one-call inlined  fresh round  plain 1000.0 ns  repset 900.0 ns  gap -10.00%  p=${confirmedP}`,
+        `node one-call inlined  first round  plain 1000.0 ns  repset 900.0 ns  gap -10.00%  mean diff -100.00 ns  p=${confirmedP}`,
+        ...pairLines("node one-call inlined", "first", "899.9999999"),
+        `node one-call inlined  fresh round  plain 1000.0 ns  repset 900.0 ns  gap -10.00%  mean diff -100.00 ns  p=${confirmedP}`,
+        ...pairLines("node one-call inlined", "fresh", "899.9999999"),
         "node one-call inlined  FAIL",
       ],
     });

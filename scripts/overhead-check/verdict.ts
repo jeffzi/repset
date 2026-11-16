@@ -1,15 +1,24 @@
-/** Per-process medians (ns) from one round of back-to-back pairs; `plain[i]` pairs with `repset[i]`. */
+/**
+ * Per-process medians (ns) from one round of back-to-back pairs; `plain[i]` pairs with
+ * `repset[i]`, and `steps[i]` is that pair's step: the clock's resolution divided by the smaller of
+ * the pair's two calls per sample.
+ */
 export interface Pairs {
   readonly plain: readonly number[];
   readonly repset: readonly number[];
+  readonly steps: readonly number[];
 }
 
-/** One round of a cell, reduced to its medians, relative gap, and sign-flip p-value. */
+/**
+ * One round of a cell, reduced to its medians, relative gap, sign-flip p-value, and the mean (ns)
+ * of the paired differences the p-value tested, ties counted as 0.
+ */
 export interface CellSummary {
   readonly plainMedian: number;
   readonly repsetMedian: number;
   readonly gap: number;
   readonly pValue: number;
+  readonly meanDifference: number;
 }
 
 /** Outcome of one cell: the first round, plus the confirmation round when one was taken. */
@@ -21,14 +30,17 @@ export interface CellVerdict {
 
 const SIGNIFICANCE = 0.05;
 
-// Float rounding makes two equal values read as different, and without this relative slack p
-// reads too small:
-//
-// - Two medians of the same number of clock ticks can differ in their last digits, since each is
-//   a difference of two clock reads, so a pair that ties reads as a difference.
-// - Signed sums that are mathematically equal to the observed sum can land just below it,
-//   depending on summation order, so those ties drop out.
+// Signed sums that are mathematically equal to the observed sum can land just below it, depending
+// on summation order. Without this relative slack those ties drop out and p reads too small.
 const TIE_TOLERANCE = 1e-9;
+
+// Two medians of the same number of clock ticks can differ in their last digits, since each is a
+// difference of two clock reads. A median is a whole number of ticks over the calls per sample, or
+// the mean of two such spans, so medians taken at one count that really differ sit at least half a
+// step (`Pairs.steps`) apart. Medians at two counts c1 < c2 that really differ sit at least
+// resolution / (2 * c1 * c2) apart, still above a millionth of the step while c2 stays under
+// 500,000 calls. A pair within a millionth of its step is a tie.
+const STEP_TIE_FRACTION = 1e-6;
 
 function at(values: readonly number[], index: number): number {
   const value = values[index];
@@ -45,11 +57,10 @@ function median(values: readonly number[]): number {
   return (lower + upper) / 2;
 }
 
-/** `repset - plain`, or 0 when the two differ by no more than float rounding. */
-function pairedDifference(plain: number, repset: number): number {
+/** `repset - plain`, or 0 when the two differ by no more than a millionth of `step`. */
+function pairedDifference(plain: number, repset: number, step: number): number {
   const difference = repset - plain;
-  const larger = Math.max(Math.abs(plain), Math.abs(repset));
-  return Math.abs(difference) <= larger * TIE_TOLERANCE ? 0 : difference;
+  return Math.abs(difference) <= step * STEP_TIE_FRACTION ? 0 : difference;
 }
 
 function signFlipPValue(differences: readonly number[], observedSum: number): number {
@@ -66,25 +77,25 @@ function signFlipPValue(differences: readonly number[], observedSum: number): nu
 /**
  * Summarizes one round, keeping the direction the p-value tested.
  *
- * @param pairs - The round's paired medians.
+ * @param pairs - The round's paired medians and each pair's step.
  * @returns The round's summary, and the sign of the summed paired differences: 1 when repset
  * reads higher, -1 when lower, 0 when they sum to nothing. It is never 0 at p < 0.05.
- * @throws RangeError when `pairs.plain` is empty or the two arrays differ in length.
+ * @throws RangeError when `pairs.plain` is empty or the three arrays differ in length.
  */
 function summarizeRound(pairs: Pairs): {
   readonly summary: CellSummary;
   readonly direction: number;
 } {
-  const { plain, repset } = pairs;
-  if (plain.length !== repset.length) {
+  const { plain, repset, steps } = pairs;
+  if (plain.length !== repset.length || plain.length !== steps.length) {
     throw new RangeError(
-      `expected paired values, got ${plain.length} plain and ${repset.length} repset`,
+      `expected paired values, got ${plain.length} plain, ${repset.length} repset and ${steps.length} steps`,
     );
   }
   const plainMedian = median(plain);
   const repsetMedian = median(repset);
   const differences = repset.map((repsetValue, index) =>
-    pairedDifference(at(plain, index), repsetValue),
+    pairedDifference(at(plain, index), repsetValue, at(steps, index)),
   );
   const observedSum = differences.reduce((sum, difference) => sum + difference, 0);
   return {
@@ -93,6 +104,7 @@ function summarizeRound(pairs: Pairs): {
       repsetMedian,
       gap: (repsetMedian - plainMedian) / plainMedian,
       pValue: signFlipPValue(differences, observedSum),
+      meanDifference: observedSum / differences.length,
     },
     direction: Math.sign(observedSum),
   };
@@ -103,16 +115,22 @@ function summarizeRound(pairs: Pairs): {
  *
  * The p-value is the two-sided sign-flip permutation test on `repset[i] - plain[i]`, enumerated
  * exactly over all 2^n sign assignments, so the cost doubles with every pair. A pair whose two
- * medians differ by no more than float rounding counts as a tie, a difference of 0.
+ * medians differ by no more than a millionth of its step counts as a tie, a difference of 0.
  *
  * @param plain - Per-process medians from the hand-written plain loop.
  * @param repset - Per-process medians from repset, paired index by index with `plain`.
- * @returns The median of each side, the gap `(repset - plain) / plain` between those medians, and
- * the fraction of sign assignments whose absolute signed sum reaches the observed one.
- * @throws RangeError when `plain` is empty or the two arrays differ in length.
+ * @param steps - Each pair's step (ns), paired index by index with `plain`.
+ * @returns The median of each side, the gap `(repset - plain) / plain` between those medians, the
+ * fraction of sign assignments whose absolute signed sum reaches the observed one, and the mean of
+ * the paired differences with ties counted as 0.
+ * @throws RangeError when `plain` is empty or the three arrays differ in length.
  */
-export function summarizeCell(plain: readonly number[], repset: readonly number[]): CellSummary {
-  return summarizeRound({ plain, repset }).summary;
+export function summarizeCell(
+  plain: readonly number[],
+  repset: readonly number[],
+  steps: readonly number[],
+): CellSummary {
+  return summarizeRound({ plain, repset, steps }).summary;
 }
 
 /**

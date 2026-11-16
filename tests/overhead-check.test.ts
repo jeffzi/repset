@@ -52,6 +52,25 @@ const FASTER_SUMMARY: CellSummary = {
 };
 const NOISE_SUMMARY: CellSummary = { plainMedian: 100, repsetMedian: 100, gap: 0, pValue: 1 };
 
+const TIED_MEDIAN = 917;
+const TIED_PLAIN = [800, 800, 800, 917, 917, 917, 917, 917, 1000, 1000, 1000, 1000];
+
+/** Builds a round whose seven outer pairs differ by `shift` while both sides' medians stay 917. */
+function tiedMedianRound(shift: number): Pairs {
+  return {
+    plain: TIED_PLAIN,
+    repset: TIED_PLAIN.map((value) => (value === TIED_MEDIAN ? value : value + shift)),
+  };
+}
+
+/** Seven pairs differing in one direction and five tied: 2 * 2^5 of the 2^12 sign assignments. */
+const TIED_MEDIAN_SUMMARY: CellSummary = {
+  plainMedian: TIED_MEDIAN,
+  repsetMedian: TIED_MEDIAN,
+  gap: 0,
+  pValue: 64 / 4096,
+};
+
 /** Fresh-round source that fails the test when the verdict asks for a confirmation round. */
 function noFreshRound(): Pairs {
   throw new Error("fresh round requested");
@@ -99,6 +118,13 @@ describe("summarizeCell", () => {
         repset: [1.1, 1.2, 0.9],
         expected: 6 / 8,
       },
+      {
+        // The two doubles one timed span of 22 clock ticks read as on Bun, 5.7e-8 ns apart.
+        label: "pairs whose medians differ only by float rounding",
+        plain: [916.9999999585343, 916.9999999585343, 916.9999999585343],
+        repset: [917.0000000153777, 917.0000000153777, 917.0000000153777],
+        expected: 1,
+      },
     ])("is $expected for $label", ({ plain, repset, expected }) => {
       const summary = summarizeCell(plain, repset);
 
@@ -117,7 +143,7 @@ describe("judgeCell", () => {
   });
 
   describe("when the first round reads p < 0.05", () => {
-    it("fails when the fresh round also reads p < 0.05 with the same gap sign", async () => {
+    it("fails when the fresh round also reads p < 0.05 with differences of the same sign", async () => {
       const verdict = await judgeCell(SLOWER_REPSET, () => Promise.resolve(SLOWER_REPSET));
 
       expect(verdict).toStrictEqual({
@@ -137,13 +163,33 @@ describe("judgeCell", () => {
       });
     });
 
-    it("passes when the fresh round reads p < 0.05 with the opposite gap sign", async () => {
+    it("passes when the fresh round reads p < 0.05 with differences of the opposite sign", async () => {
       const verdict = await judgeCell(SLOWER_REPSET, () => FASTER_REPSET);
 
       expect(verdict).toStrictEqual({
         passed: true,
         first: SLOWER_SUMMARY,
         confirmation: FASTER_SUMMARY,
+      });
+    });
+
+    it("fails when the differences keep their sign between rounds whose medians tie", async () => {
+      const verdict = await judgeCell(tiedMedianRound(41), () => tiedMedianRound(41));
+
+      expect(verdict).toStrictEqual({
+        passed: false,
+        first: TIED_MEDIAN_SUMMARY,
+        confirmation: TIED_MEDIAN_SUMMARY,
+      });
+    });
+
+    it("passes when the differences change sign between rounds whose medians tie", async () => {
+      const verdict = await judgeCell(tiedMedianRound(41), () => tiedMedianRound(-41));
+
+      expect(verdict).toStrictEqual({
+        passed: true,
+        first: TIED_MEDIAN_SUMMARY,
+        confirmation: TIED_MEDIAN_SUMMARY,
       });
     });
   });

@@ -1,6 +1,6 @@
 import { assertType, describe, expectTypeOf, it } from "vitest";
 
-import { bench } from "../src/bench.js";
+import { bench } from "../src/child.js";
 
 /** Asserts that the `bench()` calls in `register` type-check, or fail where `@ts-expect-error` says. */
 function assertCompiles(register: () => void): void {

@@ -65,7 +65,7 @@ const onePerFile: StartChild = async (_runtime, request) =>
 /** A listing outcome that fails, which fails the selection if its child is started. */
 const FAILED: Outcome = {
   status: "failed",
-  error: { phase: "load", message: "kiwi", stack: null },
+  error: { phase: "load", message: "kiwi", stack: null, teardownError: null },
   output: "",
 };
 
@@ -247,7 +247,12 @@ describe("selectCases", () => {
 
   describe("when a listing child fails", () => {
     it("rejects the file when its child answers with a failure", async () => {
-      const error = { phase: "load", message: "kiwi", stack: "at load" } as const;
+      const error = {
+        phase: "load",
+        message: "kiwi",
+        stack: "at load",
+        teardownError: null,
+      } as const;
       const failing: StartChild = async () => ({ status: "failed", error, output: "plum\n" });
 
       const result = select({ files: ["zeta.bench.ts"], startChild: failing });

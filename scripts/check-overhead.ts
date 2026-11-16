@@ -214,10 +214,7 @@ export function repsetReading(
       `${name}: the case failed in phase ${result.error.phase}: ${result.error.message}`,
     );
   }
-  const { stats, sampling } = result.processes[0] ?? {};
-  if (stats == null || sampling == null) {
-    throw new Error(`${name}: the result holds no measured process`);
-  }
+  const { stats, sampling } = result.processes[0];
   checkCount(name, scenario, sampling);
   return {
     median: stats.median,

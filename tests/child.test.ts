@@ -168,7 +168,7 @@ describe("failedResult", () => {
 
       expect(result).toStrictEqual({
         status: "failed",
-        error: { phase: "setup", message: "plum", stack: cause.stack },
+        error: { phase: "setup", message: "plum", stack: cause.stack, teardownError: null },
       });
     });
 
@@ -188,7 +188,7 @@ describe("failedResult", () => {
 
       expect(result).toStrictEqual({
         status: "failed",
-        error: { phase: "teardown", message: "pear", stack: null },
+        error: { phase: "teardown", message: "pear", stack: null, teardownError: null },
       });
     });
   });
@@ -204,6 +204,23 @@ describe("failedResult", () => {
         phase: "calibration",
         message: "grape",
         stack: inner.stack,
+        teardownError: null,
+      });
+    });
+
+    it("carries its cleanup teardown's failure as the message and stack of that teardown's value", () => {
+      const teardownCause = new Error("melon");
+      const error = new MeasureError(
+        "fn",
+        new Error("lime"),
+        new MeasureError("teardown", teardownCause),
+      );
+
+      const result = failedResult("load", error);
+
+      expect(result.error.teardownError).toStrictEqual({
+        message: "melon",
+        stack: teardownCause.stack,
       });
     });
   });
@@ -270,6 +287,7 @@ describe("measureCase", () => {
       const quantiles = [min, p25, median, p75, p99, max];
       expect(quantiles).toStrictEqual(quantiles.toSorted((a, b) => a - b));
     });
+
     it("measures at the calls per sample it is given, reporting it as fixed", async () => {
       const result = await measureCase(LIFECYCLE, "steady", { ...SHORT_RUN, callsPerSample: 3 });
 

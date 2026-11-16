@@ -15,7 +15,7 @@ import { describe, property, thrownMessage } from "./utils.js";
 
 /** A config that cannot be found, loaded or checked, or an option value that is out of range. */
 export class ConfigError extends Error {
-  override readonly name = "ConfigError";
+  override readonly name: string = "ConfigError";
 }
 
 /**
@@ -170,13 +170,22 @@ export function isRuntime(value: unknown): value is Runtime {
   return RUNTIMES.some((runtime) => runtime === value);
 }
 
+/** The names, each quoted, joined with ", " and a final " and ": `"a", "b" and "c"`. */
+export function quotedList(names: readonly [string, string, ...string[]]): string {
+  const quoted = names.map((name) => `"${name}"`);
+  return `${quoted.slice(0, -1).join(", ")} and ${quoted.slice(-1).join("")}`;
+}
+
+/** Every runtime repset runs on, as {@link quotedList} writes them. */
+export const QUOTED_RUNTIMES = quotedList(RUNTIMES);
+
 function checkedRuntimes(value: unknown): readonly Runtime[] {
   if (!Array.isArray(value)) throw invalid("runtimes", "an array of runtimes", value);
   const names: readonly unknown[] = value;
   if (names.length === 0) throw new ConfigError("runtimes must name at least one runtime, got []");
   const runtimes: Runtime[] = [];
   for (const name of names) {
-    if (!isRuntime(name)) throw invalid("runtimes", 'an array of "node" and "bun"', name);
+    if (!isRuntime(name)) throw invalid("runtimes", `an array of ${QUOTED_RUNTIMES}`, name);
     if (runtimes.includes(name)) throw new ConfigError(`runtimes names ${describe(name)} twice`);
     runtimes.push(name);
   }

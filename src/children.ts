@@ -28,7 +28,7 @@ import { RESULT_FD } from "./result-fd.js";
 import { isRecord, thrownMessage } from "./utils.js";
 
 /** The child entry beside `moduleFile`, with its extension: `child.js` built, `child.ts` from source. */
-export function childEntryBeside(moduleFile: string): string {
+function childEntryBeside(moduleFile: string): string {
   return join(dirname(moduleFile), `child${extname(moduleFile)}`);
 }
 
@@ -429,7 +429,11 @@ function outcomeOf(
 
 /** A failure in phase `child`, which has no stack. */
 function noResult(message: string, output: string): ChildFailed {
-  return { status: "failed", error: { phase: "child", message, stack: null }, output };
+  return {
+    status: "failed",
+    error: { phase: "child", message, stack: null, teardownError: null },
+    output,
+  };
 }
 
 /** The timeout, the signal or the exit status (`unknown` when null) a failure message opens with. */
@@ -474,15 +478,23 @@ function hasNumbers(value: unknown, keys: readonly string[]): value is Record<st
   return isRecord(value) && keys.every((key) => typeof value[key] === "number");
 }
 
+/** Whether `value` holds a string `message` and a `stack` that is a string or `null`. */
+function hasMessageAndStack(value: unknown): value is Record<string, unknown> {
+  return (
+    isRecord(value) &&
+    typeof value["message"] === "string" &&
+    (value["stack"] === null || typeof value["stack"] === "string")
+  );
+}
+
 function isFailed(value: unknown): value is Failed {
   if (!isRecord(value) || value["status"] !== "failed") return false;
   const { error } = value;
   return (
-    isRecord(error) &&
+    hasMessageAndStack(error) &&
     typeof error["phase"] === "string" &&
     CHILD_PHASES.has(error["phase"]) &&
-    typeof error["message"] === "string" &&
-    (error["stack"] === null || typeof error["stack"] === "string")
+    (error["teardownError"] === null || hasMessageAndStack(error["teardownError"]))
   );
 }
 

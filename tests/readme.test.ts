@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, normalize } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { describe, expect, it } from "vitest";
@@ -136,7 +136,7 @@ describe("the README", () => {
           code,
           notOk: caseLines.filter((line) => !line.startsWith("ok ")),
           ran: caseLines.length > 0,
-          unlisted: benchmarks.filter((path) => !stderr.includes(`listing ${normalize(path)}\n`)),
+          unlisted: benchmarks.filter((path) => !stderr.includes(`listing ${path}\n`)),
         }).toStrictEqual({ code: 0, notOk: [], ran: true, unlisted: [] });
       },
     );

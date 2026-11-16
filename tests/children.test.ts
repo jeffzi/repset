@@ -68,12 +68,28 @@ async function startFixture(
   });
 }
 
+/** A once request whose `file` is the text the `echo.ts` fixture writes back as the child's result. */
+function echoing(written: string): ChildRequest {
+  return { mode: "once", file: written, id: "apple" };
+}
+
+/** The result line of a child whose own failure is `error`. */
+function failureLine(error: object): string {
+  return `${JSON.stringify({ status: "failed", error })}\n`;
+}
+
 /** Runs `start` and returns its outcome with the milliseconds it took. */
 async function timed(start: () => Promise<Outcome>): Promise<[Outcome, number]> {
   const started = performance.now();
   const outcome = await start();
   return [outcome, performance.now() - started];
 }
+
+/** The fields of a child's own failure in phase fn, before its `teardownError`. */
+const FN_KIWI = { phase: "fn", message: "kiwi", stack: "at fn" } as const;
+
+/** The encoded failure of a cleanup teardown that threw an `Error`. */
+const MELON = { message: "melon", stack: "at teardown" } as const;
 
 /** The failure of a child that left no usable result line. */
 const NO_RESULT = { status: "failed", error: { phase: "child", stack: null } };
@@ -223,7 +239,7 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
     it.each([
       {
         why: "a once run",
-        request: { mode: "once", file: '{"status":"ok"}\n', id: "apple" },
+        request: echoing('{"status":"ok"}\n'),
         expected: { status: "ok", result: { status: "ok" }, output: "" },
       },
       {
@@ -237,27 +253,32 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
       },
       {
         why: "the child's own failure",
-        request: {
-          mode: "once",
-          file: '{"status":"failed","error":{"phase":"fn","message":"kiwi","stack":"at fn"}}\n',
-          id: "apple",
-        },
+        request: echoing(
+          '{"status":"failed","error":{"phase":"fn","message":"kiwi","stack":"at fn","teardownError":null}}\n',
+        ),
         expected: {
           status: "failed",
-          error: { phase: "fn", message: "kiwi", stack: "at fn" },
+          error: { phase: "fn", message: "kiwi", stack: "at fn", teardownError: null },
+          output: "",
+        },
+      },
+      {
+        why: "the child's own failure whose cleanup teardown failed too",
+        request: echoing(failureLine({ ...FN_KIWI, teardownError: MELON })),
+        expected: {
+          status: "failed",
+          error: { ...FN_KIWI, teardownError: MELON },
           output: "",
         },
       },
       {
         why: "the child's own failure with no stack",
-        request: {
-          mode: "once",
-          file: '{"status":"failed","error":{"phase":"load","message":"kiwi","stack":null}}\n',
-          id: "apple",
-        },
+        request: echoing(
+          '{"status":"failed","error":{"phase":"load","message":"kiwi","stack":null,"teardownError":null}}\n',
+        ),
         expected: {
           status: "failed",
-          error: { phase: "load", message: "kiwi", stack: null },
+          error: { phase: "load", message: "kiwi", stack: null, teardownError: null },
           output: "",
         },
       },
@@ -294,17 +315,25 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
           minSamples: 8,
         },
       },
-      {
-        why: "a listing for a once request",
-        request: { mode: "once", file: `${LISTED_LINE}\n`, id: "apple" },
-      },
+      { why: "a listing for a once request", request: echoing(`${LISTED_LINE}\n`) },
       {
         why: "a failure with no message",
-        request: {
-          mode: "once",
-          file: '{"status":"failed","error":{"phase":"fn","stack":null}}\n',
-          id: "apple",
-        },
+        request: echoing(
+          '{"status":"failed","error":{"phase":"fn","stack":null,"teardownError":null}}\n',
+        ),
+      },
+      { why: "a failure with no teardownError", request: echoing(failureLine(FN_KIWI)) },
+      {
+        why: "a failure whose teardownError is not an object",
+        request: echoing(failureLine({ ...FN_KIWI, teardownError: "melon" })),
+      },
+      {
+        why: "a failure whose teardownError has a message that is not a string",
+        request: echoing(failureLine({ ...FN_KIWI, teardownError: { message: 7, stack: null } })),
+      },
+      {
+        why: "a failure whose teardownError has no stack",
+        request: echoing(failureLine({ ...FN_KIWI, teardownError: { message: "melon" } })),
       },
     ] as const)("fails in phase child with a null stack for $why", async ({ request }) => {
       const outcome = await startFixture("echo.ts", request);
@@ -585,9 +614,9 @@ describe(
     const LIST = { mode: "list", file: benchFile("three-cases.ts") } as const;
 
     it("fails a Node child in phase child", async () => {
-      const request = { mode: "once", file: '{"status":"ok"}\n', id: "apple" } as const;
-
-      const outcome = await startFixture("echo.ts", request, { nodeImport: "banana" });
+      const outcome = await startFixture("echo.ts", echoing('{"status":"ok"}\n'), {
+        nodeImport: "banana",
+      });
 
       expect(outcome).toMatchObject(NO_RESULT);
     });

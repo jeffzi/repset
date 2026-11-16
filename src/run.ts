@@ -9,7 +9,7 @@ import { cpus as realCpus } from "node:os";
 import { basename, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { ChildError, ChildPhase, ChildRequest } from "./child.js";
+import type { ChildError, ChildRequest } from "./child.js";
 import {
   findRuntime as realFindRuntime,
   type FoundRuntime,
@@ -25,8 +25,8 @@ import {
   resolveOptions,
   type ResolvedOptions,
 } from "./options.js";
-import type { Machine, Process, Report, ReportOptions, Result } from "./report.js";
-import { property } from "./utils.js";
+import type { FailedProcess, Machine, Report, ReportOptions, Result } from "./report.js";
+import { property, slashed } from "./utils.js";
 
 /** A case the run measures. */
 export interface SelectedCase {
@@ -70,6 +70,7 @@ export interface SelectInput extends ChildFunctionOverrides {
 
 /** A benchmark file whose listing child failed, with what the child left to print before it. */
 export class ListingError extends ConfigError {
+  override readonly name = "ListingError";
   readonly failureStack: string | null;
   /** The last 16 KiB of the listing child's stdout and stderr. */
   readonly output: string;
@@ -84,11 +85,6 @@ export class ListingError extends ConfigError {
     this.failureStack = error.stack;
     this.output = output;
   }
-}
-
-/** `path` with `/` separators, whatever the OS. */
-function slashed(path: string): string {
-  return path.split(sep).join("/");
 }
 
 /** Orders two keyed paths by key, by code unit. */
@@ -111,7 +107,7 @@ function globFiles(pattern: string, base: string): string[] {
   })
     .map((match) => resolve(base, match))
     .filter((path) => isFile(path))
-    .map((path) => ({ path, key: slashed(path) }));
+    .map((path) => ({ path, key: slashed(path, sep) }));
   matches.sort(byKey);
   return matches.map((match) => match.path);
 }
@@ -209,12 +205,17 @@ async function listFiles(
   const cases: SelectedCase[] = [];
   for (const path of files) {
     if (signal?.aborted === true) return undefined;
-    const file = slashed(relative(cwd, path));
+    const file = slashed(relative(cwd, path), sep);
     const outcome = await startChild(runtime, { mode: "list", file: path }, childOptions);
     if (outcome.status === "stopped") return undefined;
     if (outcome.status === "failed") throw new ListingError(file, outcome.error, outcome.output);
     if (!("cases" in outcome.result)) {
-      const error = { phase: "child", message: "the child gave no listing", stack: null } as const;
+      const error = {
+        phase: "child",
+        message: "the child gave no listing",
+        stack: null,
+        teardownError: null,
+      } as const;
       throw new ListingError(file, error, outcome.output);
     }
     for (const listed of outcome.result.cases) cases.push({ ...listed, path, file });
@@ -291,7 +292,7 @@ export type OnceResult =
       readonly id: string;
       readonly runtime: Runtime;
       readonly status: "failed";
-      readonly error: { readonly phase: ChildPhase; readonly message: string };
+      readonly error: Pick<ChildError, "phase" | "message" | "teardownError">;
     };
 
 /** How a once run ended: whether the stop signal ended it, and the results that finished. */
@@ -307,10 +308,11 @@ const NO_MEASUREMENT: ChildError = {
   phase: "child",
   message: "the child gave no measurement",
   stack: null,
+  teardownError: null,
 };
 
 /** The processes of a case whose child failed: one, holding `null` for what it did not reach. */
-const FAILED_PROCESSES: readonly Process[] = [
+const FAILED_PROCESSES: readonly FailedProcess[] = [
   {
     round: 1,
     orderInRound: 1,
@@ -391,7 +393,7 @@ async function startEach(
  * @param outcome - How its measuring child ended.
  * @returns A measured result when the child measured the case, a failed one otherwise.
  */
-function measuredResult(selected: SelectedCase, runtime: FoundRuntime, outcome: Finished): Result {
+function resultOf(selected: SelectedCase, runtime: FoundRuntime, outcome: Finished): Result {
   const base = {
     id: selected.id,
     name: selected.id,
@@ -406,8 +408,9 @@ function measuredResult(selected: SelectedCase, runtime: FoundRuntime, outcome: 
     const measuring = { round: 1, orderInRound: 1, stats, sampling, checks, gc, rawSamples: null };
     return { ...base, status: "ok", error: null, median: stats.median, processes: [measuring] };
   }
-  const { phase, message, stack } = outcome.status === "failed" ? outcome.error : NO_MEASUREMENT;
-  const error = { phase, message, stack, output: outcome.output };
+  const { phase, message, stack, teardownError } =
+    outcome.status === "failed" ? outcome.error : NO_MEASUREMENT;
+  const error = { phase, message, stack, teardownError, output: outcome.output };
   return { ...base, status: "failed", error, median: null, processes: FAILED_PROCESSES };
 }
 
@@ -497,7 +500,7 @@ export async function run(input: RunInput): Promise<Report> {
       ...(callsPerSample === undefined ? {} : { callsPerSample }),
     }),
     (runtime, selected, outcome) => {
-      const result = measuredResult(selected, runtime, outcome);
+      const result = resultOf(selected, runtime, outcome);
       results.push(result);
       input.onResult?.(result);
     },
@@ -528,8 +531,8 @@ export async function runOnce(input: OnceInput): Promise<OnceRun> {
       if (outcome.status === "ok") {
         results.push({ ...ran, status: "ok" });
       } else {
-        const { phase, message } = outcome.error;
-        results.push({ ...ran, status: "failed", error: { phase, message } });
+        const { phase, message, teardownError } = outcome.error;
+        results.push({ ...ran, status: "failed", error: { phase, message, teardownError } });
       }
     },
   );

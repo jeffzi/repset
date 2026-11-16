@@ -4,7 +4,13 @@ import { basename, join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import type { ChildPhase, Measured, MeasureRequest, OnceRequest } from "../src/child.js";
+import type {
+  ChildError,
+  ChildPhase,
+  Measured,
+  MeasureRequest,
+  OnceRequest,
+} from "../src/child.js";
 import type {
   findRuntime,
   FoundRuntime,
@@ -13,6 +19,8 @@ import type {
   startChild,
 } from "../src/children.js";
 import { main } from "../src/command.js";
+import { RUNTIMES } from "../src/measure/runtime.js";
+import { quotedList } from "../src/options.js";
 import type { Report } from "../src/report.js";
 import { formatTable, metricLine } from "../src/table.js";
 import { temporaryDir } from "./temporary-dir.js";
@@ -64,9 +72,13 @@ function measured(median: number): Measured {
 /** An outcome in which the stop signal killed the child. */
 const stopped: Outcome = { status: "stopped", output: "" };
 
-/** An outcome in which the child failed in `phase` with `message`. */
-function failedOutcome(phase: ChildPhase, message: string): Outcome {
-  return { status: "failed", error: { phase, message, stack: null }, output: "" };
+/** An outcome in which the child failed in `phase` with `message`, its cleanup teardown `teardownError`. */
+function failedOutcome(
+  phase: ChildPhase,
+  message: string,
+  teardownError: ChildError["teardownError"] = null,
+): Outcome {
+  return { status: "failed", error: { phase, message, stack: null, teardownError }, output: "" };
 }
 
 /** The one case the fake listing child finds in `file`. */
@@ -311,9 +323,11 @@ describe("main", () => {
       expect({
         code,
         named: stderr.includes("--runtime") && stderr.includes("node,banana"),
+        listed: stderr.includes(quotedList(RUNTIMES)),
       }).toStrictEqual({
         code: 2,
         named: true,
+        listed: true,
       });
     });
 
@@ -321,7 +335,7 @@ describe("main", () => {
       const dir = workspace();
       const failsListing: StartChild = async () => ({
         status: "failed",
-        error: { phase: "load", message: "kiwi", stack: "at plum" },
+        error: { phase: "load", message: "kiwi", stack: "at plum", teardownError: null },
         output: "pear\n",
       });
 
@@ -347,7 +361,7 @@ describe("main", () => {
       const dir = workspace();
       const failsListing: StartChild = async () => ({
         status: "failed",
-        error: { phase: "load", message: "kiwi", stack: null },
+        error: { phase: "load", message: "kiwi", stack: null, teardownError: null },
         output: "",
       });
 
@@ -767,6 +781,33 @@ describe("main", () => {
           naming("bun", "parse/fast", "fn", "kiwi"),
           naming("node", "sort/fast"),
           naming("node", "parse/fast", "fn", "kiwi"),
+        ],
+      });
+    });
+
+    it("follows a failed line with a labelled line holding its cleanup teardown's message", async () => {
+      const dir = workspace();
+      const teardownError = { message: "melon split", stack: "at teardown" };
+      const failsParseAndTeardown = starter((request, runtime, options) =>
+        request.id === "parse/fast"
+          ? failedOutcome("fn", "kiwi", teardownError)
+          : measuresAll(runtime, request, options),
+      );
+
+      const { code, stdout } = await command(
+        dir,
+        ["--once", "--runtime", "node", "sort.bench.ts", "parse.bench.ts"],
+        {
+          startChild: failsParseAndTeardown,
+        },
+      );
+
+      expect({ code, lines: linesOf(stdout) }).toStrictEqual({
+        code: 1,
+        lines: [
+          naming("node", "sort/fast"),
+          naming("node", "parse/fast", "fn", "kiwi"),
+          expect.stringMatching(/\S.* melon split$/u),
         ],
       });
     });

@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import type { ChildPhase } from "../src/child.js";
-import type { FailedResult, MeasuredResult, Process, Result } from "../src/report.js";
+import type {
+  FailedResult,
+  MeasuredProcess,
+  MeasuredResult,
+  Result,
+  ResultError,
+} from "../src/report.js";
 import { formatTable, metricLine } from "../src/table.js";
 
 type Runtime = Result["runtime"]["name"];
-type Stats = NonNullable<Process["stats"]>;
+type Stats = MeasuredProcess["stats"];
 type ResultBase = Omit<Result, "status" | "error" | "median" | "processes">;
 
 const VERSIONS: Readonly<Record<Runtime, string>> = { node: "24.1.0", bun: "1.3.2" };
@@ -25,7 +31,7 @@ function flatStats(median: number): Stats {
 }
 
 /** The one process of a measured case, holding `stats`. */
-function measuredProcess(stats: Stats): Process {
+function measuredProcess(stats: Stats): MeasuredProcess {
   return {
     round: 0,
     orderInRound: 0,
@@ -68,12 +74,17 @@ function measured(id: string, runtime: Runtime, stats: Stats): MeasuredResult {
   };
 }
 
-/** A result of case `id` on Node that failed in `phase` with `message`. */
-function failed(id: string, phase: ChildPhase, message: string): FailedResult {
+/** A result of case `id` on Node that failed in `phase` with `message`, its cleanup teardown `teardownError`. */
+function failed(
+  id: string,
+  phase: ChildPhase,
+  message: string,
+  teardownError: ResultError["teardownError"] = null,
+): FailedResult {
   return {
     ...resultBase(id, "node"),
     status: "failed",
-    error: { phase, message, stack: null, output: "" },
+    error: { phase, message, stack: null, teardownError, output: "" },
     median: null,
     processes: [
       {
@@ -234,6 +245,42 @@ describe("formatTable", () => {
       expect(lines[row]).toMatch(/plum exploded$/u);
       expect(lines[row + 1]).toBe(`${indent}at the stone`);
       expect(lines[row + 2]).toBe(`${indent}  and the pit`);
+    });
+
+    describe("when its cleanup teardown failed too", () => {
+      it("continues the row with a labelled line holding the teardown's message", () => {
+        const teardownError = { message: "melon split", stack: "at teardown" };
+        const results = [failed("apple", "fn", "plum exploded", teardownError)];
+
+        const lines = tableLines(results);
+
+        const row = rowIndex(lines, "apple");
+        const indent = " ".repeat(lines[row]?.indexOf("plum exploded") ?? 0);
+        expect(lines[row + 1]).toMatch(new RegExp(`^${indent}\\S.* melon split$`, "u"));
+      });
+
+      it("continues each further line of the teardown's message beneath its first", () => {
+        const teardownError = { message: "melon split\nat the rind", stack: null };
+        const results = [failed("apple", "fn", "plum exploded", teardownError)];
+
+        const lines = tableLines(results);
+
+        const row = rowIndex(lines, "apple");
+        const teardownLine = lines[row + 1] ?? "";
+        expect(teardownLine).toMatch(/\S.* melon split$/u);
+        const indent = " ".repeat(teardownLine.indexOf("melon split"));
+        expect(lines[row + 2]).toBe(`${indent}at the rind`);
+      });
+    });
+
+    describe("when its cleanup teardown did not fail", () => {
+      it("puts the next row directly beneath it", () => {
+        const results = [failed("apple", "fn", "plum exploded"), failed("banana", "fn", "kiwi")];
+
+        const lines = tableLines(results);
+
+        expect(rowIndex(lines, "banana")).toBe(rowIndex(lines, "apple") + 1);
+      });
     });
   });
 });

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { bench, registeredCases } from "../src/bench.js";
+import { bench, registeredCases } from "../src/child.js";
 import { REGISTRY, resetRegistry } from "./registry.js";
 
 /** Runs `act` and returns what it threw. */
@@ -298,9 +298,9 @@ describe("registeredCases", () => {
   describe("when two copies of the module are loaded", () => {
     it("returns a case registered through the other copy", async () => {
       vi.resetModules();
-      const writer = await import("../src/bench.js");
+      const writer = await import("../src/child.js");
       vi.resetModules();
-      const reader = await import("../src/bench.js");
+      const reader = await import("../src/child.js");
       expect(reader.registeredCases).not.toBe(writer.registeredCases);
       const fn = (): number => 1;
 

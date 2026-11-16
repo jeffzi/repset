@@ -3,12 +3,18 @@
  * prints what a person or a tool reads, returning the exit code.
  */
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, relative, resolve } from "node:path";
+import { dirname, relative, resolve, sep } from "node:path";
 import { parseArgs } from "node:util";
 
 import { findRuntime as realFindRuntime, startChild as realStartChild } from "./children.js";
 import type { Runtime } from "./measure/runtime.js";
-import { ConfigError, isRuntime, type OptionsInput, resolveOptions } from "./options.js";
+import {
+  ConfigError,
+  isRuntime,
+  type OptionsInput,
+  QUOTED_RUNTIMES,
+  resolveOptions,
+} from "./options.js";
 import type { Report, Result } from "./report.js";
 import {
   type ChildFunctionOverrides,
@@ -21,8 +27,8 @@ import {
   selectCases,
   type SelectInput,
 } from "./run.js";
-import { formatTable, metricLine } from "./table.js";
-import { type StrictOmit, thrownMessage } from "./utils.js";
+import { formatTable, metricLine, teardownLines } from "./table.js";
+import { slashed, type StrictOmit, thrownMessage } from "./utils.js";
 
 /** Where the command prints: `process.stdout` and `process.stderr` fit. */
 export interface Output {
@@ -68,7 +74,9 @@ const FLAGS = {
   version: { type: "boolean" },
 } as const;
 
-const EXCLUSIVE: readonly (readonly [string, string])[] = [
+type FlagName = keyof typeof FLAGS;
+
+const EXCLUSIVE: readonly (readonly [FlagName, FlagName])[] = [
   ["list", "once"],
   ["list", "out"],
   ["list", "metric-lines"],
@@ -181,7 +189,7 @@ function runtimeList(text: string | undefined): Runtime[] | undefined {
   const names = text.split(",");
   const runtimes = names.filter((name) => isRuntime(name));
   if (runtimes.length !== names.length) {
-    throw new ConfigError(`--runtime must list "node" and "bun", got ${JSON.stringify(text)}`);
+    throw new ConfigError(`--runtime must list ${QUOTED_RUNTIMES}, got ${JSON.stringify(text)}`);
   }
   return runtimes;
 }
@@ -242,7 +250,7 @@ function announcing(context: Context): typeof realStartChild {
   const { cwd, stderr, startChild } = context;
   return async (runtime, request, options) => {
     if (request.mode === "list") {
-      stderr.write(`listing ${relative(cwd, request.file)}\n`);
+      stderr.write(`listing ${slashed(relative(cwd, request.file), sep)}\n`);
     } else {
       const verb = request.mode === "once" ? "running" : "measuring";
       stderr.write(`${verb} ${request.id} on ${runtime.runtime}\n`);
@@ -331,12 +339,10 @@ function reportWrites(path: string, shown: string): Pick<RunInput, "onSelected" 
  */
 async function measure(command: Command, context: Context): Promise<number> {
   const { stdout, stderr } = context;
-  const toStdout = command.out === OUT_STDOUT;
   const { out } = command;
+  const toStdout = out === OUT_STDOUT;
   const file =
-    out === undefined || out === OUT_STDOUT
-      ? undefined
-      : { name: out, path: resolve(context.cwd, out) };
+    out === undefined || toStdout ? undefined : { name: out, path: resolve(context.cwd, out) };
   const writes = file === undefined ? undefined : reportWrites(file.path, file.name);
   const report = await run({
     ...command.input,
@@ -386,8 +392,12 @@ async function list(command: Command, context: Context): Promise<number> {
   return 0;
 }
 
+/** Where a once run's teardown line starts, beneath the failed line it follows. */
+const ONCE_INDENT = "  ";
+
 /**
- * Runs every selected case once per runtime, printing a line per case and runtime.
+ * Runs every selected case once per runtime, printing a line per case and runtime, and a labelled
+ * line beneath a failed one whose cleanup teardown failed too.
  *
  * @param command - What the command line asks for.
  * @param context - The streams, the working directory, the stop signal and the child functions.
@@ -398,10 +408,16 @@ async function once(command: Command, context: Context): Promise<number> {
   const outcome = await runOnce({ ...command.input, ...childInput(context) });
   for (const result of outcome.results) {
     const ran = `${result.id} on ${result.runtime}`;
+    if (result.status === "ok") {
+      context.stdout.write(`ok ${ran}\n`);
+      continue;
+    }
+    const { phase, message, teardownError } = result.error;
+    const teardown = teardownError === null ? [] : teardownLines(teardownError, ONCE_INDENT);
     context.stdout.write(
-      result.status === "ok"
-        ? `ok ${ran}\n`
-        : `failed ${ran}: phase ${result.error.phase}: ${result.error.message}\n`,
+      [`failed ${ran}: phase ${phase}: ${message}`, ...teardown]
+        .map((line) => `${line}\n`)
+        .join(""),
     );
   }
   return outcome.results.some((result) => result.status === "failed") ? 1 : 0;

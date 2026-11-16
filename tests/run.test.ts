@@ -3,7 +3,13 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { ChildPhase, Measured, MeasureRequest, OnceRequest } from "../src/child.js";
+import type {
+  ChildError,
+  ChildPhase,
+  Measured,
+  MeasureRequest,
+  OnceRequest,
+} from "../src/child.js";
 import type {
   findRuntime,
   FoundRuntime,
@@ -84,10 +90,17 @@ const ranOnce: Outcome = { status: "ok", result: { status: "ok" }, output: "" };
 /** An outcome in which the stop signal killed the child. */
 const stopped: Outcome = { status: "stopped", output: "" };
 
-/** An outcome in which the child failed in `phase` with `message`. */
-function failedOutcome(phase: ChildPhase, message: string): Outcome {
-  return { status: "failed", error: { phase, message, stack: null }, output: "" };
+/** An outcome in which the child failed in `phase` with `message`, its cleanup teardown `teardownError`. */
+function failedOutcome(
+  phase: ChildPhase,
+  message: string,
+  teardownError: ChildError["teardownError"] = null,
+): Outcome {
+  return { status: "failed", error: { phase, message, stack: null, teardownError }, output: "" };
 }
+
+/** The failure of a cleanup teardown that threw an `Error`, as the child encodes it. */
+const MELON = { message: "melon", stack: "at teardown" } as const;
 
 /**
  * A child starter that lists one case per file, named for the file, with `setupPerCall` set only
@@ -319,18 +332,30 @@ describe("run", () => {
   describe("when a case fails", () => {
     it.each([
       {
-        why: "answers with a failure",
+        why: "answers with a failure whose cleanup teardown failed too",
         outcome: {
           status: "failed",
-          error: { phase: "fn", message: "kiwi", stack: "at fn" },
+          error: { phase: "fn", message: "kiwi", stack: "at fn", teardownError: MELON },
           output: "plum\n",
         },
-        error: { phase: "fn", message: "kiwi", stack: "at fn", output: "plum\n" },
+        error: {
+          phase: "fn",
+          message: "kiwi",
+          stack: "at fn",
+          teardownError: MELON,
+          output: "plum\n",
+        },
       },
       {
         why: "answers with no measurement",
         outcome: { status: "ok", result: { status: "ok" }, output: "plum\n" },
-        error: { phase: "child", message: expect.any(String), stack: null, output: "plum\n" },
+        error: {
+          phase: "child",
+          message: expect.any(String),
+          stack: null,
+          teardownError: null,
+          output: "plum\n",
+        },
       },
     ] as const)("gives a failed result when its child $why", async ({ outcome, error }) => {
       const report = await runHere({ startChild: starter(() => outcome) });
@@ -479,7 +504,11 @@ describe("runOnce", () => {
   it("runs each case once per runtime, runtime by runtime, giving that it ran or how it failed", async () => {
     const failZeta = starter((runtime, request) =>
       request.id === "zeta.bench.ts"
-        ? failedOutcome("fn", `${runtime.runtime} ${basename(request.file)} ${request.mode}`)
+        ? failedOutcome(
+            "fn",
+            `${runtime.runtime} ${basename(request.file)} ${request.mode}`,
+            runtime.runtime === "bun" ? MELON : null,
+          )
         : ranOnce,
     );
 
@@ -496,14 +525,14 @@ describe("runOnce", () => {
           id: "zeta.bench.ts",
           runtime: "bun",
           status: "failed",
-          error: { phase: "fn", message: "bun zeta.bench.ts once" },
+          error: { phase: "fn", message: "bun zeta.bench.ts once", teardownError: MELON },
         },
         { id: "a.bench.ts", runtime: "bun", status: "ok" },
         {
           id: "zeta.bench.ts",
           runtime: "node",
           status: "failed",
-          error: { phase: "fn", message: "node zeta.bench.ts once" },
+          error: { phase: "fn", message: "node zeta.bench.ts once", teardownError: null },
         },
         { id: "a.bench.ts", runtime: "node", status: "ok" },
       ],

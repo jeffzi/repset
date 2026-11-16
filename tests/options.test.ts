@@ -5,7 +5,8 @@ import { fileURLToPath } from "node:url";
 
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { ConfigError, resolveOptions, type OptionsInput } from "../src/options.js";
+import { RUNTIMES } from "../src/measure/runtime.js";
+import { ConfigError, quotedList, resolveOptions, type OptionsInput } from "../src/options.js";
 import { suiteTemporaryDir } from "./temporary-dir.js";
 
 const FIXTURES = fileURLToPath(new URL("fixtures/config", import.meta.url));
@@ -204,6 +205,12 @@ describe("resolveOptions", () => {
 
       await expectConfigError(result, [option, shown]);
     });
+
+    it("rejects an unknown runtime, naming every runtime repset runs on", async () => {
+      const result = resolveHere({ config: "runtime-unknown.ts" });
+
+      await expectConfigError(result, [quotedList(RUNTIMES)]);
+    });
   });
 
   describe("when the caller gives a bad value", () => {
@@ -320,5 +327,13 @@ describe("resolveOptions", () => {
         resolved: "./loader.mjs",
       });
     });
+  });
+});
+
+describe("quotedList", () => {
+  it("quotes each name, joining them with commas and a final and", () => {
+    const list = quotedList(["node", "bun", "deno"]);
+
+    expect(list).toBe('"node", "bun" and "deno"');
   });
 });

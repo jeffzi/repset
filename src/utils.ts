@@ -58,6 +58,18 @@ export function timerResolutionMs(now: () => number = performanceNow): number {
   return smallestChange(now, TRANSITIONS_PER_PASS);
 }
 
+/**
+ * Rewrites a path with `/` separators, whatever the OS.
+ *
+ * @param path - The path to rewrite.
+ * @param separator - The OS's own separator, `sep` from `node:path`: the caller passes it so this
+ *   module reads no Node builtin.
+ * @returns `path` with every `separator` replaced by `/`.
+ */
+export function slashed(path: string, separator: string): string {
+  return path.split(separator).join("/");
+}
+
 /** Names `value` in an error message without printing a function's source or an object's body. */
 export function describe(value: unknown): string {
   if (Array.isArray(value)) return "an array";

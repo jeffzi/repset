@@ -16,7 +16,7 @@ import {
   WARMUP_MIN_SAMPLES,
   type SamplerResult,
   type Sampling,
-} from "./shared-state.js";
+} from "./sampler.js";
 
 /** The empty run's timed samples, whatever `minTime` and `minSamples` the body ran on. */
 const TIMED_SAMPLES = 64;

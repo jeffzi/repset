@@ -1,3 +1,5 @@
+import { quantile } from "../../src/measure/measure.js";
+
 /**
  * Per-process medians (ns) from one round of back-to-back pairs; `baseline[i]` pairs with
  * `repset[i]`, and `perCallResolutions[i]` is that pair's per-call resolution: the timer's
@@ -51,13 +53,6 @@ function at(values: readonly number[], index: number): number {
   return value;
 }
 
-function median(values: readonly number[]): number {
-  const sorted = values.toSorted((left, right) => left - right);
-  const lower = at(sorted, Math.floor((sorted.length - 1) / 2));
-  const upper = at(sorted, Math.floor(sorted.length / 2));
-  return (lower + upper) / 2;
-}
-
 /**
  * The paired difference, with near-ties counted as 0.
  *
@@ -101,8 +96,14 @@ function summarizeWithDirection(pairs: Pairs): {
       `expected paired values, got ${baseline.length} baseline, ${repset.length} repset and ${perCallResolutions.length} per-call resolutions`,
     );
   }
-  const baselineMedian = median(baseline);
-  const repsetMedian = median(repset);
+  const baselineMedian = quantile(
+    baseline.toSorted((left, right) => left - right),
+    0.5,
+  );
+  const repsetMedian = quantile(
+    repset.toSorted((left, right) => left - right),
+    0.5,
+  );
   const differences = repset.map((repsetValue, index) =>
     pairedDifference(at(baseline, index), repsetValue, at(perCallResolutions, index)),
   );

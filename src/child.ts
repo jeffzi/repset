@@ -3,8 +3,8 @@
  * its cases, measure one case, or run one case once.
  *
  * A measuring child loads this module beside the benchmark, so it imports only `bench`, the
- * `measure` modules, the generic helpers in `utils` and Node builtins: under Bun, module code a
- * child loads slows the timed calls even when it never runs.
+ * `measure` modules, `result-fd`, the generic helpers in `utils` and Node builtins: under Bun,
+ * module code a child loads slows the timed calls even when it never runs.
  */
 import { existsSync, realpathSync, writeSync } from "node:fs";
 import { isAbsolute } from "node:path";
@@ -21,13 +21,8 @@ import {
   type Statistics,
   withCaseState,
 } from "./measure/measure.js";
+import { RESULT_FD } from "./result-fd.js";
 import { describe, thrownMessage } from "./utils.js";
-
-/**
- * The file descriptor the result goes to, so that what a benchmark file prints on stdout and stderr
- * never mixes into it.
- */
-const RESULT_FD = 3;
 
 /** Lists the cases a benchmark file registers. */
 export interface ListRequest {

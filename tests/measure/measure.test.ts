@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
 import { type Case, measure, MeasureError, type NoInline } from "../../src/measure/measure.js";
-import { CalibrationError, cappedCount } from "../../src/measure/shared-state.js";
+import { CalibrationError, cappedCount } from "../../src/measure/sampler.js";
 import { requiresRealBunHere } from "../real-bun.js";
 import { temporaryDir } from "../temporary-dir.js";
 import { exposedGc } from "./fixtures.js";

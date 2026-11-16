@@ -11,6 +11,8 @@ import type { Runtime } from "./measure/runtime.js";
 import { ConfigError, isRuntime, type OptionsInput, resolveOptions } from "./options.js";
 import type { Report, Result } from "./report.js";
 import {
+  type ChildFunctionOverrides,
+  type ChildFunctions,
   ListingError,
   packageVersion,
   run,
@@ -20,7 +22,7 @@ import {
   type SelectInput,
 } from "./run.js";
 import { formatTable, metricLine } from "./table.js";
-import { thrownMessage } from "./utils.js";
+import { type StrictOmit, thrownMessage } from "./utils.js";
 
 /** Where the command prints: `process.stdout` and `process.stderr` fit. */
 export interface Output {
@@ -39,14 +41,12 @@ export interface SignalSource {
 }
 
 /** What the command reads from and prints to, and the functions it starts children with. */
-export interface CommandIo {
+export interface CommandIo extends ChildFunctionOverrides {
   /** The directory positional files, `--out` and `--config` are relative to; `process.cwd()` by default. */
   readonly cwd?: string | undefined;
   readonly stdout?: Output | undefined;
   readonly stderr?: Output | undefined;
   readonly signals?: SignalSource | undefined;
-  readonly findRuntime?: typeof realFindRuntime | undefined;
-  readonly startChild?: typeof realStartChild | undefined;
 }
 
 /** The exit code of a run interrupted by each signal: 128 plus the signal's number. */
@@ -85,9 +85,6 @@ export const CALLS_PER_SAMPLE = "REPSET_CALLS_PER_SAMPLE";
 /** The `--out` value that sends the report to stdout instead of a file. */
 const OUT_STDOUT = "-";
 
-/** Like `Omit`, but `K` must be a key of `T`, so a misspelled or removed key fails to compile. */
-type StrictOmit<T, K extends keyof T> = Omit<T, K>;
-
 const USAGE = `Usage: repset [options] [file...]
 
 Measures the benchmark cases in the given files, or in the files the config's include matches.
@@ -108,11 +105,13 @@ Options:
   --version               Print the version
 `;
 
+interface CommandInput extends StrictOmit<OptionsInput, "cwd"> {
+  readonly files: readonly string[] | undefined;
+}
+
 interface Command {
   readonly mode: "run" | "list" | "once";
-  readonly input: StrictOmit<OptionsInput, "cwd"> & {
-    readonly files: readonly string[] | undefined;
-  };
+  readonly input: CommandInput;
   /** The `--out` value as written: a file relative to the working directory, or `-` for stdout. */
   readonly out: string | undefined;
   readonly metricLines: boolean;
@@ -121,13 +120,11 @@ interface Command {
 }
 
 /** The command's streams, working directory, stop signal and child functions, defaults applied. */
-interface Context {
+interface Context extends ChildFunctions {
   readonly cwd: string;
   readonly stdout: Output;
   readonly stderr: Output;
   readonly signal: AbortSignal;
-  readonly findRuntime: typeof realFindRuntime;
-  readonly startChild: typeof realStartChild;
 }
 
 /** Whether `flag` is among the arguments before a `--` terminator. */
@@ -153,12 +150,13 @@ function decimal(flag: string, text: string | undefined): number | undefined {
 }
 
 /**
- * The calls per sample the environment fixes. Only an unset variable leaves the count to each
- * measuring child; the empty string is a bad value.
+ * The calls per sample the environment fixes.
  *
  * @param text - The value of `REPSET_CALLS_PER_SAMPLE`, or `undefined` when it is unset.
- * @returns The count, or `undefined` when the variable is unset.
- * @throws {ConfigError} When the value is not decimal digits naming a safe integer of 1 or more.
+ * @returns The count, or `undefined` when the variable is unset, which leaves the count to each
+ *   measuring child.
+ * @throws {ConfigError} When the value, the empty string included, is not decimal digits naming a
+ *   safe integer of 1 or more.
  */
 function fixedCallsPerSample(text: string | undefined): number | undefined {
   if (text === undefined) return undefined;
@@ -334,9 +332,12 @@ function reportWrites(path: string, shown: string): Pick<RunInput, "onSelected" 
 async function measure(command: Command, context: Context): Promise<number> {
   const { stdout, stderr } = context;
   const toStdout = command.out === OUT_STDOUT;
-  const toFile = command.out !== undefined && command.out !== OUT_STDOUT;
-  const path = toFile ? resolve(context.cwd, command.out) : undefined;
-  const writes = path === undefined ? undefined : reportWrites(path, String(command.out));
+  const { out } = command;
+  const file =
+    out === undefined || out === OUT_STDOUT
+      ? undefined
+      : { name: out, path: resolve(context.cwd, out) };
+  const writes = file === undefined ? undefined : reportWrites(file.path, file.name);
   const report = await run({
     ...command.input,
     ...childInput(context),
@@ -352,11 +353,11 @@ async function measure(command: Command, context: Context): Promise<number> {
   tableOut.write(formatTable(report.results));
   if (toStdout) stdout.write(reportText(report));
   let written = true;
-  if (path !== undefined) {
+  if (file !== undefined) {
     try {
-      writeReport(path, report);
+      writeReport(file.path, report);
     } catch (error) {
-      stderr.write(`repset: ${reportWriteFailure(String(command.out), error)}\n`);
+      stderr.write(`repset: ${reportWriteFailure(file.name, error)}\n`);
       written = false;
     }
   }

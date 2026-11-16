@@ -2,19 +2,17 @@ import { readFileSync } from "node:fs";
 
 import { parse } from "smol-toml";
 
+import { isRecord } from "../src/utils.js";
+
 const LOCKFILE = "mise.lock";
 const PLATFORMS = ["macos-arm64", "linux-x64", "windows-x64"] as const;
-
-function isTable(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isNonEmptyString(value: unknown): boolean {
   return typeof value === "string" && value.length > 0;
 }
 
 function isLocked(asset: unknown): boolean {
-  return isTable(asset) && isNonEmptyString(asset["url"]) && isNonEmptyString(asset["checksum"]);
+  return isRecord(asset) && isNonEmptyString(asset["url"]) && isNonEmptyString(asset["checksum"]);
 }
 
 interface LockedEntry {
@@ -23,7 +21,7 @@ interface LockedEntry {
 }
 
 function readEntries(tool: string, entries: unknown): LockedEntry[] {
-  if (!Array.isArray(entries) || !entries.every(isTable)) {
+  if (!Array.isArray(entries) || !entries.every(isRecord)) {
     throw new Error(`${LOCKFILE}: tools."${tool}" must be an array of tables`);
   }
   return entries.map((table) => {
@@ -50,7 +48,7 @@ function platformGaps(tool: string, { version, table }: LockedEntry): string[] {
 export function checkMiseLock(text: string): void {
   const lock = parse(text);
   const tools: unknown = lock["tools"];
-  if (!isTable(tools)) {
+  if (!isRecord(tools)) {
     throw new Error(`${LOCKFILE} has no tools table`);
   }
 

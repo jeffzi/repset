@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { sampleSharedState, type SamplerResult } from "../../src/measure/shared-state.js";
+import { sampleSharedState, type SamplerResult } from "../../src/measure/sampler.js";
 import { COARSE_RESOLUTION, errorOf, FINE_RESOLUTION } from "./fixtures.js";
 
 interface World {

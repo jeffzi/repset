@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 
 import type { SamplingReport } from "../src/child.js";
 import { CALLS_PER_SAMPLE } from "../src/command.js";
-import type { Runtime } from "../src/measure/runtime.js";
+import { RUNTIMES, type Runtime } from "../src/measure/runtime.js";
 import type { Report } from "../src/report.js";
 import { isRecord, thrownMessage } from "../src/utils.js";
 import { BODY_NAMES, type BodyName } from "./check-overhead/bodies.js";
@@ -78,7 +78,6 @@ const PAIRS = 12;
 /** The span, in timer resolutions, a calibrated reading's median timed sample reaches at least. */
 const MIN_SPAN_RESOLUTIONS = 200;
 
-const RUNTIMES: readonly Runtime[] = ["node", "bun"];
 const COUNT_MODES: readonly Scenario["countMode"][] = ["calibrated", "one-call"];
 
 const SCENARIOS: readonly Scenario[] = RUNTIMES.flatMap((runtime) =>
@@ -303,6 +302,11 @@ function readRepset(scenario: Scenario): RepsetReading {
   }
 }
 
+const RUNTIME_COMMANDS: Readonly<Record<Runtime, readonly [string, readonly string[]]>> = {
+  node: [process.execPath, ["--import", "tsx"]],
+  bun: ["bun", []],
+};
+
 /**
  * Builds the baseline child's command line for one reading of `scenario`.
  *
@@ -315,8 +319,7 @@ export function baselineCommand(
   scenario: Scenario,
   counts: BaselineCounts,
 ): { readonly executable: string; readonly args: readonly string[] } {
-  const [executable, runtimeArgs] =
-    scenario.runtime === "node" ? [process.execPath, ["--import", "tsx"]] : ["bun", []];
+  const [executable, runtimeArgs] = RUNTIME_COMMANDS[scenario.runtime];
   return {
     executable,
     args: [

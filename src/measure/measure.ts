@@ -10,7 +10,7 @@
  * under Bun.
  */
 
-import { performanceNow, thrownMessage, timerResolutionMs } from "../utils.js";
+import { performanceNow, property, thrownMessage, timerResolutionMs } from "../utils.js";
 import { empty, type EmptyResult, type Lifecycle, sampleEmpty } from "./empty.js";
 import { holdInFlight, type InFlight, keep, releaseInFlight, samplePerCall } from "./per-call.js";
 import { runningRuntime } from "./runtime.js";
@@ -20,7 +20,7 @@ import {
   type SamplerResult,
   type Sampling,
   type TimedMinimums,
-} from "./shared-state.js";
+} from "./sampler.js";
 
 const NS_PER_MS = 1_000_000;
 
@@ -362,7 +362,7 @@ function exposedGc(): NonNullable<typeof globalThis.gc> {
  * @throws MeasureError in phase `child` when Bun is running but `bun:jsc` cannot be loaded,
  *   with whatever the loader rejected with as cause.
  */
-async function runtimeNoInline(): Promise<NoInline | undefined> {
+export async function runtimeNoInline(): Promise<NoInline | undefined> {
   if (runningRuntime() !== "bun") return undefined;
   try {
     const { noInline } = await import("bun:jsc");
@@ -724,8 +724,7 @@ function summarizeCollections(entries: readonly PerformanceEntry[]): GcDuringTim
  * @returns The entry's `detail.kind`, or `undefined` when it carries none.
  */
 function gcKind(entry: PerformanceEntry): unknown {
-  const detail: unknown = Reflect.get(entry, "detail");
-  return typeof detail === "object" && detail !== null ? Reflect.get(detail, "kind") : undefined;
+  return property(Reflect.get(entry, "detail"), "kind");
 }
 
 // ---------------------------------------------------------------------------

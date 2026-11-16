@@ -3,8 +3,8 @@
 // reported, and prints `{"median": <ns per call>}` on stdout.
 //
 //   <node --import tsx | bun> --expose-gc baseline-child.ts <body> <calls per sample> <samples>
-import { quantile } from "../../src/measure/measure.js";
-import { WARMUP_MIN_MS, WARMUP_MIN_SAMPLES } from "../../src/measure/shared-state.js";
+import { quantile, runtimeNoInline } from "../../src/measure/measure.js";
+import { WARMUP_MIN_MS, WARMUP_MIN_SAMPLES } from "../../src/measure/sampler.js";
 import {
   BODIES,
   BODY_NAMES,
@@ -31,7 +31,7 @@ const collect = globalThis.gc;
 if (typeof collect !== "function") throw new Error("run with --expose-gc");
 
 const body = BODIES[name];
-if (process.versions["bun"] !== undefined) (await import("bun:jsc")).noInline(body);
+(await runtimeNoInline())?.(body);
 
 function isBodyName(value: string): value is BodyName {
   return BODY_NAMES.some((known) => known === value);

@@ -18,10 +18,12 @@ import type {
   ListedCase,
   Measured,
   Ran,
+  SamplingReport,
 } from "./child.js";
-import { type GcDuringTiming, PHASES, type Statistics } from "./measure/measure.js";
+import type { GcDuringTiming, Statistics } from "./measure/measure.js";
 import { type Runtime, runningRuntime } from "./measure/runtime.js";
 import { ConfigError } from "./options.js";
+import { RESULT_FD } from "./result-fd.js";
 import { isRecord, thrownMessage } from "./utils.js";
 
 /** The child entry beside `moduleFile`, with its extension: `child.js` built, `child.ts` from source. */
@@ -39,9 +41,6 @@ const OUTPUT_TAIL_BYTES = 16 * 1024;
  * hold them open for as long as it lives, and the call must not wait for it.
  */
 const CLOSE_GRACE_MS = 250;
-
-/** The child's stdio index of its result descriptor: matches the child entry's `RESULT_FD`. */
-const RESULT_FD = 3;
 
 /** How much of a result line that does not answer its request a failure message quotes. */
 const QUOTED_LINE_CHARS = 200;
@@ -97,34 +96,56 @@ type Ending =
   | { readonly kind: "timeout" }
   | { readonly kind: "exit"; readonly code: number | null; readonly signal: string | null };
 
-const CHILD_PHASES: ReadonlySet<string> = new Set<ChildPhase>([...PHASES, "load"]);
+/** Every {@link ChildPhase}: a phase missing here fails to compile. */
+const CHILD_PHASE_KEYS: Readonly<Record<ChildPhase, true>> = {
+  setup: true,
+  fn: true,
+  teardown: true,
+  "optimized-away": true,
+  calibration: true,
+  child: true,
+  load: true,
+};
 
-const STATISTICS = [
-  "min",
-  "p25",
-  "median",
-  "p75",
-  "p99",
-  "max",
-  "mean",
-  "sampleCount",
-] as const satisfies readonly (keyof Statistics)[];
+const CHILD_PHASES: ReadonlySet<string> = new Set(Object.keys(CHILD_PHASE_KEYS));
 
-const SAMPLING_NUMBERS = [
-  "timerResolutionNs",
-  "callsPerSample",
-  "warmupSamples",
-  "timingAttempts",
-  "timingMs",
-] as const satisfies readonly (keyof Measured["sampling"])[];
+/** Every key of {@link Statistics}: a key missing here fails to compile. */
+const STATISTIC_KEYS: Readonly<Record<keyof Statistics, true>> = {
+  min: true,
+  p25: true,
+  median: true,
+  p75: true,
+  p99: true,
+  max: true,
+  mean: true,
+  sampleCount: true,
+};
 
-const GC_NUMBERS = [
-  "count",
-  "minor",
-  "major",
-  "totalMs",
-  "maxMs",
-] as const satisfies readonly (keyof GcDuringTiming)[];
+const STATISTICS = Object.keys(STATISTIC_KEYS);
+
+/** Every numeric key of a child's sampling report: a key missing here fails to compile. */
+const SAMPLING_NUMBER_KEYS: Readonly<
+  Record<Exclude<keyof SamplingReport, "callsPerSampleFixed">, true>
+> = {
+  timerResolutionNs: true,
+  callsPerSample: true,
+  warmupSamples: true,
+  timingAttempts: true,
+  timingMs: true,
+};
+
+const SAMPLING_NUMBERS = Object.keys(SAMPLING_NUMBER_KEYS);
+
+/** Every key of {@link GcDuringTiming}: a key missing here fails to compile. */
+const GC_NUMBER_KEYS: Readonly<Record<keyof GcDuringTiming, true>> = {
+  count: true,
+  minor: true,
+  major: true,
+  totalMs: true,
+  maxMs: true,
+};
+
+const GC_NUMBERS = Object.keys(GC_NUMBER_KEYS);
 
 // ---------------------------------------------------------------------------
 // Runtime discovery
@@ -140,6 +161,7 @@ const GC_NUMBERS = [
  * @returns The executable and the version it reports, without a leading `v`.
  * @throws {@link ConfigError} When no executable for `runtime` is on `PATH`, or its probe exits
  *   non-zero, dies on a signal, cannot be started or prints nothing.
+ * @throws Error When `process.versions` holds no version for the runtime this process runs on.
  */
 export async function findRuntime(runtime: Runtime): Promise<FoundRuntime> {
   if (runtime === runningRuntime()) {

@@ -4,6 +4,9 @@
  * The `measure` modules import it and load in a browser page, so it reads no Node builtin.
  */
 
+/** Like `Omit`, but `K` must be a key of `T`, so a misspelled or removed key fails to compile. */
+export type StrictOmit<T, K extends keyof T> = Omit<T, K>;
+
 const TRANSITIONS_PER_PASS = 2000;
 
 /**

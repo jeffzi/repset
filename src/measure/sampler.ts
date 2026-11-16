@@ -1,6 +1,9 @@
 /**
- * The shared-state sampler: warmup that calibrates the calls per sample, then timing attempts, each
- * after a collection, every sample on the caller's single state. Spans are in milliseconds.
+ * The contract every sampler shares, and the shared-state sampler: the `Sampling` options, the
+ * `SamplerResult` a sampler returns, the clock and the warmup and calibration code the per-call and
+ * empty samplers reuse, then `sampleSharedState` itself. That sampler warms up to calibrate the calls
+ * per sample, then takes timing attempts, each after a collection, every sample on the caller's
+ * single state. Spans are in milliseconds.
  *
  * Every function from `sampleSharedState` down to the body is plain synchronous code: no `try`,
  * `catch`, `finally`, `async` function, generator or Promise encloses the timed calls or the loops
@@ -10,7 +13,7 @@
  * The module imports only `../utils.js` and reads no Node builtin, so it loads in a browser page.
  */
 
-import { performanceNow, timerResolutionMs } from "../utils.js";
+import { performanceNow, type StrictOmit, timerResolutionMs } from "../utils.js";
 
 /** Every sample spans at least this many multiples of the timer resolution once warmup calibrates its count. */
 const MIN_RESOLUTIONS_PER_SAMPLE = 200;
@@ -95,7 +98,7 @@ export interface TimedMinimums {
 
 /** `now` defaults to `performance.now()`, and `resolutionMs` to a probe of `now`. */
 export interface SharedStateOptions<State>
-  extends Omit<Sampling, "now" | "resolutionMs">, SamplerClock, TimedMinimums {
+  extends StrictOmit<Sampling, "now" | "resolutionMs">, SamplerClock, TimedMinimums {
   readonly fn: (state: State) => unknown;
   /** The one state every sample runs on; the caller builds and tears it down. */
   readonly state: State;

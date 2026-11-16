@@ -28,10 +28,6 @@ import {
 import type { Machine, Process, Report, ReportOptions, Result } from "./report.js";
 import { property } from "./utils.js";
 
-// ---------------------------------------------------------------------------
-// Case selection
-// ---------------------------------------------------------------------------
-
 /** A case the run measures. */
 export interface SelectedCase {
   readonly id: string;
@@ -51,16 +47,25 @@ export type Selection =
     }
   | { readonly status: "stopped" };
 
+/** The functions a run looks runtimes up and starts children with. */
+export interface ChildFunctions {
+  readonly findRuntime: typeof realFindRuntime;
+  readonly startChild: typeof realStartChild;
+}
+
+/** {@link ChildFunctions} a caller may replace; each one it leaves out is the real function. */
+export type ChildFunctionOverrides = {
+  readonly [Name in keyof ChildFunctions]?: ChildFunctions[Name] | undefined;
+};
+
 /** What a selection reads, and the functions it looks runtimes up and starts children with. */
-export interface SelectInput {
+export interface SelectInput extends ChildFunctionOverrides {
   readonly options: ResolvedOptions;
   /** The positional files, relative to `cwd`; when there are some, they replace `include`. */
   readonly files: readonly string[];
   readonly cwd: string;
   /** Ends the selection as stopped when it fires during listing. */
   readonly signal?: AbortSignal | undefined;
-  readonly findRuntime?: typeof realFindRuntime | undefined;
-  readonly startChild?: typeof realStartChild | undefined;
 }
 
 /** A benchmark file whose listing child failed, with what the child left to print before it. */
@@ -248,10 +253,6 @@ export async function selectCases(input: SelectInput): Promise<Selection> {
   return { status: "selected", runtimes, cases };
 }
 
-// ---------------------------------------------------------------------------
-// Run inputs and results
-// ---------------------------------------------------------------------------
-
 /**
  * The package's own `package.json`: one directory above this module, which holds from `src/` and
  * from `dist/` alike.
@@ -259,13 +260,11 @@ export async function selectCases(input: SelectInput): Promise<Selection> {
 const PACKAGE_JSON = fileURLToPath(new URL("../package.json", import.meta.url));
 
 /** What a run or a once run takes: the caller's options and the functions it starts children with. */
-export interface OnceInput extends OptionsInput {
+export interface OnceInput extends OptionsInput, ChildFunctionOverrides {
   /** Paths or globs of benchmark files, relative to `cwd`; when there are some, they replace `include`. */
   readonly files?: readonly string[] | undefined;
   /** Kills the running child and starts no further one when it fires. */
   readonly signal?: AbortSignal | undefined;
-  readonly findRuntime?: typeof realFindRuntime | undefined;
-  readonly startChild?: typeof realStartChild | undefined;
 }
 
 /** What a run takes: a once run's input, the result callback, and where it reads the host from. */
@@ -322,10 +321,6 @@ const FAILED_PROCESSES: readonly Process[] = [
     rawSamples: null,
   },
 ];
-
-// ---------------------------------------------------------------------------
-// Running and reporting
-// ---------------------------------------------------------------------------
 
 /**
  * Reads the version a `package.json` holds.

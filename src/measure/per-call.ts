@@ -2,7 +2,7 @@
  * The per-call sampler: for a body that consumes its state, so every call runs on a fresh one.
  * Each call builds a state, runs the body once on it between a pair of clock reads, then tears it
  * down; a sample's span is the sum of its calls' spans, so no setup or teardown lands inside one.
- * Spans are in milliseconds. The result is `sampleSharedState`'s `SamplerResult`, and `collect`,
+ * Spans are in milliseconds. The result is the `SamplerResult` every sampler returns, and `collect`,
  * `now`, `resolutionMs` and `callsPerSample` mean what they mean there, except that `collect` runs once:
  * this sampler takes a single timing attempt.
  *
@@ -12,10 +12,11 @@
  * handling and teardown on a throw belong to the caller, which finds the state in flight in
  * `inFlight`.
  *
- * The module imports only sibling `measure` modules and reads no Node builtin, so it loads in a
+ * The module imports only `../utils.js` and sibling `measure` modules and reads no Node builtin, so it loads in a
  * browser page.
  */
 
+import type { StrictOmit } from "../utils.js";
 import {
   calibratedSampleMs,
   recordWarmup,
@@ -29,7 +30,7 @@ import {
   type Sampling,
   type TimedMinimums,
   type WarmupResult,
-} from "./shared-state.js";
+} from "./sampler.js";
 
 const PER_CALL_WARMUP_MIN_MS = 3000;
 const WARMUP_MAX_SAMPLES = 1000;
@@ -69,7 +70,7 @@ export function releaseInFlight<State>(inFlight: InFlight<State>): void {
 
 /** `now` defaults to `performance.now()`, and `resolutionMs` to a probe of `now`. */
 export interface PerCallOptions<State>
-  extends Omit<Sampling, "now" | "resolutionMs">, SamplerClock, TimedMinimums {
+  extends StrictOmit<Sampling, "now" | "resolutionMs">, SamplerClock, TimedMinimums {
   /** Builds the fresh state one body call consumes. */
   readonly setup: () => State;
   /** The benchmark body; every call receives a state built for it alone. */
@@ -108,14 +109,12 @@ function sample<State>(perCall: PerCall<State>, count: number): number {
   let summed = 0;
   for (let call = 0; call < count; call++) {
     const state = setup();
-    inFlight.state = state;
-    inFlight.held = true;
+    holdInFlight(inFlight, state);
     const started = now();
     fn(state);
     summed += now() - started;
     teardown(state);
-    inFlight.held = false;
-    inFlight.state = undefined;
+    releaseInFlight(inFlight);
   }
   return summed;
 }

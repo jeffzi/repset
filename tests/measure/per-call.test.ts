@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { type InFlight, samplePerCall } from "../../src/measure/per-call.js";
-import type { SamplerResult } from "../../src/measure/shared-state.js";
+import type { SamplerResult } from "../../src/measure/sampler.js";
 import { COARSE_RESOLUTION, FINE_RESOLUTION } from "./fixtures.js";
 
 interface World {

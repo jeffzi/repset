@@ -106,7 +106,7 @@ tasks:
     internal: true
     deps: [_deps]
     cmds:
-      - "{{.MISE}} node scripts/check-mise-lock.ts"
+      - "{{.MISE}} node --import tsx scripts/check-mise-lock.ts"
 
   _lint:
     internal: true

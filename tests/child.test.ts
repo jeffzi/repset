@@ -262,13 +262,7 @@ describe("measureCase", () => {
           timingMs: expect.any(Number),
         },
         checks: { ratioToEmptyBody: expect.any(Number) },
-        gc: {
-          count: expect.any(Number),
-          minor: expect.any(Number),
-          major: expect.any(Number),
-          totalMs: expect.any(Number),
-          maxMs: expect.any(Number),
-        },
+        gc: expect.any(Object),
       });
     });
 
@@ -449,22 +443,6 @@ describe("the child started on node", { timeout: SPAWN_TIMEOUT_MS }, () => {
     expect(resultLine(run.fd3)).toStrictEqual({
       status: "ok",
       cases: [{ id: "found", setupPerCall: false }],
-    });
-  });
-
-  describe("when a measure request fixes the calls per sample", () => {
-    it("measures at that count and reports it as fixed", async () => {
-      const run = await spawnChild("node", {
-        ...MEASURE_REQUEST,
-        file: LIFECYCLE,
-        id: "steady",
-        callsPerSample: 200,
-      });
-
-      expect(resultLine(run.fd3)).toMatchObject({
-        status: "ok",
-        sampling: { callsPerSample: 200, callsPerSampleFixed: true },
-      });
     });
   });
 

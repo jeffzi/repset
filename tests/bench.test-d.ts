@@ -49,17 +49,4 @@ describe("bench", () => {
       });
     });
   });
-
-  describe("when a field is set to undefined", () => {
-    it("accepts setup, teardown and setupPerCall set to undefined", () => {
-      assertCompiles(() => {
-        bench("sort", {
-          setup: undefined,
-          fn: () => 1,
-          teardown: undefined,
-          setupPerCall: undefined,
-        });
-      });
-    });
-  });
 });

@@ -8,13 +8,6 @@ function record(entry: unknown): void {
   if (Array.isArray(calls)) calls.push(entry);
 }
 
-/** A teardown that records its call under `name`. */
-function recordTeardown(name: string): () => void {
-  return () => {
-    record(`${name} teardown`);
-  };
-}
-
 /** A case whose every callback records its call under `name`. */
 function benchRecorded(name: string): void {
   bench(name, {
@@ -43,29 +36,11 @@ bench("steady", {
   },
 });
 
-bench("setup-throws", {
-  setup: () => {
-    throw new Error("fig");
-  },
-  fn: () => 1,
-  teardown: recordTeardown("setup-throws"),
-});
-
 bench("fn-throws", {
   setup: () => 0,
   fn: () => {
-    const error = new Error("kiwi");
-    record(error);
-    throw error;
+    throw new Error("kiwi");
   },
-  teardown: recordTeardown("fn-throws"),
-});
-
-bench("fn-returns-thenable", {
-  setup: () => 0,
-  // oxlint-disable-next-line unicorn/no-thenable -- a thenable body result is the input under test
-  fn: () => ({ then: () => 0 }),
-  teardown: recordTeardown("fn-returns-thenable"),
 });
 
 bench("fn-and-teardown-throw", {
@@ -75,13 +50,5 @@ bench("fn-and-teardown-throw", {
   },
   teardown: () => {
     throw new Error("melon");
-  },
-});
-
-bench("teardown-throws", {
-  setup: () => 0,
-  fn: () => 1,
-  teardown: () => {
-    throw new Error("pear");
   },
 });

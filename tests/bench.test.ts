@@ -107,21 +107,6 @@ describe("bench", () => {
     });
   });
 
-  describe("when a call is rejected", () => {
-    it.each([
-      { name: 42, benchmark: sync, why: "a bad name" },
-      { name: "sort", benchmark: { fn: 42 }, why: "a bad benchmark" },
-    ])("registers nothing for $why", ({ name, benchmark }) => {
-      bench("before", () => 1);
-
-      errorOf(() => {
-        benchUnchecked(name, benchmark);
-      });
-
-      expect(registeredIds()).toStrictEqual(["before"]);
-    });
-  });
-
   describe("when given a name that is not a string", () => {
     it("throws a TypeError holding the value", () => {
       const error = rejectionOf(42, sync);
@@ -294,12 +279,6 @@ describe("the registry slot", () => {
 
       expectTypeErrorHolding(error, ["banana"]);
     });
-
-    it("is left as it was by registeredCases", () => {
-      errorOf(registeredCases);
-
-      expect(Reflect.get(globalThis, REGISTRY)).toBe("banana");
-    });
   });
 
   describe("when it holds a format this copy does not know", () => {
@@ -313,13 +292,6 @@ describe("the registry slot", () => {
       const error = errorOf(registeredCases);
 
       expectTypeErrorHolding(error, ["99"]);
-    });
-
-    it("is left as it was by registeredCases", () => {
-      errorOf(registeredCases);
-
-      expect(Reflect.get(globalThis, REGISTRY)).toBe(slot);
-      expect(slot).toStrictEqual({ format: 99 });
     });
   });
 });

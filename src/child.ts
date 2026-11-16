@@ -116,7 +116,9 @@ function checkName(name: unknown): asserts name is string {
 }
 
 /**
- * Checks that `value` is a synchronous function, reading its tag without calling it.
+ * Checks that `value` is a function and not an `async function` or `async function*`, reading its
+ * tag without calling it. A plain function that returns a promise passes: `measure` fails it when
+ * its first call returns a thenable.
  *
  * @param subject - What `value` is, as an error message names it.
  * @param value - The function to check.
@@ -142,7 +144,8 @@ function checkedFunction(subject: string, value: unknown): CaseFunction {
  * @param benchmark - The benchmark object.
  * @param field - The field to read.
  * @returns The field's function, or `undefined` when the field is absent.
- * @throws TypeError when the field is neither `undefined` nor a synchronous function.
+ * @throws TypeError when the field is neither `undefined` nor a function that is not an
+ *   `async function` or `async function*`.
  */
 function optionalFunction(
   subject: string,
@@ -236,6 +239,9 @@ function registry(): RegisteredCase[] {
  *
  * `fn`, `setup` and `teardown` reach `measure` as the very functions given, so nothing sits
  * between the sampling loop and the body.
+ *
+ * Registration rejects an `async function` by its tag only. A plain function that returns a promise
+ * registers, and `measure` fails the case when that function's first call returns a thenable.
  *
  * A rejected call registers nothing. A duplicate name is not rejected: both cases are kept.
  *

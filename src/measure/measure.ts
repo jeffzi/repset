@@ -54,8 +54,8 @@ export interface Case<State> {
   readonly kind: Lifecycle;
   readonly setup: () => State;
   readonly fn: (state: State) => unknown;
-  /** Releases a state; absent means nothing to release. */
-  readonly teardown?: (state: State) => void;
+  /** Releases a state; absent means nothing to release. What it returns is read for a thenable. */
+  readonly teardown?: (state: State) => unknown;
 }
 
 export interface MeasureOptions {
@@ -105,8 +105,8 @@ export interface Measurement extends Statistics {
 }
 
 /**
- * Where a case failed: `setup`, `fn` or `teardown` threw (`fn` also for a first call that returned
- * a thenable); `optimized-away`, the body is too close to the empty body to tell apart;
+ * Where a case failed: `setup`, `fn` or `teardown` threw, or its first call returned a thenable;
+ * `optimized-away`, the body is too close to the empty body to tell apart;
  * `calibration`, a count passed the cap or a third timing attempt was discarded; `child`, the
  * runtime lacks what measuring needs.
  */
@@ -166,8 +166,9 @@ interface BodySampling extends Sampling, TimedMinimums {}
  *   running but `bun:jsc` cannot be loaded, with the loader's value as cause, before anything runs;
  *   and when the forced GC throws, with the collector's value as cause, after every state left
  *   alive is torn down.
- * @throws MeasureError in phase `fn` when the body's first call returns a thenable, after its
- *   state is torn down.
+ * @throws MeasureError in phase `setup`, `fn` or `teardown` when that callback's first call returns
+ *   a thenable, after every state left alive is torn down; a per-call case's later calls are not
+ *   checked.
  * @throws MeasureError in phase `setup`, `fn` or `teardown` when that callback throws, with the
  *   thrown value unchanged as cause, after every state left alive is torn down; a teardown error
  *   during that cleanup is attached to the error as its `teardownError`, and a per-call state whose
@@ -358,8 +359,8 @@ export async function runtimeNoInline(): Promise<NoInline | undefined> {
 // ---------------------------------------------------------------------------
 
 /**
- * Builds one state of a benchmark, checks the body is synchronous on it, hands it to `use`, then
- * tears it down.
+ * Builds one state of a benchmark, checks the setup and the body are synchronous on it, hands it
+ * to `use`, then tears it down and checks the teardown is synchronous.
  *
  * Every `try` of the shared-state lifecycle lives here, so `use` holds none above its timed calls.
  *
@@ -367,12 +368,14 @@ export async function runtimeNoInline(): Promise<NoInline | undefined> {
  * @param use - Runs on the state once the body's first call has returned without a thenable.
  * @returns What `use` returned.
  * @throws MeasureError in phase `setup` when `setup` throws, before anything else runs.
- * @throws MeasureError in phase `fn` when the body throws or its first call returns a thenable,
- *   after teardown ran; a teardown error then is attached to the error as its `teardownError`.
+ * @throws MeasureError in phase `setup` when `setup` returns a thenable, and in phase `fn` when the
+ *   body throws or its first call returns a thenable, after teardown ran; a teardown error or
+ *   thenable then is attached to the error as its `teardownError`.
  * @throws MeasureError in phase `calibration` when `use` throws a `CalibrationError`, in the phase
  *   of any `MeasureError` it throws, otherwise in phase `fn`, after teardown ran; a teardown error
- *   then is attached to the error as its `teardownError`.
- * @throws MeasureError in phase `teardown` when `teardown` throws and the body succeeded.
+ *   or thenable then is attached to the error as its `teardownError`.
+ * @throws MeasureError in phase `teardown` when `teardown` throws or returns a thenable and the body
+ *   succeeded.
  */
 export function withCaseState<State, Result>(
   benchmark: Case<State>,
@@ -388,22 +391,25 @@ export function withCaseState<State, Result>(
   }
   let result: Result;
   try {
-    requireSynchronous(fn(state));
+    requireSynchronous(state, "setup");
+    requireSynchronous(fn(state), "fn");
     result = use(state);
   } catch (error) {
     throw failedIn("fn", error, tearDownCatching(teardown, state));
   }
+  let returned: unknown;
   try {
-    teardown(state);
+    returned = teardown(state);
   } catch (error) {
     throw new MeasureError("teardown", error);
   }
+  requireSynchronous(returned, "teardown");
   return result;
 }
 
 /**
- * Runs a shared-state benchmark: builds one state, checks the body is synchronous, samples it,
- * then tears the state down.
+ * Runs a shared-state benchmark: builds one state, checks the setup and the body are synchronous,
+ * samples it, then tears the state down and checks the teardown is synchronous.
  *
  * @param benchmark - The benchmark.
  * @param sampling - The clock, its resolution, the forced GC, the fixed count if one was given, and
@@ -412,12 +418,14 @@ export function withCaseState<State, Result>(
  *   run; the forced GC before each run records their start.
  * @returns What the body's sampler returned.
  * @throws MeasureError in phase `setup` when `setup` throws, before anything else runs.
- * @throws MeasureError in phase `fn` when the body throws or its first call returns a thenable,
- *   after teardown ran; a teardown error then is attached to the error as its `teardownError`.
+ * @throws MeasureError in phase `setup` when `setup` returns a thenable, and in phase `fn` when the
+ *   body throws or its first call returns a thenable, after teardown ran; a teardown error or
+ *   thenable then is attached to the error as its `teardownError`.
  * @throws MeasureError in phase `calibration` when the sampler refuses a count or a fourth run, and in
- *   phase `child` when the forced GC throws, after teardown ran; a teardown error then is attached
- *   to the error as its `teardownError`.
- * @throws MeasureError in phase `teardown` when `teardown` throws and the body succeeded.
+ *   phase `child` when the forced GC throws, after teardown ran; a teardown error or thenable then
+ *   is attached to the error as its `teardownError`.
+ * @throws MeasureError in phase `teardown` when `teardown` throws or returns a thenable and the body
+ *   succeeded.
  */
 function measureSharedState<State>(
   benchmark: Case<State>,
@@ -437,19 +445,20 @@ function measureSharedState<State>(
 }
 
 /**
- * Runs a per-call benchmark: checks the body is synchronous on one built state, then samples it,
- * tearing down the state left alive when anything throws.
+ * Runs a per-call benchmark: checks the setup, the body and the teardown are synchronous on one
+ * built state, then samples it, tearing down the state left alive when anything throws. Only that
+ * first call of each is checked: the sampled calls reach the sampler unchanged.
  *
  * @param benchmark - The benchmark.
  * @param sampling - The clock, its resolution, the forced GC, the fixed count if one was given, and
  *   the `minTime` and `minSamples` the timing attempts must pass.
  * @param timing - Receives the end of the timed samples; the forced GC records their start.
  * @returns What the body's sampler returned.
- * @throws MeasureError in phase `setup`, `fn` or `teardown` when that callback throws, `fn` also
- *   when the body's first call returns a thenable, `calibration` when the sampler refuses a count,
- *   and `child` when the forced GC throws, after the state built and not torn down, if any, is torn
- *   down, save one whose teardown threw; a teardown error during that cleanup is attached to the
- *   error as its `teardownError`.
+ * @throws MeasureError in phase `setup`, `fn` or `teardown` when that callback throws or its first
+ *   call returns a thenable, `calibration` when the sampler refuses a count, and `child` when the
+ *   forced GC throws, after the state built and not torn down, if any, is torn down, save one whose
+ *   teardown threw or returned a thenable; a teardown error or thenable during that cleanup is
+ *   attached to the error as its `teardownError`.
  */
 function measurePerCall<State>(
   benchmark: Case<State>,
@@ -474,9 +483,13 @@ function measurePerCall<State>(
   try {
     const checked = setup();
     holdInFlight(inFlight, checked);
-    requireSynchronous(fn(checked));
-    trackedTeardown(checked);
+    requireSynchronous(checked, "setup");
+    requireSynchronous(fn(checked), "fn");
+    tearingDown = true;
+    const returned: unknown = teardown(checked);
+    tearingDown = false;
     releaseInFlight(inFlight);
+    requireSynchronous(returned, "teardown");
     const run = samplePerCall({ ...sampling, setup, fn, teardown: trackedTeardown, inFlight });
     timing.endMs = performance.now();
     return run;
@@ -516,20 +529,51 @@ function perCallPhase(error: unknown, inFlight: boolean, tearingDown: boolean): 
   return tearingDown ? "teardown" : "fn";
 }
 
+/** A case callback whose first call `measure` checks for a thenable. */
+type Callback = "setup" | "fn" | "teardown";
+
 /**
- * Fails a body whose call returned a thenable: the samplers time calls, not settled promises.
+ * Fails a callback whose call returned a thenable: the samplers time calls, not settled promises,
+ * and a setup or teardown that settles later would run on the clock.
  *
- * @param returned - What the body's first call returned.
- * @throws Error when `returned` has a callable `then`.
+ * @param returned - What the callback's call returned.
+ * @param callback - The callback that returned it, which is also the phase it fails in.
+ * @throws MeasureError in phase `callback` when `returned` has a callable `then`.
  */
-function requireSynchronous(returned: unknown): void {
+function requireSynchronous(returned: unknown, callback: Callback): void {
+  const failure = thenableFailure(returned, callback);
+  if (failure !== null) throw failure;
+}
+
+/**
+ * Checks a callback's return value for a thenable.
+ *
+ * Before failing, it settles the thenable into a promise whose rejection is handled, so that a
+ * rejected thenable raises no unhandled rejection, which on Node ends the measuring process before
+ * it reports the failure.
+ *
+ * @param returned - What the callback's call returned.
+ * @param callback - The callback that returned it, which is also the phase it fails in.
+ * @returns A `MeasureError` in phase `callback` when `returned` has a callable `then`; `null`
+ *   otherwise.
+ */
+function thenableFailure(returned: unknown, callback: Callback): MeasureError | null {
   if (
-    (typeof returned === "object" || typeof returned === "function") &&
-    returned !== null &&
-    typeof Reflect.get(returned, "then") === "function"
+    (typeof returned !== "object" && typeof returned !== "function") ||
+    returned === null ||
+    typeof Reflect.get(returned, "then") !== "function"
   ) {
-    throw new Error("benchmark bodies must be synchronous: the body returned a thenable");
+    return null;
   }
+  // A promise's resolve function never throws: a `then` getter or call that throws rejects the
+  // new promise instead, so the thenable failure below is the one that surfaces.
+  new Promise((resolve) => {
+    resolve(returned);
+  }).catch(() => undefined);
+  return new MeasureError(
+    callback,
+    new Error(`benchmark ${callback} must be synchronous: it returned a thenable`),
+  );
 }
 
 /**
@@ -540,18 +584,20 @@ function requireSynchronous(returned: unknown): void {
  * @param teardown - The benchmark's teardown.
  * @param state - The state to release.
  * @returns A `MeasureError` in phase `teardown` with the teardown's thrown value as cause, whatever
- *   that value, `null` included; `null` when the teardown returned.
+ *   that value, `null` included, or for a teardown that returned a thenable; `null` when the
+ *   teardown returned anything else.
  */
 function tearDownCatching<State>(
-  teardown: (state: State) => void,
+  teardown: (state: State) => unknown,
   state: State,
 ): MeasureError | null {
+  let returned: unknown;
   try {
-    teardown(state);
+    returned = teardown(state);
   } catch (error) {
     return new MeasureError("teardown", error);
   }
-  return null;
+  return thenableFailure(returned, "teardown");
 }
 
 // ---------------------------------------------------------------------------

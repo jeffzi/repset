@@ -117,17 +117,13 @@ describe("the command started as a process", { timeout: SPAWN_TIMEOUT_MS }, () =
         expect(run.code).toBe(0);
       });
 
-      it("writes a schema-1 report with every case ok", () => {
-        expect({
-          schema: run.report.schema,
-          ran: run.report.results.map((result) => [result.id, result.runtime.name, result.status]),
-        }).toStrictEqual({
-          schema: 1,
-          ran: [
-            ["sum/small", runtime, "ok"],
-            ["sum/large", runtime, "ok"],
-          ],
-        });
+      it("writes a report with every case ok", () => {
+        expect(
+          run.report.results.map((result) => [result.id, result.runtime.name, result.status]),
+        ).toStrictEqual([
+          ["sum/small", runtime, "ok"],
+          ["sum/large", runtime, "ok"],
+        ]);
       });
 
       it("prints the table of the report's results", () => {

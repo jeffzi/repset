@@ -1,0 +1,85 @@
+import type {
+  ChildError,
+  ChildPhase,
+  Measured,
+  MeasureRequest,
+  OnceRequest,
+} from "../src/child.js";
+import type {
+  findRuntime,
+  FoundRuntime,
+  Outcome,
+  StartOptions,
+  startChild,
+} from "../src/children.js";
+
+export type StartChild = typeof startChild;
+export type FindRuntime = typeof findRuntime;
+export type Runtime = FoundRuntime["runtime"];
+export type Asked = MeasureRequest | OnceRequest;
+
+/** The runtime the fake lookup finds for `runtime`. */
+export function found(runtime: Runtime): FoundRuntime {
+  return {
+    runtime,
+    executable: `/bin/${runtime}`,
+    version: runtime === "node" ? "24.1.0" : "1.3.2",
+  };
+}
+
+/** A runtime lookup that finds every runtime. */
+export const findAny: FindRuntime = async (runtime) => found(runtime);
+
+/** A measurement whose median is `median`. */
+export function measured(median: number): Measured {
+  return {
+    status: "ok",
+    stats: { min: 1, p25: 2, median, p75: 4, p99: 5, max: 6, mean: 3.5, sampleCount: 64 },
+    sampling: {
+      timerResolutionNs: 41.7,
+      callsPerSample: 2,
+      callsPerSampleFixed: false,
+      warmupSamples: 1000,
+      timingAttempts: 1,
+      timingMs: 1003.4,
+    },
+    checks: { ratioToEmptyBody: 120.5 },
+    gc: { count: 3, minor: 3, major: 0, totalMs: 0.41, maxMs: 0.17 },
+  };
+}
+
+/** An outcome in which the stop signal killed the child. */
+export const stopped: Outcome = { status: "stopped", output: "" };
+
+/** An outcome in which the child failed in `phase` with `message`, its cleanup teardown `teardownError`. */
+export function failedOutcome(
+  phase: ChildPhase,
+  message: string,
+  teardownError: ChildError["teardownError"] = null,
+): Outcome {
+  return { status: "failed", error: { phase, message, stack: null, teardownError }, output: "" };
+}
+
+/** The failure of a cleanup teardown that threw an `Error`, as the child encodes it. */
+export const MELON = { message: "melon", stack: "at teardown" } as const;
+
+/** A child starter that lists the one case `listCase` gives per file and answers the rest with `answer`. */
+export function starter(
+  listCase: (file: string) => { id: string; setupPerCall: boolean },
+  answer: (
+    request: Asked,
+    runtime: FoundRuntime,
+    options: StartOptions,
+  ) => Outcome | Promise<Outcome>,
+): StartChild {
+  return async (runtime, request, options) => {
+    if (request.mode === "list") {
+      return {
+        status: "ok",
+        result: { status: "ok", cases: [listCase(request.file)] },
+        output: "",
+      };
+    }
+    return answer(request, runtime, options);
+  };
+}

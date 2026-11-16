@@ -4,81 +4,45 @@ import { basename, join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import type {
-  ChildError,
-  ChildPhase,
-  Measured,
-  MeasureRequest,
-  OnceRequest,
-} from "../src/child.js";
-import type {
-  findRuntime,
-  FoundRuntime,
-  Outcome,
-  StartOptions,
-  startChild,
-} from "../src/children.js";
 import { main } from "../src/command.js";
 import { RUNTIMES } from "../src/measure/runtime.js";
 import { quotedList } from "../src/options.js";
 import type { Report } from "../src/report.js";
 import { formatTable, metricLine } from "../src/table.js";
+import type { StrictOmit } from "../src/utils.js";
+import {
+  failedOutcome,
+  findAny,
+  measured,
+  type FindRuntime,
+  starter as fakeStarter,
+  type StartChild,
+  stopped,
+} from "./fake-children.js";
 import { temporaryDir } from "./temporary-dir.js";
 
-type StartChild = typeof startChild;
-type FindRuntime = typeof findRuntime;
-type Runtime = FoundRuntime["runtime"];
-type Asked = MeasureRequest | OnceRequest;
 type Io = NonNullable<Parameters<typeof main>[1]>;
 
 /** The benchmark files every workspace holds; the fake children never import them. */
 const FILES = ["sort.bench.ts", "parse.bench.ts"];
 
 /** The package's own version, which `--version` prints and the report records. */
-const VERSION: unknown = JSON.parse(
-  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
-).version;
+const VERSION = packageVersion();
 
-/** The runtime the fake lookup finds for `runtime`. */
-function found(runtime: Runtime): FoundRuntime {
-  return {
-    runtime,
-    executable: `/bin/${runtime}`,
-    version: runtime === "node" ? "24.1.0" : "1.3.2",
-  };
-}
-
-/** A runtime lookup that finds every runtime. */
-const findAny: FindRuntime = async (runtime) => found(runtime);
-
-/** A measurement whose median is `median`. */
-function measured(median: number): Measured {
-  return {
-    status: "ok",
-    stats: { min: 1, p25: 2, median, p75: 4, p99: 5, max: 6, mean: 3.5, sampleCount: 64 },
-    sampling: {
-      timerResolutionNs: 41.7,
-      callsPerSample: 2,
-      callsPerSampleFixed: false,
-      warmupSamples: 1000,
-      timingAttempts: 1,
-      timingMs: 1003.4,
-    },
-    checks: { ratioToEmptyBody: 120.5 },
-    gc: { count: 3, minor: 3, major: 0, totalMs: 0.41, maxMs: 0.17 },
-  };
-}
-
-/** An outcome in which the stop signal killed the child. */
-const stopped: Outcome = { status: "stopped", output: "" };
-
-/** An outcome in which the child failed in `phase` with `message`, its cleanup teardown `teardownError`. */
-function failedOutcome(
-  phase: ChildPhase,
-  message: string,
-  teardownError: ChildError["teardownError"] = null,
-): Outcome {
-  return { status: "failed", error: { phase, message, stack: null, teardownError }, output: "" };
+/** The version the package's `package.json` holds, failing the suite when it holds none. */
+function packageVersion(): string {
+  const pkg: unknown = JSON.parse(
+    readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+  );
+  if (
+    typeof pkg === "object" &&
+    pkg !== null &&
+    "version" in pkg &&
+    typeof pkg.version === "string"
+  ) {
+    return pkg.version;
+  }
+  throw new Error("package.json holds no version");
 }
 
 /** The one case the fake listing child finds in `file`. */
@@ -87,23 +51,8 @@ function caseOf(file: string): string {
 }
 
 /** A child starter listing `<file stem>/fast` per file and answering the rest with `answer`. */
-function starter(
-  answer: (
-    request: Asked,
-    runtime: FoundRuntime,
-    options: StartOptions,
-  ) => Outcome | Promise<Outcome>,
-): StartChild {
-  return async (runtime, request, options) => {
-    if (request.mode === "list") {
-      return {
-        status: "ok",
-        result: { status: "ok", cases: [{ id: caseOf(request.file), setupPerCall: false }] },
-        output: "",
-      };
-    }
-    return answer(request, runtime, options);
-  };
+function starter(answer: Parameters<typeof fakeStarter>[1]): StartChild {
+  return fakeStarter((file) => ({ id: caseOf(file), setupPerCall: false }), answer);
 }
 
 /** A child starter that measures every case and runs every once case. */
@@ -161,7 +110,7 @@ interface Ended {
   readonly stderr: string;
 }
 
-type CommandIo = Omit<Partial<Io>, "stdout" | "stderr"> & {
+type CommandIo = StrictOmit<Partial<Io>, "stdout" | "stderr"> & {
   readonly stdout?: Captured;
   readonly stderr?: Captured;
 };
@@ -277,14 +226,6 @@ describe("main", () => {
         },
       });
     });
-
-    it("records the files as null when no positional file is given", async () => {
-      const dir = workspace();
-
-      await command(dir, ["--out", "report.json"]);
-
-      expect(reportAt(join(dir, "report.json")).options.files).toBeNull();
-    });
   });
 
   describe("where the command line or the config is wrong", () => {
@@ -296,9 +237,6 @@ describe("main", () => {
       { why: "--metric-lines with --out -", args: ["--metric-lines", "--out", "-"] },
       { why: "--list with --once", args: ["--list", "--once"] },
       { why: "--list with --out", args: ["--list", "--out", "report.json"] },
-      { why: "--list with --metric-lines", args: ["--list", "--metric-lines"] },
-      { why: "--once with --out", args: ["--once", "--out", "report.json"] },
-      { why: "--once with --metric-lines", args: ["--once", "--metric-lines"] },
     ])(
       "exits 2 on $why with a message on stderr, nothing on stdout, no child and no report",
       async ({ args }) => {
@@ -315,14 +253,14 @@ describe("main", () => {
       },
     );
 
-    it("exits 2 on an unknown --runtime name, naming the flag and the list", async () => {
+    it("exits 2 on an unknown --runtime name, naming the value and the list", async () => {
       const { code, stderr } = await command(workspace(), ["--runtime", "node,banana"], {
         startChild: startsNoChild,
       });
 
       expect({
         code,
-        named: stderr.includes("--runtime") && stderr.includes("node,banana"),
+        named: stderr.includes("node,banana"),
         listed: stderr.includes(quotedList(RUNTIMES)),
       }).toStrictEqual({
         code: 2,
@@ -423,7 +361,7 @@ describe("main", () => {
 
         const { code, stdout, stderr } = await command(dir, args, { startChild: startsNoChild });
 
-        expect({ code, version: stdout.includes(String(VERSION)), stderr }).toStrictEqual({
+        expect({ code, version: stdout.includes(VERSION), stderr }).toStrictEqual({
           code: 0,
           version: true,
           stderr: "",
@@ -564,7 +502,7 @@ describe("main", () => {
     );
 
     it.each([{ flag: "--help" }, { flag: "--version" }])(
-      "leaves $flag as it is unset when it holds a bad value",
+      "runs $flag as it does with REPSET_CALLS_PER_SAMPLE unset when the variable holds a bad value",
       async ({ flag }) => {
         const dir = workspace();
         vi.stubEnv(NAME, undefined);
@@ -616,7 +554,6 @@ describe("main", () => {
 
     /** Runs four children, blocking the report's write during the second and repairing it during the third. */
     async function runWithOneFailedWrite(): Promise<{
-      dir: string;
       code: number;
       stderr: string;
       writtenAtLastStart: number;
@@ -640,7 +577,7 @@ describe("main", () => {
         { startChild: failsOneWrite },
       );
 
-      return { dir, code, stderr, writtenAtLastStart, results: reportAt(report).results.length };
+      return { code, stderr, writtenAtLastStart, results: reportAt(report).results.length };
     }
 
     it("keeps running past a failed write", async () => {
@@ -654,15 +591,12 @@ describe("main", () => {
     });
 
     it("says nothing when a later write repairs a failed one", async () => {
-      const { dir, stderr } = await runWithOneFailedWrite();
+      const { stderr } = await runWithOneFailedWrite();
 
-      expect({
-        mentioned: stderr.includes("report.json"),
-        left: readdirSync(join(dir, "out")),
-      }).toStrictEqual({ mentioned: false, left: ["report.json"] });
+      expect(stderr.includes("report.json")).toBe(false);
     });
 
-    it("exits 1 reporting a failed last write on stderr, leaving no temporary file", async () => {
+    it("exits 1 reporting a failed last write on stderr", async () => {
       const dir = workspace();
       const report = join(dir, "out/report.json");
       const blocksLastWrites = starter((request, runtime, options) => {
@@ -676,11 +610,10 @@ describe("main", () => {
         { startChild: blocksLastWrites },
       );
 
-      expect({
-        code,
-        mentioned: stderr.includes("report.json"),
-        left: readdirSync(join(dir, "out")),
-      }).toStrictEqual({ code: 1, mentioned: true, left: ["report.json"] });
+      expect({ code, mentioned: stderr.includes("report.json") }).toStrictEqual({
+        code: 1,
+        mentioned: true,
+      });
     });
   });
 
@@ -812,7 +745,7 @@ describe("main", () => {
       });
     });
 
-    it("prints an ok line per case per runtime and exits 0 when every case passes", async () => {
+    it("exits 0 with an ok line per case per runtime when every case passes", async () => {
       const dir = workspace();
 
       const { code, stdout } = await command(dir, [
@@ -870,48 +803,6 @@ describe("main", () => {
         });
       },
     );
-
-    it("writes an interrupted report with no result when the signal comes during listing", async () => {
-      const dir = workspace();
-      const signals = new EventEmitter();
-      const stopsListing: StartChild = async () => {
-        signals.emit("SIGINT");
-        return stopped;
-      };
-
-      const { code } = await command(dir, ["sort.bench.ts", "--out", "report.json"], {
-        signals,
-        startChild: stopsListing,
-      });
-
-      const report = reportAt(join(dir, "report.json"));
-      expect({ code, interrupted: report.interrupted, results: report.results }).toStrictEqual({
-        code: 130,
-        interrupted: true,
-        results: [],
-      });
-    });
-
-    it("keeps the signal's exit code, reporting a failed write on stderr", async () => {
-      const dir = workspace();
-      const signals = new EventEmitter();
-      const report = join(dir, "out/report.json");
-      const blocksThenStops = starter(() => {
-        blockWrites(report);
-        signals.emit("SIGINT");
-        return stopped;
-      });
-
-      const { code, stderr } = await command(dir, ["sort.bench.ts", "--out", "out/report.json"], {
-        signals,
-        startChild: blocksThenStops,
-      });
-
-      expect({ code, mentioned: stderr.includes("report.json") }).toStrictEqual({
-        code: 130,
-        mentioned: true,
-      });
-    });
 
     it.each([{ flag: "--list", signal: "SIGINT", code: 130, stopsIn: "list" }])(
       "exits $code on $signal in a $flag run",

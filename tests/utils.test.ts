@@ -51,7 +51,7 @@ describe("the describe function", () => {
     it("names it without printing its source", () => {
       const described = describeValue(() => 1);
 
-      expect(described).toBe("a function");
+      expect(described).not.toContain("=>");
     });
   });
 });

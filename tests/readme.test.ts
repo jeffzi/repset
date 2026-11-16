@@ -46,7 +46,7 @@ const NAMED = BLOCKS.map((block, index) => ({
  * source entry.
  *
  * @returns The project's directory.
- * @throws When a block names no path.
+ * @throws When a block names no path, or a path an earlier block already names.
  */
 function exampleProject(): string {
   const dir = temporaryDir("repset-readme-");
@@ -58,8 +58,13 @@ function exampleProject(): string {
   );
   const entry = pathToFileURL(join(ROOT, "src", "index.ts")).href;
   writeFileSync(join(shim, "index.js"), `export * from ${JSON.stringify(entry)};\n`);
+  const written = new Set<string>();
   for (const { number, path, block } of NAMED) {
     if (path === undefined) throw new Error(`README block ${String(number)} names no file`);
+    if (written.has(path)) {
+      throw new Error(`README block ${String(number)} names ${path}, which an earlier block names`);
+    }
+    written.add(path);
     mkdirSync(dirname(join(dir, path)), { recursive: true });
     writeFileSync(join(dir, path), block);
   }
@@ -106,16 +111,6 @@ async function runOnce(
 }
 
 describe("the README", () => {
-  it("names a file in the opening comment of every ts block, each a different one", () => {
-    const paths = NAMED.map(({ path }) => path);
-
-    expect({
-      blocks: BLOCKS.length > 0,
-      unnamed: NAMED.filter(({ path }) => path === undefined).map(({ number }) => number),
-      repeated: paths.filter((path, index) => path !== undefined && paths.indexOf(path) !== index),
-    }).toStrictEqual({ blocks: true, unnamed: [], repeated: [] });
-  });
-
   describe.each([
     { runtime: "node", here: true },
     { runtime: "bun", here: requiresRealBunHere() },

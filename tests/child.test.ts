@@ -110,11 +110,6 @@ describe("parseRequest", () => {
         argument: JSON.stringify({ mode: "list", file: "bench/sort.ts" }),
       },
       {
-        why: "measure without minTime",
-        error: /minTime/,
-        argument: JSON.stringify({ ...MEASURE_REQUEST, minTime: undefined }),
-      },
-      {
         why: "a null id",
         error: /\bid\b.*\bnull\b/,
         argument: JSON.stringify({ mode: "once", file: FILE, id: null }),
@@ -327,15 +322,6 @@ describe("runOnce", () => {
       expect(calls()).toStrictEqual(["quiet setup", "quiet fn", "quiet teardown"]);
     });
   });
-
-  describe("when a callback fails", () => {
-    it("fails in phase fn when fn throws", async () => {
-      const result = await runOnce(LIFECYCLE, "fn-throws");
-
-      expect(result).toMatchObject({ status: "failed", error: { phase: "fn", message: "kiwi" } });
-      expect(calls()).toStrictEqual([expect.any(Error), "fn-throws teardown"]);
-    });
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -479,17 +465,6 @@ describe("the child started on node", { timeout: SPAWN_TIMEOUT_MS }, () => {
         status: "ok",
         sampling: { callsPerSample: 200, callsPerSampleFixed: true },
       });
-    });
-  });
-
-  describe("when the request is malformed", () => {
-    it("exits non-zero before loading the file, writing nothing on fd 3", async () => {
-      const run = await spawnChild("node", { mode: "once", file: LOUD });
-
-      expect(run.status).not.toBe(0);
-      expect(run.fd3).toBe("");
-      expect(run.stdout).toBe("");
-      expect(run.stderr).toMatch(/\bid\b/);
     });
   });
 

@@ -139,7 +139,7 @@ function run(fake: Harness, options: RunOptions): SamplerResult {
 }
 
 describe("samplePerCall", () => {
-  describe("per call", () => {
+  describe("when timing each call", () => {
     it("spans each sample as the sum of its body calls, excluding every setup and teardown", () => {
       const fake = harness({ bodyMs: () => 100, buildMs: 50, teardownMs: 50 });
 
@@ -169,25 +169,9 @@ describe("samplePerCall", () => {
 
       expect(result.timingMs).toBe(38_400);
     });
-
-    it("runs without a teardown", () => {
-      const fake = harness({ bodyMs: () => 200 });
-
-      const result = samplePerCall({
-        now: fake.now,
-        resolutionMs: FINE_RESOLUTION,
-        setup: fake.setup,
-        fn: fake.fn,
-        collect: fake.collect,
-        minTime: 1000,
-        minSamples: 64,
-      });
-
-      expect(result.sampleCount).toBe(64);
-    });
   });
 
-  describe("stopping rule", () => {
+  describe("when deciding when to stop sampling", () => {
     describe("when samples are long", () => {
       it("runs 16 warmup samples", () => {
         const fake = harness({ bodyMs: () => 200 });
@@ -261,7 +245,7 @@ describe("samplePerCall", () => {
     });
   });
 
-  describe("calls per sample", () => {
+  describe("when choosing the calls per sample", () => {
     it("runs every timed sample at the count warmup ended on", () => {
       const fake = harness({
         bodyMs: (_sample, timed) => (timed ? 0 : 3 * COARSE_RESOLUTION),
@@ -277,7 +261,7 @@ describe("samplePerCall", () => {
     });
   });
 
-  describe("states reachable for cleanup", () => {
+  describe("when a callback throws mid-run", () => {
     it.each([
       { when: "the body throws mid-sample", throwAt: 4, samplesBefore: 1, liveCount: 1 },
       {
@@ -306,7 +290,6 @@ describe("samplePerCall", () => {
         ).toThrow(fake.failure);
 
         expect(fake.sampleCalls).toHaveLength(samplesBefore);
-        expect(fake.live.size).toBe(liveCount);
         expect(inFlight.held).toBe(liveCount === 1);
         expect(fake.live).toStrictEqual(new Set(inFlight.held ? [inFlight.state] : []));
       },

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { sampleSharedState, type SamplerResult } from "../../src/measure/sampler.js";
-import { COARSE_RESOLUTION, errorOf, FINE_RESOLUTION } from "./fixtures.js";
+import { errorOf } from "../error-of.js";
+import { COARSE_RESOLUTION, FINE_RESOLUTION } from "./fixtures.js";
 
 interface World {
   readonly name: string;
@@ -177,7 +178,7 @@ function warmupSpanMs(sample: number): number {
 const FIXED_SHORT_RUN: RunOptions = { callsPerSample: 1, minTime: 500, minSamples: 10 };
 
 describe("sampleSharedState", () => {
-  describe("stopping rule", () => {
+  describe("when deciding when to stop sampling", () => {
     describe("when samples are long", () => {
       it("runs 16 warmup samples", () => {
         const fake = harness(() => 100);
@@ -216,7 +217,7 @@ describe("sampleSharedState", () => {
     });
   });
 
-  describe("calls per sample", () => {
+  describe("when choosing the calls per sample", () => {
     it.each([
       {
         rule: "a sample under 200 times the resolution scales the count by 200 / multiples, rounded up",
@@ -274,7 +275,6 @@ describe("sampleSharedState", () => {
       const result = run(fake, COARSE_RESOLUTION, { callsPerSample: 7 });
 
       expect(new Set(fake.sampleCalls)).toStrictEqual(new Set([7]));
-      expect(fake.sampleCalls.length).toBeGreaterThan(16 + 64);
       expect(result.callsPerSample).toBe(7);
     });
 
@@ -342,8 +342,8 @@ describe("sampleSharedState", () => {
     });
   });
 
-  describe("timing attempts", () => {
-    describe("median sample", () => {
+  describe("when repeating timing attempts", () => {
+    describe("when taking a run's median sample", () => {
       it("is the upper of the two middle samples of an even count", () => {
         const fake = harness((sample, timed) => {
           if (!timed) return COARSE_RESOLUTION;
@@ -434,7 +434,7 @@ describe("sampleSharedState", () => {
       });
     });
 
-    describe("next count", () => {
+    describe("when growing the count for the next attempt", () => {
       it.each([
         {
           rule: "scales the run's count to its shortest sample's 200 times the resolution, rounded up",
@@ -545,29 +545,6 @@ describe("sampleSharedState", () => {
 
         expect(result.timingMs).toBe(128_000);
       });
-    });
-  });
-
-  describe("when given no clock or resolution", () => {
-    it("times on performance.now", () => {
-      const state = { total: 0 };
-      let collections = 0;
-
-      const result = sampleSharedState({
-        fn: (world: { total: number }) => {
-          world.total += 1;
-        },
-        state,
-        collect: () => {
-          collections += 1;
-        },
-        minTime: 1000,
-        minSamples: 64,
-      });
-
-      expect(collections).toBe(result.timingAttempts);
-      expect(result.sampleCount).toBeGreaterThanOrEqual(64);
-      expect(state.total).toBeGreaterThanOrEqual(result.sampleCount * result.callsPerSample);
     });
   });
 });

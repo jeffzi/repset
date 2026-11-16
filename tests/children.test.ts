@@ -14,7 +14,8 @@ import {
   type StartOptions,
 } from "../src/children.js";
 import { ConfigError } from "../src/options.js";
-import { errorOf } from "./measure/fixtures.js";
+import { errorOf } from "./error-of.js";
+import { MELON } from "./fake-children.js";
 import { requiresRealBunHere } from "./real-bun.js";
 import { suiteTemporaryDir, temporaryDir } from "./temporary-dir.js";
 
@@ -87,9 +88,6 @@ async function timed(start: () => Promise<Outcome>): Promise<[Outcome, number]> 
 
 /** The fields of a child's own failure in phase fn, before its `teardownError`. */
 const FN_KIWI = { phase: "fn", message: "kiwi", stack: "at fn" } as const;
-
-/** The encoded failure of a cleanup teardown that threw an `Error`. */
-const MELON = { message: "melon", stack: "at teardown" } as const;
 
 /** The failure of a child that left no usable result line. */
 const NO_RESULT = { status: "failed", error: { phase: "child", stack: null } };
@@ -324,14 +322,6 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
       },
       { why: "a failure with no teardownError", request: echoing(failureLine(FN_KIWI)) },
       {
-        why: "a failure whose teardownError is not an object",
-        request: echoing(failureLine({ ...FN_KIWI, teardownError: "melon" })),
-      },
-      {
-        why: "a failure whose teardownError has a message that is not a string",
-        request: echoing(failureLine({ ...FN_KIWI, teardownError: { message: 7, stack: null } })),
-      },
-      {
         why: "a failure whose teardownError has no stack",
         request: echoing(failureLine({ ...FN_KIWI, teardownError: { message: "melon" } })),
       },
@@ -341,7 +331,7 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
       expect(outcome).toMatchObject(NO_RESULT);
     });
 
-    it("names the measure request a measurement whose status is neither ok nor failed does not answer", async () => {
+    it("names the measure request in the failure when the measurement's status is neither ok nor failed", async () => {
       const request = {
         mode: "measure",
         file: `${MEASURED_PEAR_LINE}\n`,

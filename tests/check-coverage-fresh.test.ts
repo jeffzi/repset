@@ -29,7 +29,7 @@ function writeFileWithMtime(path: string, content: string, mtime: number): void 
  * set last so writing a child does not bump it.
  *
  * @param files - Each file's relative path, mapped to its mtime in seconds.
- * @param coverageMtime - The coverage report's mtime in seconds, or `undefined` to write none.
+ * @param coverageMtime - The coverage report's mtime in seconds.
  * @param directories - Directories to create, each relative path mapped to its mtime in seconds;
  *   every other directory gets `OLDER`.
  * @returns The project's root directory.
@@ -37,7 +37,7 @@ function writeFileWithMtime(path: string, content: string, mtime: number): void 
  */
 function createProject(
   files: Record<string, number>,
-  coverageMtime?: number,
+  coverageMtime: number,
   directories: Record<string, number> = {},
 ): string {
   const dir = mkdtempSync(join(tmpdir(), "coverage-fresh-"));
@@ -48,9 +48,7 @@ function createProject(
   for (const path of Object.keys(directories)) {
     mkdirSync(join(dir, path), { recursive: true });
   }
-  if (coverageMtime !== undefined) {
-    writeFileWithMtime(join(dir, "coverage", "coverage-final.json"), "{}", coverageMtime);
-  }
+  writeFileWithMtime(join(dir, "coverage", "coverage-final.json"), "{}", coverageMtime);
   // Last, because writing a child bumps its directory's mtime.
   for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
     if (entry.isDirectory()) {

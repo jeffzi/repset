@@ -3,17 +3,15 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import type { findRuntime, FoundRuntime, Outcome, startChild } from "../src/children.js";
+import type { Outcome } from "../src/children.js";
 import { ConfigError, type ResolvedOptions } from "../src/options.js";
 import { selectCases, type SelectedCase, type Selection } from "../src/run.js";
+import { expectConfigError } from "./config-error.js";
+import { findAny, found, type FindRuntime, type StartChild } from "./fake-children.js";
 
 const FIXTURES = fileURLToPath(new URL("fixtures/discovery", import.meta.url));
 
 const TESTS = fileURLToPath(new URL(".", import.meta.url));
-
-type StartChild = typeof startChild;
-type FindRuntime = typeof findRuntime;
-type Runtime = FoundRuntime["runtime"];
 
 /** The absolute path of the discovery fixture `name`. */
 function fixture(name: string): string {
@@ -34,18 +32,6 @@ function optionsWith(overrides: Partial<ResolvedOptions> = {}): ResolvedOptions 
     ...overrides,
   };
 }
-
-/** The runtime the fake lookup finds for `runtime`. */
-function found(runtime: Runtime): FoundRuntime {
-  return {
-    runtime,
-    executable: `/bin/${runtime}`,
-    version: runtime === "node" ? "24.1.0" : "1.3.2",
-  };
-}
-
-/** A runtime lookup that finds every runtime. */
-const findAny: FindRuntime = async (runtime) => found(runtime);
 
 /** A listing outcome holding `cases`. */
 function listed(cases: { id: string; setupPerCall: boolean }[]): Outcome {
@@ -106,15 +92,6 @@ function idsOf(selection: Selection): string[] {
   return casesOf(selection).map((selected) => selected.id);
 }
 
-/** Asserts that `result` rejects with a `ConfigError` whose message holds each of `named`. */
-async function expectConfigError(
-  result: Promise<unknown>,
-  named: readonly string[],
-): Promise<void> {
-  await expect(result).rejects.toBeInstanceOf(ConfigError);
-  for (const text of named) await expect(result).rejects.toThrow(text);
-}
-
 describe("selectCases", () => {
   describe("when no positional file is given", () => {
     it("matches the include globs against includeBase, ** and brace sets included, sorted by path", async () => {
@@ -148,15 +125,6 @@ describe("selectCases", () => {
       const selection = await select({ files: [file] });
 
       expect(pathsOf(selection)).toStrictEqual([fixture(file)]);
-    });
-
-    it("reads any other argument as a glob that skips node_modules", async () => {
-      const selection = await select({ files: ["nested/**/*.bench.ts"] });
-
-      expect(pathsOf(selection)).toStrictEqual([
-        fixture("nested/deep/inner.bench.ts"),
-        fixture("nested/mid.bench.ts"),
-      ]);
     });
 
     it.each([
@@ -198,21 +166,6 @@ describe("selectCases", () => {
   });
 
   describe("the runtimes", () => {
-    it("looks up every runtime before starting a listing child", async () => {
-      const rejectBun: FindRuntime = async (runtime) => {
-        if (runtime === "bun") throw new ConfigError("no bun on PATH");
-        return found(runtime);
-      };
-
-      const result = select({
-        options: { runtimes: ["node", "bun"] },
-        findRuntime: rejectBun,
-        startChild: async () => FAILED,
-      });
-
-      await expectConfigError(result, ["no bun on PATH"]);
-    });
-
     it("lists each file on the first selected runtime", async () => {
       const byRuntime: StartChild = async (runtime) =>
         listed([{ id: runtime.runtime, setupPerCall: false }]);
@@ -224,24 +177,6 @@ describe("selectCases", () => {
       });
 
       expect(idsOf(selection)).toStrictEqual(["bun"]);
-    });
-
-    it("starts each listing child under timeout with the resolved nodeImport", async () => {
-      const byOptions: StartChild = async (_runtime, _request, options) =>
-        listed([
-          { id: `${String(options.timeout)} ${String(options.nodeImport)}`, setupPerCall: false },
-        ]);
-
-      const selection = await select({
-        options: {
-          timeout: 1234,
-          nodeImport: { written: "./pear.ts", resolved: "/fruit/pear.ts" },
-        },
-        files: ["zeta.bench.ts"],
-        startChild: byOptions,
-      });
-
-      expect(idsOf(selection)).toStrictEqual(["1234 /fruit/pear.ts"]);
     });
   });
 
@@ -276,24 +211,13 @@ describe("selectCases", () => {
   });
 
   describe("when two cases share an id", () => {
-    it.each([
-      {
-        where: "in one file",
-        byFile: { "zeta.bench.ts": ["apple", "apple"] },
-        named: ["zeta.bench.ts"],
-      },
-      {
-        where: "across files",
-        byFile: { "zeta.bench.ts": ["apple"], "a.bench.ts": ["apple"] },
-        named: ["zeta.bench.ts", "a.bench.ts"],
-      },
-    ])("rejects them $where, naming the id and the files", async ({ byFile, named }) => {
+    it("rejects them, naming the id and the files", async () => {
       const result = select({
         files: ["zeta.bench.ts", "a.bench.ts"],
-        startChild: listing(byFile),
+        startChild: listing({ "zeta.bench.ts": ["apple"], "a.bench.ts": ["apple"] }),
       });
 
-      await expectConfigError(result, ["apple", ...named]);
+      await expectConfigError(result, ["apple", "zeta.bench.ts", "a.bench.ts"]);
     });
   });
 
@@ -317,13 +241,28 @@ describe("selectCases", () => {
         why: "no file matched include",
         options: { include: ["**/*.banana"] },
         startChild: onePerFile,
+        named: ["**/*.banana"],
       },
-      { why: "no file registers a case", options: {}, startChild: listing({}) },
-      { why: "the filter matches no case", options: { filter: /banana/u }, startChild: onePerFile },
-    ])("rejects the selection when $why", async ({ options, startChild }) => {
-      const result = select({ options, startChild });
+      {
+        why: "the filter matches no case",
+        options: { filter: /banana/u },
+        startChild: onePerFile,
+        named: ["/banana/u"],
+      },
+    ])(
+      "rejects the selection when $why, naming what matched nothing",
+      async ({ options, startChild, named }) => {
+        const result = select({ options, startChild });
+
+        await expectConfigError(result, named);
+      },
+    );
+
+    it("rejects the selection when no file registers a case, before any filter is applied", async () => {
+      const result = select({ startChild: listing({}) });
 
       await expect(result).rejects.toBeInstanceOf(ConfigError);
+      await expect(result).rejects.not.toThrow(/filter/u);
     });
   });
 

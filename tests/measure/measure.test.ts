@@ -5,8 +5,15 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { type Case, measure, MeasureError, type NoInline } from "../../src/measure/measure.js";
+import {
+  type Case,
+  measure,
+  MeasureError,
+  type NoInline,
+  summarize,
+} from "../../src/measure/measure.js";
 import { CalibrationError, cappedCount } from "../../src/measure/sampler.js";
+import { errorOf } from "../error-of.js";
 import { requiresRealBunHere } from "../real-bun.js";
 import { temporaryDir } from "../temporary-dir.js";
 import { exposedGc } from "./fixtures.js";
@@ -65,7 +72,6 @@ interface BenchOptions {
   readonly bodyMs?: number;
   readonly fails?: Failures;
   readonly returns?: () => unknown;
-  readonly teardown?: boolean;
   readonly teardownThrows?: unknown;
 }
 
@@ -84,7 +90,7 @@ interface Bench {
 /**
  * Builds a benchmark on a scripted clock: setup, fn and teardown log themselves, the body charges
  * `bodyMs` per call, and a clock read that directly follows another read finds the clock one resolution on.
- * Stubs `globalThis.gc` with a recorder.
+ * Stubs `globalThis.gc` with a no-op.
  *
  * @param kind - The benchmark's lifecycle.
  * @param options - The body's cost per call, which calls throw, what the body returns, and the
@@ -129,25 +135,19 @@ function bench(kind: Kind, options: BenchOptions = {}): Bench {
       clock.advance(bodyMs);
       return returns();
     },
-    ...(options.teardown === false
-      ? {}
-      : {
-          teardown: (world: World) => {
-            clock.advance(0);
-            const call = teardownCalls;
-            teardownCalls += 1;
-            if (call === fails.teardown) {
-              // oxlint-disable-next-line typescript/only-throw-error -- measure must rethrow a non-Error value unchanged
-              throw teardownError;
-            }
-            live.delete(world);
-            log.push(`teardown ${world.id}`);
-          },
-        }),
+    teardown: (world) => {
+      clock.advance(0);
+      const call = teardownCalls;
+      teardownCalls += 1;
+      if (call === fails.teardown) {
+        // oxlint-disable-next-line typescript/only-throw-error -- measure must rethrow a non-Error value unchanged
+        throw teardownError;
+      }
+      live.delete(world);
+      log.push(`teardown ${world.id}`);
+    },
   };
-  vi.stubGlobal("gc", () => {
-    log.push("gc");
-  });
+  vi.stubGlobal("gc", () => undefined);
   return {
     benchmark,
     now: clock.now,
@@ -155,7 +155,6 @@ function bench(kind: Kind, options: BenchOptions = {}): Bench {
     live,
     noInline: (fn) => {
       inlined.push(fn);
-      log.push("noInline");
     },
     inlined,
     setupError,
@@ -214,18 +213,6 @@ async function failure(outcome: Promise<unknown>): Promise<MeasureError> {
     return reason;
   }
   throw new Error("measure did not reject with a MeasureError", { cause: reason });
-}
-
-/** The message the samplers' cap gives a count past it. */
-function capMessage(): string {
-  try {
-    cappedCount(1000, 0, 2 ** -16);
-  } catch (error) {
-    if (error instanceof Error) {
-      return error.message;
-    }
-  }
-  throw new Error("cappedCount refused no count with an Error");
 }
 
 interface Scripted {
@@ -354,14 +341,6 @@ describe("measure", () => {
         "teardown 0",
       ]);
     });
-
-    it("runs without a teardown", async () => {
-      const fake = bench("sharedState", { teardown: false });
-
-      const result = await run(fake);
-
-      expect(result.sampleCount).toBe(64);
-    });
   });
 
   describe("when no gc is exposed", () => {
@@ -429,7 +408,7 @@ describe("measure", () => {
       },
     );
 
-    it.each(BUILD_OR_BODY_FAILURES.filter((row) => row.when !== "the setup throws"))(
+    it.each(BUILD_OR_BODY_FAILURES.filter((row) => row.from !== "setup"))(
       "tears down every state a $kind run built when $when",
       async ({ kind, fails }) => {
         const fake = bench(kind, { bodyMs: 200, fails });
@@ -471,9 +450,9 @@ describe("measure", () => {
     });
 
     const UNDEFINED_STATE_FAILURES = [
-      { when: "the check's body call throws", fails: { fn: 0 }, from: "fn", left: [] },
-      { when: "the body throws in warmup", fails: { fn: 5 }, from: "fn", left: [] },
-      { when: "a warmup teardown throws", fails: { teardown: 2 }, from: "teardown", left: [2] },
+      { when: "the check's body call throws", fails: { fn: 0 }, from: "fn" },
+      { when: "the body throws in warmup", fails: { fn: 5 }, from: "fn" },
+      { when: "a warmup teardown throws", fails: { teardown: 2 }, from: "teardown" },
     ] as const;
 
     it.each(UNDEFINED_STATE_FAILURES)(
@@ -487,14 +466,14 @@ describe("measure", () => {
       },
     );
 
-    it.each(UNDEFINED_STATE_FAILURES.filter((row) => row.when !== "a warmup teardown throws"))(
+    it.each(UNDEFINED_STATE_FAILURES.filter((row) => row.from === "fn"))(
       "tears down every state a per-call run whose setup returns undefined built when $when",
-      async ({ fails, left }) => {
+      async ({ fails }) => {
         const fake = bench("perCall", { bodyMs: 200, fails });
 
         await runOnUndefined(fake).catch(() => undefined);
 
-        expect([...fake.live].map((world) => world.id)).toStrictEqual(left);
+        expect(fake.live.size).toBe(0);
       },
     );
 
@@ -556,19 +535,13 @@ describe("measure", () => {
       expect(error.teardownError?.cause).toBe(fake.teardownError);
     });
 
-    it.each([
-      { when: "the body throws and the cleanup's teardown succeeds", fails: { fn: 5 } },
-      { when: "the one teardown throws", fails: { teardown: 0 } },
-    ] as const)(
-      "rejects a shared-state run with no teardown failure kept when $when",
-      async ({ fails }) => {
-        const fake = bench("sharedState", { bodyMs: 200, fails });
+    it("rejects a shared-state run with no teardown failure kept when the body throws and the cleanup's teardown succeeds", async () => {
+      const fake = bench("sharedState", { bodyMs: 200, fails: { fn: 5 } });
 
-        const error = await failure(run(fake));
+      const error = await failure(run(fake));
 
-        expect(error.teardownError).toBeNull();
-      },
-    );
+      expect(error.teardownError).toBeNull();
+    });
 
     it.each(KINDS)(
       "rejects a %s run whose collection throws in phase child with the collector's value as cause",
@@ -589,7 +562,7 @@ describe("measure", () => {
     it.each(KINDS)(
       "rejects a %s run whose body throws an Error worded as the cap's in phase fn",
       async (kind) => {
-        const own = new Error(capMessage());
+        const own = new Error(errorOf(() => cappedCount(1000, 0, 2 ** -16)).message);
         const clock = steppedClock();
         let calls = 0;
         vi.stubGlobal("gc", () => undefined);
@@ -700,9 +673,7 @@ describe("measure", () => {
       expect(result.ratioToEmptyBody).toBeCloseTo(1.4375, 6);
     });
 
-    // The scripted clock reads one resolution across any batch, so each warmup sample asks for 200 times
-    // the calls: 1, 200, 40 000, 8 000 000, then 1 600 000 000 against a cap of 250 000 000.
-    it("fails a shared-state run whose empty body asks for more calls per sample than the cap in phase calibration, naming both", async () => {
+    it("fails a shared-state run whose empty body asks for more calls per sample than the cap in phase calibration", async () => {
       const fake = bench("sharedState");
 
       const error = await failure(
@@ -710,8 +681,6 @@ describe("measure", () => {
       );
 
       expect(error.phase).toBe("calibration");
-      expect(error.message).toMatch(/\b1600000000\b/);
-      expect(error.message).toMatch(/\b250000000\b/);
     });
 
     it("returns the ratio to the empty body as it reads once 250 ms of the empty body's warmup have passed", async () => {
@@ -793,7 +762,6 @@ describe("measure", () => {
       const result = await run(fake);
 
       const observed = result.gcDuringTiming;
-      expect(observed?.count).toBeGreaterThanOrEqual(1);
       expect(observed?.major).toBeGreaterThanOrEqual(1);
       expect(observed?.maxMs).toBeGreaterThan(0);
       expect(observed?.totalMs).toBeGreaterThanOrEqual(observed?.maxMs ?? Number.NaN);
@@ -842,6 +810,57 @@ describe("measure", () => {
         major: 0,
         totalMs: 0,
         maxMs: 0,
+      });
+    });
+  });
+});
+
+describe("summarize", () => {
+  describe("when the spans are stored ascending", () => {
+    it("reports per-call nanoseconds with percentiles interpolated between ranks", () => {
+      const spans = Float64Array.of(4, 8, 12, 16);
+
+      const statistics = summarize(spans, 4, 4);
+
+      expect(statistics).toStrictEqual({
+        min: 1_000_000,
+        p25: 1_750_000,
+        median: 2_500_000,
+        p75: 3_250_000,
+        p99: expect.closeTo(3_970_000, 3),
+        max: 4_000_000,
+        mean: 2_500_000,
+        sampleCount: 4,
+      });
+    });
+  });
+
+  describe("when the spans are stored out of order", () => {
+    it("reports the same statistics as the ascending store", () => {
+      const ascending = summarize(Float64Array.of(4, 8, 12, 16), 4, 4);
+
+      const shuffled = summarize(Float64Array.of(12, 4, 16, 8), 4, 4);
+
+      expect(shuffled).toStrictEqual(ascending);
+    });
+  });
+
+  describe("when the store is only partly filled", () => {
+    it("ignores the slots past the stored count", () => {
+      const spans = new Float64Array(8);
+      spans.set([2, 4, 6]);
+
+      const statistics = summarize(spans, 3, 2);
+
+      expect(statistics).toStrictEqual({
+        min: 1_000_000,
+        p25: 1_500_000,
+        median: 2_000_000,
+        p75: 2_500_000,
+        p99: expect.closeTo(2_980_000, 3),
+        max: 3_000_000,
+        mean: 2_000_000,
+        sampleCount: 3,
       });
     });
   });

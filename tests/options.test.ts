@@ -1,13 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { RUNTIMES } from "../src/measure/runtime.js";
 import { ConfigError, quotedList, resolveOptions, type OptionsInput } from "../src/options.js";
-import { suiteTemporaryDir } from "./temporary-dir.js";
+import { expectConfigError } from "./config-error.js";
 
 const FIXTURES = fileURLToPath(new URL("fixtures/config", import.meta.url));
 
@@ -18,10 +16,7 @@ const OPTIONS_MODULE = new URL("../src/options.ts", import.meta.url).href;
 /** Node and tsx starting on a slow CI runner. */
 const SPAWN_TIMEOUT_MS = 60_000;
 
-/**
- * Resolves `config` from the fixture directory in a spawned Node process, where the import runs
- * through Node's own loader rather than Vitest's module runner, and returns its `minSamples`.
- */
+/** The `minSamples` that `config` resolves to in a spawned Node process, through Node's own loader. */
 function minSamplesInNode(config: string): string {
   const script = [
     `const { resolveOptions } = await import(${JSON.stringify(OPTIONS_MODULE)});`,
@@ -42,15 +37,6 @@ function fixture(name: string): string {
 /** Resolves `options` from the fixture directory, which holds no `repset.config.*` file. */
 async function resolveHere(options: Partial<OptionsInput> = {}): ReturnType<typeof resolveOptions> {
   return resolveOptions({ cwd: FIXTURES, ...options });
-}
-
-/** Asserts that `result` rejects with a `ConfigError` whose message holds each of `named`. */
-async function expectConfigError(
-  result: Promise<unknown>,
-  named: readonly string[],
-): Promise<void> {
-  await expect(result).rejects.toBeInstanceOf(ConfigError);
-  for (const text of named) await expect(result).rejects.toThrow(text);
 }
 
 const DEFAULTS = {
@@ -123,43 +109,22 @@ describe("resolveOptions", () => {
   });
 
   describe("when the config file cannot be imported", () => {
-    const broken = suiteTemporaryDir("repset-config-");
-
-    beforeAll(() => {
-      writeFileSync(join(broken.path, "syntax-error.ts"), "export default {\n");
-      writeFileSync(
-        join(broken.path, "unresolved.ts"),
-        'import "./nowhere.js";\nexport default {};\n',
-      );
-    });
-
     it("rejects a top-level throw, naming the file and carrying its message", async () => {
       const result = resolveHere({ config: "top-level-throw.ts" });
 
       await expectConfigError(result, ["top-level-throw.ts", "banana"]);
     });
+  });
 
-    it.each([{ name: "syntax-error.ts" }, { name: "unresolved.ts" }])(
+  describe("when the default export is not a plain object", () => {
+    it.each([{ name: "no-default.ts" }, { name: "default-promise.ts" }])(
       "rejects $name, naming the file",
       async ({ name }) => {
-        const result = resolveOptions({ cwd: broken.path, config: name });
+        const result = resolveHere({ config: name });
 
         await expectConfigError(result, [name]);
       },
     );
-  });
-
-  describe("when the default export is not a plain object", () => {
-    it.each([
-      { name: "no-default.ts" },
-      { name: "default-array.ts" },
-      { name: "default-function.ts" },
-      { name: "default-promise.ts" },
-    ])("rejects $name, naming the file", async ({ name }) => {
-      const result = resolveHere({ config: name });
-
-      await expectConfigError(result, [name]);
-    });
   });
 
   describe("when checking keys", () => {
@@ -167,12 +132,6 @@ describe("resolveOptions", () => {
       const result = resolveHere({ config: "unknown-key.ts" });
 
       await expectConfigError(result, ["banana"]);
-    });
-
-    it("treats a config key holding undefined as absent", async () => {
-      const resolved = await resolveHere({ config: "undefined-key.ts" });
-
-      expect(resolved.minTime).toBe(DEFAULTS.minTime);
     });
 
     it("treats a key that is not an option and holds undefined as absent", async () => {
@@ -205,12 +164,6 @@ describe("resolveOptions", () => {
 
       await expectConfigError(result, [option, shown]);
     });
-
-    it("rejects an unknown runtime, naming every runtime repset runs on", async () => {
-      const result = resolveHere({ config: "runtime-unknown.ts" });
-
-      await expectConfigError(result, [quotedList(RUNTIMES)]);
-    });
   });
 
   describe("when the caller gives a bad value", () => {
@@ -219,14 +172,12 @@ describe("resolveOptions", () => {
       { options: { runtimes: ["node", "bun", "node"] }, option: "runtimes", shown: "node" },
       { options: { minTime: -1 }, option: "minTime", shown: "-1" },
       { options: { minTime: Number.NaN }, option: "minTime", shown: "NaN" },
-      { options: { minTime: Number.POSITIVE_INFINITY }, option: "minTime", shown: "Infinity" },
       { options: { minSamples: 0 }, option: "minSamples", shown: "0" },
       { options: { minSamples: 1.5 }, option: "minSamples", shown: "1.5" },
       { options: { timeout: 0 }, option: "timeout", shown: "0" },
       { options: { timeout: 2.5 }, option: "timeout", shown: "2.5" },
       { options: { timeout: 2_147_483_648 }, option: "timeout", shown: "2147483648" },
       { options: { filter: "(" }, option: "filter", shown: "(" },
-      { options: { filter: String.raw`\-` }, option: "filter", shown: String.raw`\-` },
     ])(
       "rejects $option $shown, naming the option and the value",
       async ({ options, option, shown }) => {

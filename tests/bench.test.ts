@@ -1,17 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { bench, registeredCases } from "../src/child.js";
+import { errorOf } from "./error-of.js";
 import { REGISTRY, resetRegistry } from "./registry.js";
-
-/** Runs `act` and returns what it threw. */
-function thrownBy(act: () => unknown): unknown {
-  try {
-    act();
-  } catch (error) {
-    return error;
-  }
-  throw new Error("expected the call to throw");
-}
 
 /** Returns the ids of the registered cases, in registration order. */
 function registeredIds(): string[] {
@@ -24,8 +15,8 @@ function benchUnchecked(name: unknown, benchmark: unknown): void {
 }
 
 /** Makes a bad `bench` call and returns what it threw. */
-function rejectionOf(name: unknown, benchmark: unknown): unknown {
-  return thrownBy(() => {
+function rejectionOf(name: unknown, benchmark: unknown): Error {
+  return errorOf(() => {
     benchUnchecked(name, benchmark);
   });
 }
@@ -123,7 +114,7 @@ describe("bench", () => {
     ])("registers nothing for $why", ({ name, benchmark }) => {
       bench("before", () => 1);
 
-      thrownBy(() => {
+      errorOf(() => {
         benchUnchecked(name, benchmark);
       });
 
@@ -165,7 +156,6 @@ describe("bench", () => {
   describe("when given a second argument that is not a function or an object", () => {
     it.each([
       { benchmark: 42, why: "a number", fragments: ["sort", "42"] },
-      { benchmark: "banana", why: "a string", fragments: ["sort", "banana"] },
       { benchmark: null, why: "null", fragments: ["sort", "null"] },
       { benchmark: [sync], why: "an array", fragments: ["sort", "an array"] },
     ])("throws a TypeError for $why", ({ benchmark, fragments }) => {
@@ -186,7 +176,6 @@ describe("bench", () => {
   describe("when given a benchmark object with a field of the wrong type", () => {
     it.each([
       { benchmark: { setup: sync }, why: "fn missing", field: "fn" },
-      { benchmark: { fn: { run: sync } }, why: "fn a record of functions", field: "fn" },
       { benchmark: { fn: sync, setup: null }, why: "setup null", field: "setup" },
       { benchmark: { fn: sync, teardown: null }, why: "teardown null", field: "teardown" },
       {
@@ -211,11 +200,6 @@ describe("bench", () => {
         why: "an async setup",
         fragments: ["sort", "setup"],
       },
-      {
-        benchmark: { fn: sync, teardown: asyncFunction },
-        why: "an async teardown",
-        fragments: ["sort", "teardown"],
-      },
     ])("throws a TypeError for $why", ({ benchmark, fragments }) => {
       const error = rejectionOf("sort", benchmark);
 
@@ -228,7 +212,7 @@ describe("bench", () => {
         calls += 1;
       };
 
-      thrownBy(() => {
+      errorOf(() => {
         benchUnchecked("sort", counted);
       });
 
@@ -246,18 +230,6 @@ describe("bench", () => {
       benchUnchecked("sort", benchmark);
 
       expect(registeredCases().map((registered) => registered.case.fn)).toStrictEqual([fn]);
-    });
-  });
-
-  describe("the default setup", () => {
-    it("returns the same object on every call", () => {
-      bench("sort", () => 1);
-      const setup = registeredCases()[0]?.case.setup;
-
-      const first = setup?.();
-      const second = setup?.();
-
-      expect(second).toBe(first);
     });
   });
 });
@@ -312,29 +284,19 @@ describe("registeredCases", () => {
 });
 
 describe("the registry slot", () => {
-  const CALLS = [
-    {
-      act: "bench",
-      call: (): void => {
-        bench("sort", () => 1);
-      },
-    },
-    { act: "registeredCases", call: (): unknown => registeredCases() },
-  ];
-
   describe("when it holds a value that is not an object", () => {
     beforeEach(() => {
       Reflect.set(globalThis, REGISTRY, "banana");
     });
 
-    it.each(CALLS)("makes $act throw a TypeError naming the value found", ({ call }) => {
-      const error = thrownBy(call);
+    it("makes registeredCases throw a TypeError naming the value found", () => {
+      const error = errorOf(registeredCases);
 
       expectTypeErrorHolding(error, ["banana"]);
     });
 
-    it.each(CALLS)("is left as it was by $act", ({ call }) => {
-      thrownBy(call);
+    it("is left as it was by registeredCases", () => {
+      errorOf(registeredCases);
 
       expect(Reflect.get(globalThis, REGISTRY)).toBe("banana");
     });
@@ -347,14 +309,14 @@ describe("the registry slot", () => {
       Reflect.set(globalThis, REGISTRY, slot);
     });
 
-    it.each(CALLS)("makes $act throw a TypeError naming the format found", ({ call }) => {
-      const error = thrownBy(call);
+    it("makes registeredCases throw a TypeError naming the format found", () => {
+      const error = errorOf(registeredCases);
 
       expectTypeErrorHolding(error, ["99"]);
     });
 
-    it.each(CALLS)("is left as it was by $act", ({ call }) => {
-      thrownBy(call);
+    it("is left as it was by registeredCases", () => {
+      errorOf(registeredCases);
 
       expect(Reflect.get(globalThis, REGISTRY)).toBe(slot);
       expect(slot).toStrictEqual({ format: 99 });

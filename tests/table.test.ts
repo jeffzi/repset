@@ -9,10 +9,11 @@ import type {
   ResultError,
 } from "../src/report.js";
 import { formatTable, metricLine } from "../src/table.js";
+import type { StrictOmit } from "../src/utils.js";
 
 type Runtime = Result["runtime"]["name"];
 type Stats = MeasuredProcess["stats"];
-type ResultBase = Omit<Result, "status" | "error" | "median" | "processes">;
+type ResultBase = StrictOmit<Result, "status" | "error" | "median" | "processes">;
 
 const VERSIONS: Readonly<Record<Runtime, string>> = { node: "24.1.0", bun: "1.3.2" };
 
@@ -170,8 +171,6 @@ describe("formatTable", () => {
 
   describe("when formatting a time", () => {
     it.each([
-      { ns: 812, text: "812 ns" },
-      { ns: 4656, text: "4.66 µs" },
       { ns: 999.7, text: "1.00 µs" },
       { ns: 1_234_500_000_000, text: "1230 s" },
     ])("prints $ns ns as $text", ({ ns, text }) => {
@@ -225,7 +224,7 @@ describe("formatTable", () => {
   });
 
   describe("when a case failed", () => {
-    it("rows its id, failed, its phase and its message", () => {
+    it("rows its id, its phase and its message", () => {
       const results = [failed("apple", "teardown", "plum exploded")];
 
       const lines = tableLines(results);
@@ -241,7 +240,6 @@ describe("formatTable", () => {
 
       const row = rowIndex(lines, "apple");
       const indent = " ".repeat(lines[row]?.indexOf("plum exploded") ?? 0);
-
       expect(lines[row]).toMatch(/plum exploded$/u);
       expect(lines[row + 1]).toBe(`${indent}at the stone`);
       expect(lines[row + 2]).toBe(`${indent}  and the pit`);

@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -9,32 +8,8 @@ import { beforeAll, describe, expect, it } from "vitest";
 import type { Report } from "../src/report.js";
 import { formatTable } from "../src/table.js";
 import { requiresRealBunHere } from "./real-bun.js";
+import { reportAt } from "./report-file.js";
 import { suiteTemporaryDir, temporaryDir } from "./temporary-dir.js";
-
-/** Whether `value` is a schema-1 report document, checked on the keys the tests read. */
-function isReport(value: unknown): value is Report {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "schema" in value &&
-    value.schema === 1 &&
-    "results" in value &&
-    Array.isArray(value.results)
-  );
-}
-
-/**
- * The report the file at `path` holds.
- *
- * @param path - The file the command wrote with `--out`.
- * @returns The parsed report.
- * @throws When the file is not JSON, or holds no schema-1 report.
- */
-function reportAt(path: string): Report {
-  const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
-  if (!isReport(parsed)) throw new Error(`${path} does not hold a schema-1 report`);
-  return parsed;
-}
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 

@@ -2,16 +2,19 @@ import { readFileSync } from "node:fs";
 
 import type { Report } from "../src/report.js";
 
+/** Whether `value` is a non-null object. */
+function isObject(value: unknown): value is object {
+  return typeof value === "object" && value !== null;
+}
+
 /** Whether `value` is a schema-1 report document, checked on the keys the tests read. */
 function isReport(value: unknown): value is Report {
   return (
-    typeof value === "object" &&
-    value !== null &&
+    isObject(value) &&
     "schema" in value &&
     value.schema === 1 &&
     "options" in value &&
-    typeof value.options === "object" &&
-    value.options !== null &&
+    isObject(value.options) &&
     "results" in value &&
     Array.isArray(value.results) &&
     "interrupted" in value &&

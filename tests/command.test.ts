@@ -19,6 +19,7 @@ import {
   type StartChild,
   stopped,
 } from "./fake-children.js";
+import { parseReport, reportAt } from "./report-file.js";
 import { temporaryDir } from "./temporary-dir.js";
 
 type Io = NonNullable<Parameters<typeof main>[1]>;
@@ -131,33 +132,6 @@ async function command(cwd: string, args: readonly string[], io: CommandIo = {})
   });
 
   return { code, stdout: stdout.text, stderr: stderr.text };
-}
-
-/** Whether `value` has the report fields the tests read. */
-function isReport(value: unknown): value is Report {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "options" in value &&
-    typeof value.options === "object" &&
-    value.options !== null &&
-    "results" in value &&
-    Array.isArray(value.results) &&
-    "interrupted" in value &&
-    typeof value.interrupted === "boolean"
-  );
-}
-
-/** The report `text` holds, which `source` names in the error thrown when it holds none. */
-function parseReport(text: string, source: string): Report {
-  const parsed: unknown = JSON.parse(text);
-  if (!isReport(parsed)) throw new Error(`${source} does not hold a report`);
-  return parsed;
-}
-
-/** The report the file at `path` holds, which the error thrown names when it holds none. */
-function reportAt(path: string): Report {
-  return parseReport(readFileSync(path, "utf8"), path);
 }
 
 /** Puts a non-empty directory at `path`, so renaming a file over it fails. */

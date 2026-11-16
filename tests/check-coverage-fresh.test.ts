@@ -55,4 +55,38 @@ describe("checkCoverageFresh", () => {
       }).not.toThrow();
     });
   });
+
+  describe("when a non-TypeScript file under tests/ is newer than the report", () => {
+    it.each(["tests/fixtures/worker.mts", "tests/fixtures/plugin.js", "tests/fixtures/data.json"])(
+      "throws naming %s",
+      (path) => {
+        const dir = createProject(
+          { "src/query.ts": OLDER, [path]: COVERAGE_MTIME + 1, "vitest.config.ts": OLDER },
+          COVERAGE_MTIME,
+        );
+
+        expect(() => {
+          checkCoverageFresh(dir);
+        }).toThrow(path);
+      },
+    );
+  });
+
+  describe("when only a non-source file under src/ is newer than the report", () => {
+    it.each(["src/types.d.ts", "src/data.json"])("returns without throwing for %s", (path) => {
+      const dir = createProject(
+        {
+          "src/query.ts": OLDER,
+          [path]: COVERAGE_MTIME + 1,
+          "tests/query.test.ts": OLDER,
+          "vitest.config.ts": OLDER,
+        },
+        COVERAGE_MTIME,
+      );
+
+      expect(() => {
+        checkCoverageFresh(dir);
+      }).not.toThrow();
+    });
+  });
 });

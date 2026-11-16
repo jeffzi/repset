@@ -56,7 +56,7 @@ tasks:
       - "{{.MISE}} npx fallow fix --yes --no-create-config"
 
   overhead-check:
-    desc: Build, then compare repset's timings with a hand-written loop; run alone, before a release
+    desc: Build, then compare repset's timings with a baseline loop; run alone, before a release
     deps: [_deps]
     cmds:
       - task: build

@@ -1,15 +1,15 @@
-// The overhead check's control: one body timed in a hand-written loop, nothing around the body
-// call but the loop and the clock reads. It runs at the calls per sample and sample count
-// repset's child reported, and prints `{"median": <ns per call>}` on stdout.
+// The overhead check's baseline: one body timed in a bare loop, nothing around the body call but
+// the loop and the clock reads. It runs at the calls per sample and sample count repset's child
+// reported, and prints `{"median": <ns per call>}` on stdout.
 //
-//   <node --import tsx | bun> --expose-gc plain-child.ts <body> <calls per sample> <samples>
+//   <node --import tsx | bun> --expose-gc baseline-child.ts <body> <calls per sample> <samples>
 import {
   BODIES,
   BODY_NAMES,
   type BodyName,
-  buildPoints,
-  type Points,
+  buildState,
   positionSum,
+  type State,
 } from "./bodies.js";
 
 declare global {
@@ -68,15 +68,15 @@ function timeAt(sorted: Float64Array, rank: number): number {
  * collects once, then times `samples` batches.
  *
  * The loops live in a function: top-level loops run several times slower on Node. Both stay
- * inline here, since this function is the control: a helper around the inner loop changes the code
+ * inline here, since this function is the baseline: a helper around the inner loop changes the code
  * the body call runs inside.
  *
  * @param state - The points the body moves.
  * @param gc - The engine's exposed collector.
  * @returns Each timed batch's per-call time in nanoseconds, ascending.
  */
-// fallow-ignore-next-line complexity -- the control's loops stay inline; see the doc comment
-function run(state: Points, gc: NodeJS.GCFunction): Float64Array {
+// fallow-ignore-next-line complexity -- the baseline's loops stay inline; see the doc comment
+function run(state: State, gc: NodeJS.GCFunction): Float64Array {
   const warmEnd = performance.now() + WARMUP_MS;
   let warmed = 0;
   while (warmed < WARMUP_MIN_BATCHES || performance.now() < warmEnd) {
@@ -93,7 +93,7 @@ function run(state: Points, gc: NodeJS.GCFunction): Float64Array {
   return perCall.toSorted();
 }
 
-const state = buildPoints();
+const state = buildState();
 const perCall = run(state, collect);
 globalThis.benchSink = positionSum(state);
 const rank = (samples - 1) * MEDIAN_QUANTILE;

@@ -3,7 +3,7 @@
   "entry": ["src/index.ts", "src/child.ts", "src/cli.ts"],
   "supportEntry": [
     "scripts/*.ts",
-    "scripts/overhead-check/plain-child.ts",
+    "scripts/overhead-check/baseline-child.ts",
     "scripts/overhead-check/overhead.bench.ts",
     "tests/**/*.test-d.ts"
   ],

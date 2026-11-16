@@ -1,31 +1,31 @@
 /**
- * Per-process medians (ns) from one round of back-to-back pairs; `plain[i]` pairs with
- * `repset[i]`, and `steps[i]` is that pair's step: the clock's resolution divided by the smaller of
- * the pair's two calls per sample.
+ * Per-process medians (ns) from one round of back-to-back pairs; `baseline[i]` pairs with
+ * `repset[i]`, and `perCallResolutions[i]` is that pair's per-call resolution: the timer's
+ * resolution divided by the smaller of the pair's two calls per sample.
  */
 export interface Pairs {
-  readonly plain: readonly number[];
+  readonly baseline: readonly number[];
   readonly repset: readonly number[];
-  readonly steps: readonly number[];
+  readonly perCallResolutions: readonly number[];
 }
 
 /**
- * One round of a cell, reduced to its medians, relative gap, sign-flip p-value, and the mean (ns)
- * of the paired differences the p-value tested, ties counted as 0.
+ * One round of a scenario, reduced to its medians, relative gap, sign-flip p-value, and the mean
+ * (ns) of the paired differences the p-value tested, ties counted as 0.
  */
-export interface CellSummary {
-  readonly plainMedian: number;
+export interface RoundSummary {
+  readonly baselineMedian: number;
   readonly repsetMedian: number;
   readonly gap: number;
   readonly pValue: number;
   readonly meanDifference: number;
 }
 
-/** Outcome of one cell: the first round, plus the confirmation round when one was taken. */
-export interface CellVerdict {
+/** Outcome of one scenario: the first round, plus the confirmation round when one was taken. */
+export interface ScenarioVerdict {
   readonly passed: boolean;
-  readonly first: CellSummary;
-  readonly confirmation?: CellSummary;
+  readonly first: RoundSummary;
+  readonly confirmation?: RoundSummary;
 }
 
 const SIGNIFICANCE = 0.05;
@@ -34,13 +34,14 @@ const SIGNIFICANCE = 0.05;
 // on summation order. Without this relative slack those ties drop out and p reads too small.
 const TIE_TOLERANCE = 1e-9;
 
-// Two medians of the same number of clock ticks can differ in their last digits, since each is a
-// difference of two clock reads. A median is a whole number of ticks over the calls per sample, or
-// the mean of two such spans, so medians taken at one count that really differ sit at least half a
-// step (`Pairs.steps`) apart. Medians at two counts c1 < c2 that really differ sit at least
-// resolution / (2 * c1 * c2) apart, still above a millionth of the step while c2 stays under
-// 500,000 calls. A pair within a millionth of its step is a tie.
-const STEP_TIE_FRACTION = 1e-6;
+// Two medians of the same number of timer resolutions can differ in their last digits, since each
+// is a difference of two clock reads. A median is a whole number of timer resolutions over the
+// calls per sample, or the mean of two such spans, so medians taken at one count that really differ
+// sit at least half a per-call resolution (`Pairs.perCallResolutions`) apart. Medians at two counts
+// c1 < c2 that really differ sit at least resolution / (2 * c1 * c2) apart, still above a millionth
+// of the per-call resolution while c2 stays under 500,000 calls. A pair within a millionth of its
+// per-call resolution is a tie.
+const RESOLUTION_TIE_FRACTION = 1e-6;
 
 function at(values: readonly number[], index: number): number {
   const value = values[index];
@@ -57,10 +58,13 @@ function median(values: readonly number[]): number {
   return (lower + upper) / 2;
 }
 
-/** `repset - plain`, or 0 when the two differ by no more than a millionth of `step`. */
-function pairedDifference(plain: number, repset: number, step: number): number {
-  const difference = repset - plain;
-  return Math.abs(difference) <= step * STEP_TIE_FRACTION ? 0 : difference;
+/**
+ * `repset - baseline`, or 0 when the two differ by no more than a millionth of
+ * `perCallResolution`.
+ */
+function pairedDifference(baseline: number, repset: number, perCallResolution: number): number {
+  const difference = repset - baseline;
+  return Math.abs(difference) <= perCallResolution * RESOLUTION_TIE_FRACTION ? 0 : difference;
 }
 
 function signFlipPValue(differences: readonly number[], observedSum: number): number {
@@ -77,32 +81,32 @@ function signFlipPValue(differences: readonly number[], observedSum: number): nu
 /**
  * Summarizes one round, keeping the direction the p-value tested.
  *
- * @param pairs - The round's paired medians and each pair's step.
+ * @param pairs - The round's paired medians and each pair's per-call resolution.
  * @returns The round's summary, and the sign of the summed paired differences: 1 when repset
  * reads higher, -1 when lower, 0 when they sum to nothing. It is never 0 at p < 0.05.
- * @throws RangeError when `pairs.plain` is empty or the three arrays differ in length.
+ * @throws RangeError when `pairs.baseline` is empty or the three arrays differ in length.
  */
-function summarizeRound(pairs: Pairs): {
-  readonly summary: CellSummary;
+function summarizeWithDirection(pairs: Pairs): {
+  readonly summary: RoundSummary;
   readonly direction: number;
 } {
-  const { plain, repset, steps } = pairs;
-  if (plain.length !== repset.length || plain.length !== steps.length) {
+  const { baseline, repset, perCallResolutions } = pairs;
+  if (baseline.length !== repset.length || baseline.length !== perCallResolutions.length) {
     throw new RangeError(
-      `expected paired values, got ${plain.length} plain, ${repset.length} repset and ${steps.length} steps`,
+      `expected paired values, got ${baseline.length} baseline, ${repset.length} repset and ${perCallResolutions.length} per-call resolutions`,
     );
   }
-  const plainMedian = median(plain);
+  const baselineMedian = median(baseline);
   const repsetMedian = median(repset);
   const differences = repset.map((repsetValue, index) =>
-    pairedDifference(at(plain, index), repsetValue, at(steps, index)),
+    pairedDifference(at(baseline, index), repsetValue, at(perCallResolutions, index)),
   );
   const observedSum = differences.reduce((sum, difference) => sum + difference, 0);
   return {
     summary: {
-      plainMedian,
+      baselineMedian,
       repsetMedian,
-      gap: (repsetMedian - plainMedian) / plainMedian,
+      gap: (repsetMedian - baselineMedian) / baselineMedian,
       pValue: signFlipPValue(differences, observedSum),
       meanDifference: observedSum / differences.length,
     },
@@ -113,49 +117,51 @@ function summarizeRound(pairs: Pairs): {
 /**
  * Summarize one round of paired medians.
  *
- * The p-value is the two-sided sign-flip permutation test on `repset[i] - plain[i]`, enumerated
+ * The p-value is the two-sided sign-flip permutation test on `repset[i] - baseline[i]`, enumerated
  * exactly over all 2^n sign assignments, so the cost doubles with every pair. A pair whose two
- * medians differ by no more than a millionth of its step counts as a tie, a difference of 0.
+ * medians differ by no more than a millionth of its per-call resolution counts as a tie, a
+ * difference of 0.
  *
- * @param plain - Per-process medians from the hand-written plain loop.
- * @param repset - Per-process medians from repset, paired index by index with `plain`.
- * @param steps - Each pair's step (ns), paired index by index with `plain`.
- * @returns The median of each side, the gap `(repset - plain) / plain` between those medians, the
- * fraction of sign assignments whose absolute signed sum reaches the observed one, and the mean of
- * the paired differences with ties counted as 0.
- * @throws RangeError when `plain` is empty or the three arrays differ in length.
+ * @param baseline - Per-process medians from the baseline loop.
+ * @param repset - Per-process medians from repset, paired index by index with `baseline`.
+ * @param perCallResolutions - Each pair's per-call resolution (ns), paired index by index with
+ * `baseline`.
+ * @returns The median of each side, the gap `(repset - baseline) / baseline` between those medians,
+ * the fraction of sign assignments whose absolute signed sum reaches the observed one, and the mean
+ * of the paired differences with ties counted as 0.
+ * @throws RangeError when `baseline` is empty or the three arrays differ in length.
  */
-export function summarizeCell(
-  plain: readonly number[],
+export function summarizeRound(
+  baseline: readonly number[],
   repset: readonly number[],
-  steps: readonly number[],
-): CellSummary {
-  return summarizeRound({ plain, repset, steps }).summary;
+  perCallResolutions: readonly number[],
+): RoundSummary {
+  return summarizeWithDirection({ baseline, repset, perCallResolutions }).summary;
 }
 
 /**
- * Judge one cell, confirming a significant first round with a fresh one.
+ * Judge one scenario, confirming a significant first round with a confirmation round.
  *
- * A first round at p >= 0.05 passes outright and `freshRound` is never called. Otherwise the cell
- * fails only when the fresh round alone reads p < 0.05 with its paired differences summing to the
- * same sign as the first round's. The direction is the sign the p-value tested, never the gap's:
- * the two sides' medians can tie while most pairs differ one way.
+ * A first round at p >= 0.05 passes outright and `confirmationRound` is never called. Otherwise the
+ * scenario fails only when the confirmation round alone reads p < 0.05 with its paired differences
+ * summing to the same sign as the first round's. The direction is the sign the p-value tested,
+ * never the gap's: the two sides' medians can tie while most pairs differ one way.
  *
- * @param first - The cell's first round of pairs.
- * @param freshRound - Produces a new round of pairs; called at most once.
- * @returns The verdict, carrying the confirmation summary only when a fresh round was taken.
+ * @param first - The scenario's first round of pairs.
+ * @param confirmationRound - Produces a new round of pairs; called at most once.
+ * @returns The verdict, carrying the confirmation summary only when a confirmation round was taken.
  * @throws RangeError when a round's arrays are empty or differ in length; any error from
- * `freshRound` propagates.
+ * `confirmationRound` propagates.
  */
-export async function judgeCell(
+export async function judgeScenario(
   first: Pairs,
-  freshRound: () => Pairs | Promise<Pairs>,
-): Promise<CellVerdict> {
-  const firstRound = summarizeRound(first);
+  confirmationRound: () => Pairs | Promise<Pairs>,
+): Promise<ScenarioVerdict> {
+  const firstRound = summarizeWithDirection(first);
   if (firstRound.summary.pValue >= SIGNIFICANCE) {
     return { passed: true, first: firstRound.summary };
   }
-  const confirmation = summarizeRound(await freshRound());
+  const confirmation = summarizeWithDirection(await confirmationRound());
   const differenceConfirmed =
     confirmation.summary.pValue < SIGNIFICANCE && confirmation.direction === firstRound.direction;
   return {
@@ -166,11 +172,11 @@ export async function judgeCell(
 }
 
 /**
- * Process exit status for a set of cell verdicts.
+ * Process exit status for a set of scenario verdicts.
  *
- * @param verdicts - Every cell's verdict.
- * @returns 1 when any cell failed, 0 otherwise.
+ * @param verdicts - Every scenario's verdict.
+ * @returns 1 when any scenario failed, 0 otherwise.
  */
-export function exitStatus(verdicts: readonly CellVerdict[]): 0 | 1 {
+export function exitStatus(verdicts: readonly ScenarioVerdict[]): 0 | 1 {
   return verdicts.some((verdict) => !verdict.passed) ? 1 : 0;
 }

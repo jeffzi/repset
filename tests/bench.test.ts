@@ -90,6 +90,7 @@ describe("bench", () => {
 
       const [bare, object] = registeredCases();
 
+      expect([bare?.id, object?.id]).toStrictEqual(["bare", "object"]);
       expect(object?.case.setup()).toBe(bare?.case.setup());
     });
 
@@ -123,10 +124,10 @@ describe("bench", () => {
       { name: "sort//fast", why: "a doubled /" },
       { name: "sort fast", why: "a space" },
       { name: "sort/café", why: "a letter outside ASCII" },
-    ])("throws a TypeError holding the name when it has $why", ({ name }) => {
+    ])("throws a TypeError holding the quoted name when it has $why", ({ name }) => {
       const error = rejectionOf(name, sync);
 
-      expectTypeErrorHolding(error, [name]);
+      expectTypeErrorHolding(error, [JSON.stringify(name)]);
     });
   });
 
@@ -209,12 +210,12 @@ describe("bench", () => {
     const returnsPromise = (): Promise<number> => Promise.resolve(1);
 
     it.each([
-      { benchmark: generator, why: "a bare generator", fn: generator },
-      { benchmark: returnsPromise, why: "a function returning a promise", fn: returnsPromise },
-    ])("registers $why", ({ benchmark, fn }) => {
-      benchUnchecked("sort", benchmark);
+      { benchmark: generator, why: "a bare generator" },
+      { benchmark: returnsPromise, why: "a function returning a promise" },
+    ])("registers $why", ({ benchmark }) => {
+      bench("sort", benchmark);
 
-      expect(registeredCases().map((registered) => registered.case.fn)).toStrictEqual([fn]);
+      expect(registeredCases().map((registered) => registered.case.fn)).toStrictEqual([benchmark]);
     });
   });
 });

@@ -1,19 +1,13 @@
 import { spawn } from "node:child_process";
-import { type EventEmitter, once } from "node:events";
+import { once } from "node:events";
 import { join } from "node:path";
+import { Readable } from "node:stream";
+import { text } from "node:stream/consumers";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  failedResult,
-  listCases,
-  measureCase,
-  parseRequest,
-  runOnce,
-  type ChildResult,
-} from "../src/child.js";
-import { MeasureError } from "../src/measure/measure.js";
+import { listCases, measureCase, parseRequest, runOnce, type ChildResult } from "../src/child.js";
 import { exposedGc } from "./measure/fixtures.js";
 import { requiresRealBunHere } from "./real-bun.js";
 import { resetRegistry } from "./registry.js";
@@ -143,79 +137,17 @@ describe("listCases", () => {
   });
 
   describe("when the file fails to load", () => {
-    it("fails in phase load with the message the file threw", async () => {
+    it("fails in phase load with the message and stack of the Error the file threw", async () => {
       const result = await listCases(fixture("top-level-throw.ts"));
 
-      expect(result).toMatchObject({
-        status: "failed",
-        error: { phase: "load", message: "banana" },
-      });
-    });
-  });
-});
-
-describe("failedResult", () => {
-  describe("when the cause is an Error", () => {
-    it("carries the phase, its message and its own stack", () => {
-      const cause = new Error("plum");
-
-      const result = failedResult("setup", cause);
-
       expect(result).toStrictEqual({
         status: "failed",
-        error: { phase: "setup", message: "plum", stack: cause.stack, teardownError: null },
-      });
-    });
-
-    it("carries a null stack when its stack is not a string", () => {
-      const cause = new Error("plum");
-      Object.defineProperty(cause, "stack", { value: 42 });
-
-      const result = failedResult("fn", cause);
-
-      expect(result.error.stack).toBeNull();
-    });
-  });
-
-  describe("when the cause is not an Error", () => {
-    it("carries its string form and a null stack", () => {
-      const result = failedResult("teardown", "pear");
-
-      expect(result).toStrictEqual({
-        status: "failed",
-        error: { phase: "teardown", message: "pear", stack: null, teardownError: null },
-      });
-    });
-  });
-
-  describe("when the cause is a MeasureError", () => {
-    it("carries its phase, its message and the stack of its cause", () => {
-      const inner = new Error("grape");
-      const error = new MeasureError("calibration", inner);
-
-      const result = failedResult("load", error);
-
-      expect(result.error).toStrictEqual({
-        phase: "calibration",
-        message: "grape",
-        stack: inner.stack,
-        teardownError: null,
-      });
-    });
-
-    it("carries its cleanup teardown's failure as the message and stack of that teardown's value", () => {
-      const teardownCause = new Error("melon");
-      const error = new MeasureError(
-        "fn",
-        new Error("lime"),
-        new MeasureError("teardown", teardownCause),
-      );
-
-      const result = failedResult("load", error);
-
-      expect(result.error.teardownError).toStrictEqual({
-        message: "melon",
-        stack: teardownCause.stack,
+        error: {
+          phase: "load",
+          message: "banana",
+          stack: expect.stringMatching(/^Error: banana\n/u),
+          teardownError: null,
+        },
       });
     });
   });
@@ -309,11 +241,56 @@ describe("runOnce", () => {
   });
 
   describe("when the case runs", () => {
-    it("runs one setup, one fn and one teardown of a shared-state case, and no other case", async () => {
+    it("calls the selected case's setup, fn, then teardown once, no other case's", async () => {
       const result = await runOnce(LIFECYCLE, "quiet");
 
       expect(result.status).toBe("ok");
       expect(calls()).toStrictEqual(["quiet setup", "quiet fn", "quiet teardown"]);
+    });
+  });
+
+  describe("when the case fails", () => {
+    it("fails in the phase of the failure, with the stack of the Error the case threw", async () => {
+      const result = await runOnce(LIFECYCLE, "fn-throws");
+
+      expect(result).toStrictEqual({
+        status: "failed",
+        error: {
+          phase: "fn",
+          message: "kiwi",
+          stack: expect.stringMatching(/^Error: kiwi\n/u),
+          teardownError: null,
+        },
+      });
+    });
+
+    it.each([
+      { id: "fn-throws-string", thrown: "a value that is not an Error", message: "pear" },
+      {
+        id: "fn-throws-numeric-stack",
+        thrown: "an Error whose stack is not a string",
+        message: "plum",
+      },
+    ])("carries a null stack when the case throws $thrown", async ({ id, message }) => {
+      const result = await runOnce(LIFECYCLE, id);
+
+      expect(result).toStrictEqual({
+        status: "failed",
+        error: { phase: "fn", message, stack: null, teardownError: null },
+      });
+    });
+
+    it("carries a cleanup teardown's failure as the message and stack of the Error it threw", async () => {
+      const result = await runOnce(LIFECYCLE, "fn-and-teardown-throw");
+
+      expect(result).toMatchObject({
+        status: "failed",
+        error: {
+          phase: "fn",
+          message: "lime",
+          teardownError: { message: "melon", stack: expect.stringMatching(/^Error: melon\n/u) },
+        },
+      });
     });
   });
 });
@@ -351,23 +328,7 @@ interface ChildRun {
   readonly fd3: string;
 }
 
-/** Gathers every chunk `stream` emits; the list fills as the stream flows. */
-function chunksOf(stream: EventEmitter | null | undefined): Buffer[] {
-  const chunks: Buffer[] = [];
-  stream?.on("data", (chunk: Buffer) => {
-    chunks.push(chunk);
-  });
-  return chunks;
-}
-
-/**
- * Starts the child entry on `runtime` with `request` as its argument, file descriptor 3 a pipe.
- *
- * @param runtime - The runtime the child runs on.
- * @param request - The request, serialized to JSON.
- * @returns The exit status and what the child wrote to stdout, stderr and file descriptor 3.
- * @throws Error when the runtime cannot be spawned.
- */
+/** Starts the child entry on `runtime` with `request` as JSON and gathers its exit and output. */
 async function spawnChild(runtime: Runtime, request: object): Promise<ChildRun> {
   const { command, args } = RUNTIMES[runtime];
   const child = spawn(command, [...args, CHILD, JSON.stringify(request)], {
@@ -375,16 +336,23 @@ async function spawnChild(runtime: Runtime, request: object): Promise<ChildRun> 
     stdio: ["ignore", "pipe", "pipe", "pipe"],
     timeout: KILL_AFTER_MS,
   });
-  const [stdout, stderr, fd3] = [child.stdio[1], child.stdio[2], child.stdio[3]].map(chunksOf);
+  const [, stdout, stderr, fd3] = child.stdio;
+  if (!(stdout instanceof Readable && stderr instanceof Readable && fd3 instanceof Readable)) {
+    throw new Error("the child's stdout, stderr and fd 3 are not all readable pipes");
+  }
 
-  const [status]: unknown[] = await once(child, "close");
+  const [out, err, result, [status]] = await Promise.all([
+    text(stdout),
+    text(stderr),
+    text(fd3),
+    once(child, "close"),
+  ]);
 
-  const text = (chunks: Buffer[] = []): string => Buffer.concat(chunks).toString("utf8");
   return {
     status: typeof status === "number" ? status : null,
-    stdout: text(stdout),
-    stderr: text(stderr),
-    fd3: text(fd3),
+    stdout: out,
+    stderr: err,
+    fd3: result,
   };
 }
 
@@ -415,34 +383,40 @@ describe("the child started on bun", { timeout: SPAWN_TIMEOUT_MS }, () => {
 });
 
 describe("the child started on node", { timeout: SPAWN_TIMEOUT_MS }, () => {
-  it("exits 0 after the result line when the file leaves an interval open", async () => {
-    const run = await spawnChild("node", {
-      mode: "list",
-      file: fixture("open-interval.ts"),
-    });
+  describe("when the file leaves an interval open", () => {
+    it("exits 0 after the result line", async () => {
+      const run = await spawnChild("node", {
+        mode: "list",
+        file: fixture("open-interval.ts"),
+      });
 
-    expect(run.status).toBe(0);
-    expect(resultLine(run.fd3)).toStrictEqual({
-      status: "ok",
-      cases: [{ id: "orange", setupPerCall: false }],
+      expect(run.status).toBe(0);
+      expect(resultLine(run.fd3)).toStrictEqual({
+        status: "ok",
+        cases: [{ id: "orange", setupPerCall: false }],
+      });
     });
   });
 
-  it("hands the parent every byte the file printed to stdout and stderr", async () => {
-    const run = await spawnChild("node", { mode: "list", file: LOUD });
+  describe("when the file prints a megabyte to stdout and stderr", () => {
+    it("hands the parent every byte", async () => {
+      const run = await spawnChild("node", { mode: "list", file: LOUD });
 
-    expect({
-      stdout: run.stdout === `${"o".repeat(LOUD_STREAM_BYTES - 1)}\n`,
-      stderr: run.stderr === `${"e".repeat(LOUD_STREAM_BYTES - 1)}\n`,
-    }).toStrictEqual({ stdout: true, stderr: true });
+      expect({
+        stdout: run.stdout === `${"o".repeat(LOUD_STREAM_BYTES - 1)}\n`,
+        stderr: run.stderr === `${"e".repeat(LOUD_STREAM_BYTES - 1)}\n`,
+      }).toStrictEqual({ stdout: true, stderr: true });
+    });
   });
 
-  it("imports a file whose name holds a hash by its file URL", async () => {
-    const run = await spawnChild("node", { mode: "list", file: fixture("hash#name.ts") });
+  describe("when the file's name holds a hash", () => {
+    it("imports it by its file URL", async () => {
+      const run = await spawnChild("node", { mode: "list", file: fixture("hash#name.ts") });
 
-    expect(resultLine(run.fd3)).toStrictEqual({
-      status: "ok",
-      cases: [{ id: "found", setupPerCall: false }],
+      expect(resultLine(run.fd3)).toStrictEqual({
+        status: "ok",
+        cases: [{ id: "found", setupPerCall: false }],
+      });
     });
   });
 

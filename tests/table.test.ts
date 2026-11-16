@@ -161,6 +161,7 @@ describe("formatTable", () => {
         measured("apple", "node", flatStats(812)),
         measured("elderberry", "node", { ...flatStats(4656), max: 2_340_000, sampleCount: 1200 }),
         failed("watermelons", "fn", "plum exploded\nat the stone"),
+        failed("fig", "fn", "kiwi"),
         measured("nut", "bun", flatStats(812)),
       ];
 
@@ -173,6 +174,7 @@ describe("formatTable", () => {
         "  elderberry   4.66 µs  4.66 µs  4.66 µs  2.34 ms     1200",
         expect.stringMatching(/^ {2}watermelons {2}\S.*: plum exploded$/u),
         expect.stringMatching(/^ +at the stone$/u),
+        expect.stringMatching(/^ {2}fig {10}\S.*: kiwi$/u),
         "",
         "bun 1.3.2",
         expect.any(String),

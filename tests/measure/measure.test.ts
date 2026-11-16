@@ -442,13 +442,16 @@ describe("measure", () => {
       expect(error.phase).toBe("setup");
     });
 
-    it.each(KINDS)("tears down the thenable state a %s run's setup returned", async (kind) => {
-      const fake = bench(kind, { thenableAt: { setup: 0 } });
+    it.each(KINDS)(
+      "tears down the thenable state a %s run's setup returned, once",
+      async (kind) => {
+        const fake = bench(kind, { thenableAt: { setup: 0 } });
 
-      await run(fake).catch(() => undefined);
+        await run(fake).catch(() => undefined);
 
-      expect(fake.live.size).toBe(0);
-    });
+        expect(fake.log.filter((entry) => entry === "teardown 0")).toStrictEqual(["teardown 0"]);
+      },
+    );
 
     it("fails a run whose setup returns a pending promise as its state in phase setup", async () => {
       const clock = steppedClock();

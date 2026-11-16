@@ -782,20 +782,26 @@ describe("main", () => {
     it.each([
       { signal: "SIGINT", code: 130 },
       { signal: "SIGTERM", code: 143 },
-    ])("exits $code, not 2, when a listing fails after $signal", async ({ signal, code }) => {
-      const dir = workspace();
-      const signals = new EventEmitter();
-      const failsListingAfterSignal: StartChild = async () => {
-        signals.emit(signal);
-        return failedOutcome("load", "kiwi");
-      };
+    ])(
+      "exits $code, not 2, when a listing fails after $signal, still printing the failure",
+      async ({ signal, code }) => {
+        const dir = workspace();
+        const signals = new EventEmitter();
+        const failsListingAfterSignal: StartChild = async () => {
+          signals.emit(signal);
+          return failedOutcome("load", "kiwi");
+        };
 
-      const ended = await command(dir, ["sort.bench.ts"], {
-        signals,
-        startChild: failsListingAfterSignal,
-      });
+        const ended = await command(dir, ["sort.bench.ts"], {
+          signals,
+          startChild: failsListingAfterSignal,
+        });
 
-      expect(ended.code).toBe(code);
-    });
+        expect({ code: ended.code, last: linesOf(ended.stderr).at(-1) }).toStrictEqual({
+          code,
+          last: naming("sort.bench.ts", "load", "kiwi"),
+        });
+      },
+    );
   });
 });

@@ -72,6 +72,23 @@ describe("checkCoverageFresh", () => {
     );
   });
 
+  describe("when a TypeScript source under src/ is newer than the report", () => {
+    it("throws naming it", () => {
+      const dir = createProject(
+        {
+          "src/query.ts": COVERAGE_MTIME + 1,
+          "tests/query.test.ts": OLDER,
+          "vitest.config.ts": OLDER,
+        },
+        COVERAGE_MTIME,
+      );
+
+      expect(() => {
+        checkCoverageFresh(dir);
+      }).toThrow("src/query.ts");
+    });
+  });
+
   describe("when only a non-source file under src/ is newer than the report", () => {
     it.each(["src/types.d.ts", "src/data.json"])("returns without throwing for %s", (path) => {
       const dir = createProject(

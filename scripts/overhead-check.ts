@@ -489,7 +489,9 @@ function cellReport(
  * @param print - Where each cell's lines go.
  * @returns 1 when any cell failed or any calibrated reading broke the calibrated-run rule, 0
  *   otherwise.
- * @throws Error naming the cell when a reading cannot be trusted, and whatever `print` throws.
+ * @throws Error naming the cell when a reading cannot be trusted; the real repset reader's
+ *   filesystem errors from creating or removing its temporary directory, which name no cell;
+ *   whatever a caller-supplied reader throws; and whatever `print` throws.
  */
 export async function runCheck(
   readers: Readers = REAL_READERS,

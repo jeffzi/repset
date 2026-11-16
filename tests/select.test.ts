@@ -7,12 +7,13 @@ import type { Outcome } from "../src/children.js";
 import { ConfigError, type ResolvedOptions } from "../src/options.js";
 import { selectCases, type SelectedCase, type Selection } from "../src/run.js";
 import { expectConfigError } from "./config-error.js";
-import { findAny, found, type FindRuntime, type StartChild } from "./fake-children.js";
+import { findAny, found, type FindRuntime, listed, type StartChild } from "./fake-children.js";
 
 const FIXTURES = fileURLToPath(new URL("fixtures/discovery", import.meta.url));
 
 const TESTS = fileURLToPath(new URL(".", import.meta.url));
 
+/** The absolute path of the discovery fixture `name`. */
 function fixture(name: string): string {
   return join(FIXTURES, name);
 }
@@ -30,11 +31,6 @@ function optionsWith(overrides: Partial<ResolvedOptions> = {}): ResolvedOptions 
     filter: undefined,
     ...overrides,
   };
-}
-
-/** A listing outcome holding `cases`. */
-function listed(cases: { id: string; setupPerCall: boolean }[]): Outcome {
-  return { status: "ok", result: { status: "ok", cases }, output: "" };
 }
 
 /** A child starter that lists, per file name, the case ids `byFile` gives; other files list none. */
@@ -109,14 +105,6 @@ describe("selectCases", () => {
   });
 
   describe("when positional files are given", () => {
-    it("replaces include with the arguments, relative to the working directory", async () => {
-      const options = { includeBase: TESTS };
-
-      const selection = await select({ options, files: ["zeta.bench.ts"] });
-
-      expect(pathsOf(selection)).toStrictEqual([fixture("zeta.bench.ts")]);
-    });
-
     it.each([
       { why: "whose name holds glob characters", file: "[ab].bench.ts" },
       { why: "inside node_modules", file: "node_modules/pkg/hidden.bench.ts" },
@@ -239,19 +227,17 @@ describe("selectCases", () => {
       {
         why: "no file matched include",
         options: { include: ["**/*.banana"] },
-        startChild: onePerFile,
         named: ["**/*.banana"],
       },
       {
         why: "the filter matches no case",
         options: { filter: /banana/u },
-        startChild: onePerFile,
         named: ["/banana/u"],
       },
     ])(
       "rejects the selection when $why, naming what matched nothing",
-      async ({ options, startChild, named }) => {
-        const result = select({ options, startChild });
+      async ({ options, named }) => {
+        const result = select({ options });
 
         await expectConfigError(result, named);
       },

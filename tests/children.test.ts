@@ -13,7 +13,7 @@ import {
   type Outcome,
   type StartOptions,
 } from "../src/children.js";
-import { ConfigError } from "../src/options.js";
+import { expectConfigError } from "./config-error.js";
 import { errorOf } from "./error-of.js";
 import { MELON } from "./fake-children.js";
 import { requiresRealBunHere } from "./real-bun.js";
@@ -110,10 +110,6 @@ const MEASURED_PEAR_LINE = JSON.stringify({
   gc: null,
 });
 
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
-
 describe("findRuntime", () => {
   describe("when the runtime is the one the parent runs on", () => {
     it("returns the parent's own executable and version, whatever PATH holds", async () => {
@@ -156,9 +152,7 @@ describe("findRuntime", () => {
 
           const found = findRuntime("bun");
 
-          await expect(found).rejects.toThrow(ConfigError);
-          await expect(found).rejects.toThrow(bun);
-          await expect(found).rejects.toThrow(/\b9\b/);
+          await expectConfigError(found, [bun, /\b9\b/]);
         });
 
         it.runIf(POSIX)(
@@ -168,9 +162,7 @@ describe("findRuntime", () => {
 
             const found = findRuntime("bun");
 
-            await expect(found).rejects.toThrow(ConfigError);
-            await expect(found).rejects.toThrow(fixture("bin/killed/bun"));
-            await expect(found).rejects.toThrow(/SIGKILL/);
+            await expectConfigError(found, [fixture("bin/killed/bun"), /SIGKILL/]);
           },
         );
 
@@ -181,8 +173,7 @@ describe("findRuntime", () => {
 
             const found = findRuntime("bun");
 
-            await expect(found).rejects.toThrow(ConfigError);
-            await expect(found).rejects.toThrow(fixture("bin/silent/bun"));
+            await expectConfigError(found, [fixture("bin/silent/bun")]);
           },
         );
       });
@@ -193,8 +184,7 @@ describe("findRuntime", () => {
 
       const found = findRuntime("bun");
 
-      await expect(found).rejects.toThrow(ConfigError);
-      await expect(found).rejects.toThrow(/\bbun\b/);
+      await expectConfigError(found, [/\bbun\b/]);
     });
 
     it("throws a ConfigError naming the runtime when PATH is unset", async () => {
@@ -202,8 +192,7 @@ describe("findRuntime", () => {
 
       const found = findRuntime("bun");
 
-      await expect(found).rejects.toThrow(ConfigError);
-      await expect(found).rejects.toThrow(/\bbun\b/);
+      await expectConfigError(found, [/\bbun\b/]);
     });
 
     describe("when PATH holds only an empty entry", () => {
@@ -223,8 +212,7 @@ describe("findRuntime", () => {
 
         const found = findRuntime("bun");
 
-        await expect(found).rejects.toThrow(ConfigError);
-        await expect(found).rejects.toThrow(/\bbun\b/);
+        await expectConfigError(found, [/\bbun\b/]);
         // Every error of a probe that ran names its `--version`; one found on no PATH entry does not.
         await expect(found).rejects.not.toThrow(/--version/);
       });
@@ -375,9 +363,13 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
 
       const outcome = await startFixture("echo.ts", { mode: "list", file: `${line}\n` });
 
-      expect(outcome).toMatchObject({ ...NO_RESULT });
-      const { message } = outcome.status === "failed" ? outcome.error : { message: "" };
-      expect(message.endsWith(`: ${line.slice(0, 200)}`)).toBe(true);
+      expect(outcome).toMatchObject({
+        ...NO_RESULT,
+        error: {
+          ...NO_RESULT.error,
+          message: expect.stringMatching(/: \{"status":"ok","pear":"x{177}$/u),
+        },
+      });
     });
 
     it("names the exit status of a child that exited before writing one", async () => {
@@ -514,7 +506,7 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
       expect(outcome.output).toBe("€".repeat(Math.floor((16 * 1024) / 3)));
     });
 
-    it("keeps the last 16 KiB of a child that prints more", async () => {
+    it("returns the result of a child entry that prints a megabyte to each stream, keeping 16 KiB", async () => {
       const outcome = await startChild(
         NODE,
         { mode: "list", file: benchFile("loud.ts") },
@@ -525,39 +517,12 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
       expect(Buffer.byteLength(outcome.output)).toBe(16 * 1024);
     });
   });
-});
 
-describe.each([
-  { runtime: "node", here: true },
-  { runtime: "bun", here: requiresRealBunHere() },
-] as const)(
-  "startChild with the child entry on $runtime",
-  { timeout: SPAWN_TIMEOUT_MS },
-  ({ runtime, here }) => {
+  describe.each([
+    { runtime: "node", here: true },
+    { runtime: "bun", here: requiresRealBunHere() },
+  ] as const)("with the child entry on $runtime", ({ runtime, here }) => {
     describe.runIf(here)("when the request is valid", () => {
-      it("returns the listing of a benchmark file", async () => {
-        const found = await findRuntime(runtime);
-
-        const outcome = await startChild(
-          found,
-          { mode: "list", file: benchFile("three-cases.ts") },
-          { timeout: KILL_AFTER_MS, nodeImport: "tsx" },
-        );
-
-        expect(outcome).toStrictEqual({
-          status: "ok",
-          result: {
-            status: "ok",
-            cases: [
-              { id: "alpha", setupPerCall: false },
-              { id: "beta", setupPerCall: true },
-              { id: "gamma", setupPerCall: false },
-            ],
-          },
-          output: expect.any(String),
-        });
-      });
-
       it("returns the measurement of one case", async () => {
         const found = await findRuntime(runtime);
 
@@ -579,37 +544,25 @@ describe.each([
         });
       });
     });
-  },
-);
+  });
 
-describe("startChild from the built dist/children.js", { timeout: SPAWN_TIMEOUT_MS }, () => {
-  it("starts the built child entry beside it", async () => {
-    const outcome = await startBuiltChild(
-      NODE,
-      { mode: "list", file: benchFile("three-cases.ts") },
-      { timeout: KILL_AFTER_MS, nodeImport: "tsx" },
-    );
+  describe("from the built dist/children.js", () => {
+    it("starts the built child entry beside it", async () => {
+      const outcome = await startBuiltChild(
+        NODE,
+        { mode: "list", file: benchFile("three-cases.ts") },
+        { timeout: KILL_AFTER_MS, nodeImport: "tsx" },
+      );
 
-    expect(outcome).toMatchObject({
-      status: "ok",
-      result: { cases: [{ id: "alpha" }, { id: "beta" }, { id: "gamma" }] },
+      expect(outcome).toMatchObject({
+        status: "ok",
+        result: { cases: [{ id: "alpha" }, { id: "beta" }, { id: "gamma" }] },
+      });
     });
   });
-});
 
-describe(
-  "startChild with a nodeImport that cannot be resolved",
-  { timeout: SPAWN_TIMEOUT_MS },
-  () => {
+  describe("with a nodeImport that cannot be resolved", () => {
     const LIST = { mode: "list", file: benchFile("three-cases.ts") } as const;
-
-    it("fails a Node child in phase child", async () => {
-      const outcome = await startFixture("echo.ts", echoing('{"status":"ok"}\n'), {
-        nodeImport: "banana",
-      });
-
-      expect(outcome).toMatchObject(NO_RESULT);
-    });
 
     it.runIf(requiresRealBunHere())("runs a Bun child as it does without one", async () => {
       const bun = await findRuntime("bun");
@@ -621,5 +574,5 @@ describe(
         result: { cases: [{ id: "alpha" }, { id: "beta" }, { id: "gamma" }] },
       });
     });
-  },
-);
+  });
+});

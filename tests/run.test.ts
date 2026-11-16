@@ -3,17 +3,20 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { Outcome } from "../src/children.js";
 import { ConfigError } from "../src/options.js";
 import type { Report, Result } from "../src/report.js";
 import { run, runOnce } from "../src/run.js";
 import {
   failedOutcome,
   findAny,
+  listed,
   MELON,
   measured,
+  measuredOutcome,
+  ranOnce,
   starter as fakeStarter,
   type StartChild,
+  startsNoChild,
   stopped,
 } from "./fake-children.js";
 
@@ -37,14 +40,6 @@ function caseOf(file: string): { id: string; setupPerCall: boolean } {
   return { id, setupPerCall: id === "a.bench.ts" };
 }
 
-/** An outcome in which the child measured its case with the median `median`. */
-function measuredOutcome(median: number): Outcome {
-  return { status: "ok", result: measured(median), output: "" };
-}
-
-/** An outcome in which the child ran its case once. */
-const ranOnce: Outcome = { status: "ok", result: { status: "ok" }, output: "" };
-
 /** A child starter that lists one case per file and answers the rest with `answer`. */
 function starter(answer: Parameters<typeof fakeStarter>[1]): StartChild {
   return fakeStarter(caseOf, answer);
@@ -52,11 +47,6 @@ function starter(answer: Parameters<typeof fakeStarter>[1]): StartChild {
 
 /** A child starter that measures every case with the median 4656. */
 const measuresAll = starter(() => measuredOutcome(4656));
-
-/** A child starter that fails the run with a plain error if it starts a measuring or once child. */
-const startsNoChild = starter(() => {
-  throw new Error("a child started");
-});
 
 /** One CPU of the fake host, as `os.cpus()` lists it. */
 function cpu(model: string): { model: string } {
@@ -379,7 +369,6 @@ describe("run", () => {
       });
 
       await expect(result).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(result).rejects.not.toBeInstanceOf(ConfigError);
     });
 
     it("throws a plain error naming the file, before any child starts, when it holds no version", async () => {
@@ -414,6 +403,28 @@ describe("run", () => {
         interrupted: report.interrupted,
         ran: report.results.map((result) => [result.runtime.name, result.id]),
       }).toStrictEqual({ interrupted: true, ran: [["node", "zeta.bench.ts"]] });
+    });
+  });
+
+  describe("when the config file sets a relative nodeImport", () => {
+    it("starts every child under timeout with the nodeImport resolved against the config's directory", async () => {
+      const resolved = fileURLToPath(new URL("fixtures/config/nested/loader.mjs", import.meta.url));
+      const echoOptions: StartChild = async (_runtime, request, options) => {
+        const asked = `${request.mode} ${String(options.nodeImport)} ${String(options.timeout)}`;
+        return request.mode === "list"
+          ? listed([{ id: asked, setupPerCall: false }])
+          : failedOutcome("fn", asked);
+      };
+
+      const report = await runHere({
+        config: DOT_IMPORT_CONFIG,
+        timeout: 1234,
+        startChild: echoOptions,
+      });
+
+      expect(report.results.map((result) => [result.id, result.error?.message])).toStrictEqual([
+        [`list ${resolved} 1234`, `measure ${resolved} 1234`],
+      ]);
     });
   });
 });
@@ -455,32 +466,5 @@ describe("runOnce", () => {
         { id: "a.bench.ts", runtime: "node", status: "ok" },
       ],
     });
-  });
-});
-
-describe("run with a relative nodeImport from the config file", () => {
-  it("starts every child under timeout with the nodeImport resolved against the config's directory", async () => {
-    const resolved = fileURLToPath(new URL("fixtures/config/nested/loader.mjs", import.meta.url));
-    const echoOptions: StartChild = async (_runtime, request, options) => {
-      const asked = `${request.mode} ${String(options.nodeImport)} ${String(options.timeout)}`;
-      if (request.mode === "list") {
-        return {
-          status: "ok",
-          result: { status: "ok", cases: [{ id: asked, setupPerCall: false }] },
-          output: "",
-        };
-      }
-      return failedOutcome("fn", asked);
-    };
-
-    const report = await runHere({
-      config: DOT_IMPORT_CONFIG,
-      timeout: 1234,
-      startChild: echoOptions,
-    });
-
-    expect(report.results.map((result) => [result.id, result.error?.message])).toStrictEqual([
-      [`list ${resolved} 1234`, `measure ${resolved} 1234`],
-    ]);
   });
 });

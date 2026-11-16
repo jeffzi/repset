@@ -13,10 +13,12 @@ import type { StrictOmit } from "../src/utils.js";
 import {
   failedOutcome,
   findAny,
-  measured,
+  measuredOutcome,
   type FindRuntime,
+  ranOnce,
   starter as fakeStarter,
   type StartChild,
+  startsNoChild,
   stopped,
 } from "./fake-children.js";
 import { parseReport, reportAt } from "./report-file.js";
@@ -58,9 +60,7 @@ function starter(answer: Parameters<typeof fakeStarter>[1]): StartChild {
 
 /** A child starter that measures every case and runs every once case. */
 const measuresAll = starter((request) =>
-  request.mode === "measure"
-    ? { status: "ok", result: measured(4656), output: "" }
-    : { status: "ok", result: { status: "ok" }, output: "" },
+  request.mode === "measure" ? measuredOutcome(4656) : ranOnce,
 );
 
 /** A child starter that fails `parse/fast` in phase `fn` with `kiwi` and runs every other case. */
@@ -74,11 +74,6 @@ const failsParse = starter((request, runtime, options) =>
 const startsNoCase = starter(() => {
   throw new Error("a case started");
 });
-
-/** A child starter that fails the command with a plain error if any child starts. */
-const startsNoChild: StartChild = async () => {
-  throw new Error("a child started");
-};
 
 /** A stream stand-in that keeps what is written to it. */
 interface Captured {

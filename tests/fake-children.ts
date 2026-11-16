@@ -1,6 +1,7 @@
 import type {
   ChildError,
   ChildPhase,
+  ListedCase,
   Measured,
   MeasureRequest,
   OnceRequest,
@@ -48,6 +49,24 @@ export function measured(median: number): Measured {
   };
 }
 
+/** An outcome in which the child measured its case with the median `median`. */
+export function measuredOutcome(median: number): Outcome {
+  return { status: "ok", result: measured(median), output: "" };
+}
+
+/** An outcome in which the child ran its case once. */
+export const ranOnce: Outcome = { status: "ok", result: { status: "ok" }, output: "" };
+
+/** An outcome in which the child listed `cases`. */
+export function listed(cases: ListedCase[]): Outcome {
+  return { status: "ok", result: { status: "ok", cases }, output: "" };
+}
+
+/** A child starter that fails its caller with a plain error if any child starts. */
+export const startsNoChild: StartChild = async () => {
+  throw new Error("a child started");
+};
+
 /** An outcome in which the stop signal killed the child. */
 export const stopped: Outcome = { status: "stopped", output: "" };
 
@@ -73,13 +92,7 @@ export function starter(
   ) => Outcome | Promise<Outcome>,
 ): StartChild {
   return async (runtime, request, options) => {
-    if (request.mode === "list") {
-      return {
-        status: "ok",
-        result: { status: "ok", cases: [listCase(request.file)] },
-        output: "",
-      };
-    }
+    if (request.mode === "list") return listed([listCase(request.file)]);
     return answer(request, runtime, options);
   };
 }

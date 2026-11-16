@@ -5,7 +5,7 @@
  * `schema` and never a key.
  */
 
-import type { ChildPhase, Measured, TeardownFailure } from "./child.js";
+import type { ChildError, Measured } from "./child.js";
 import type { Runtime } from "./measure/runtime.js";
 
 /** Every option that shaped the run, after the caller's options and the config were merged. */
@@ -35,12 +35,7 @@ export interface Machine {
 }
 
 /** Why a case failed, with the tail of its child's stdout and stderr. */
-export interface ResultError {
-  readonly phase: ChildPhase;
-  readonly message: string;
-  readonly stack: string | null;
-  /** The failure of the teardown that cleaned up after this one, or `null` when none threw. */
-  readonly teardownError: TeardownFailure | null;
+export interface ResultError extends ChildError {
   readonly output: string;
 }
 

@@ -5,6 +5,7 @@
     "scripts/*.ts",
     "scripts/check-overhead/baseline-child.ts",
     "scripts/check-overhead/overhead.bench.ts",
+    "examples/*.ts",
     "tests/**/*.test-d.ts"
   ],
   "ignoreExportsUsedInFile": true,

@@ -23,7 +23,8 @@ tasks:
       Build, then run the tests with coverage; arguments after -- run only those, without coverage
     deps: [_deps]
     cmds:
-      # Vitest's type check covers scripts/, which imports the built entry.
+      # Vitest's type check covers scripts/, and the examples test runs examples/: both import the
+      # built entry.
       - task: build
       # A partial coverage report would skew the quality check.
       - "{{.MISE}} npx vitest run {{if .CLI_ARGS}}{{.CLI_ARGS}}{{else}}--coverage{{end}}"
@@ -158,7 +159,7 @@ tasks:
     internal: true
     deps: [_deps]
     cmds:
-      # The overhead check's benchmark file imports the built entry from dist/.
+      # The overhead check's benchmark file and the examples import the built entry from dist/.
       - task: build
       - "{{.MISE}} npx tsc -p tsconfig.json"
       - "{{.MISE}} npx oxlint --type-aware --disable-nested-config"

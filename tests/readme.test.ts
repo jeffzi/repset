@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -9,6 +9,9 @@ import { spawnCommand, TSX } from "./spawn-command.js";
 import { temporaryDir } from "./temporary-dir.js";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
+
+/** The examples directory, whose config the command reads when it starts there. */
+const EXAMPLES = join(ROOT, "examples");
 
 /** Node, tsx and every example's `--once` child starting, on a slow CI runner. */
 const SPAWN_TIMEOUT_MS = 60_000;
@@ -82,6 +85,32 @@ describe("the README", () => {
         );
 
         const { code, stderr } = await spawnCommand(dir, [
+          "--once",
+          "--runtime",
+          runtime,
+          "--node-import",
+          TSX,
+        ]);
+
+        const words = stderr.split(/\s+/u);
+        expect({
+          code,
+          unlisted: benchmarks.filter((path) => !words.includes(path)),
+        }).toStrictEqual({ code: 0, unlisted: [] });
+      },
+    );
+  });
+});
+
+describe("the examples directory", () => {
+  describe.each(runtimesHere())("on $runtime", ({ runtime, here }) => {
+    it.runIf(here)(
+      "runs once with every case ok, listing every benchmark file",
+      { timeout: SPAWN_TIMEOUT_MS },
+      async () => {
+        const benchmarks = readdirSync(EXAMPLES).filter((name) => name.endsWith(".bench.ts"));
+
+        const { code, stderr } = await spawnCommand(EXAMPLES, [
           "--once",
           "--runtime",
           runtime,

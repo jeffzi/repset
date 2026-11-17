@@ -119,5 +119,8 @@ Node runs TypeScript files by stripping their types, but it does not map an impo
 ## Learn more
 
 - `npx repset --help` lists every option.
+- [examples/](https://github.com/jeffzi/repset/tree/main/examples) shows a benchmark file for each
+  common scenario: comparing implementations, scaling with input size, mutating the input and
+  returning objects to a pool.
 - [VISION.md](https://github.com/jeffzi/repset/blob/main/VISION.md) says what repset is for and what
   it will not do.

@@ -10,16 +10,21 @@ this file. It is gitignored for personal, machine-specific preferences and never
 `Taskfile.yml` is the only entry point (`task --list`); the git hooks only call tasks.
 
 - `task install` — install the pinned tools, the npm dependencies and the git hooks
-- `task test` — run the tests with coverage; coverage thresholds fail the run. Arguments after `--`
-  go to Vitest, which then runs without coverage.
-- `task check` — every check; run before committing. Fixing steps rewrite files in place. The
-  quality step refuses a coverage report older than `src/`, `tests/` or `vitest.config.ts`: run
-  `task test` first. `ONLY=<names>` runs some steps; files after `--` narrow them. Security
-  candidates never fail the run: verify each before reporting it.
+- `task test` — build `dist/`, then run the tests with coverage; coverage thresholds fail the run.
+  Arguments after `--` go to Vitest, which then runs without coverage.
+- `task check` — every check; run before committing. Fixing steps rewrite files in place. The types
+  step builds `dist/` before it type-checks. The quality step refuses a coverage report older than
+  `src/`, `tests/` or `vitest.config.ts`: run `task test` first. `ONLY=<names>` runs some steps;
+  files after `--` narrow them. Security candidates never fail the run: verify each before reporting
+  it.
 - `task fix` — auto-fix, then delete unused exports, dependencies and enum members. Review the diff.
 - `task build` — compile `src/` to `dist/`
-- `task check-package` — pack the package, install it in an empty app and import every entry. The
-  publish workflow runs it.
+- `task check-package` — pack the package, install it in an empty app, import every entry and run
+  the installed `repset --version` once, which loads the command's static imports. CI runs it.
+- `task check-overhead` — build, then compare repset's timings with a baseline loop. It exits 1 when
+  repset and the baseline differ significantly in the same direction in both rounds, or a calibrated
+  reading falls below its timing floors. Run it before a release, alone on a quiet machine; never in
+  CI, and `task check` does not run it.
 
 ## Tools (mise)
 

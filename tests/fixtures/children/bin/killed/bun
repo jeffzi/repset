@@ -1,0 +1,3 @@
+#!/bin/sh
+set -eu
+kill -s KILL "$$"

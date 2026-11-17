@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { runCheck } from "../scripts/check-overhead.js";
 import type { Readers, RepsetReading } from "../scripts/check-overhead.js";
 
-/** A repset reading above the timing floors. */
+/** A repset reading whose timing lasted its `minTime`. */
 const READING: RepsetReading = {
   median: 1000,
   callsPerSample: 10,
@@ -13,7 +13,7 @@ const READING: RepsetReading = {
   minTime: 1000,
 };
 
-/** Readers for every scenario: baseline medians of 1000, and repset readings above the floors. */
+/** Readers for every scenario: baseline medians of 1000, and repset readings whose timing lasted their `minTime`. */
 const READERS: Readers = {
   repset: () => READING,
   baseline: () => 1000,

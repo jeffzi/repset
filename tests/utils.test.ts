@@ -51,7 +51,7 @@ describe("timerResolutionMs", () => {
 
 describe("the describe function", () => {
   describe("when given a function", () => {
-    it("names it without printing its source", () => {
+    it("does not print its source", () => {
       const value = (): number => 1;
 
       const described = describeValue(value);

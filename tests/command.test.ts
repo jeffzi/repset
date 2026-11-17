@@ -5,6 +5,7 @@ import { basename, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import { main, type StrictOmit } from "../src/command.js";
+import type { Result } from "../src/report.js";
 import { formatTable, metricLine } from "../src/table.js";
 import {
   failedOutcome,
@@ -193,7 +194,7 @@ describe("main", () => {
     });
   });
 
-  describe("where the command line or the config is wrong", () => {
+  describe("when the command line is wrong", () => {
     it.each([
       { why: "an unknown flag", args: ["--banana"] },
       { why: "a value flag given twice", args: ["--filter", "sort", "--filter", "parse"] },
@@ -345,7 +346,7 @@ describe("main", () => {
     });
   });
 
-  describe("--list", () => {
+  describe("when --list is given", () => {
     it("prints each selected case id, in selection order, running no case", async () => {
       const dir = workspace();
 
@@ -466,7 +467,7 @@ describe("main", () => {
     });
   });
 
-  describe("--out <file>", () => {
+  describe("when --out names a file", () => {
     it("writes the report once listing passed and again after every result", async () => {
       const dir = workspace();
       const report = join(dir, "report.json");
@@ -555,28 +556,39 @@ describe("main", () => {
     });
   });
 
-  describe("--out -", () => {
-    it("prints the report on stdout and the table on stderr", async () => {
-      const dir = workspace();
+  describe("when --out is -", () => {
+    /** Runs two files with the report on stdout. */
+    async function runToStdout(): Promise<Ended> {
+      return command(workspace(), ["sort.bench.ts", "parse.bench.ts", "--out", "-"]);
+    }
 
-      const { code, stdout, stderr } = await command(dir, [
-        "sort.bench.ts",
-        "parse.bench.ts",
-        "--out",
-        "-",
-      ]);
+    it("prints the report on stdout, exiting 0", async () => {
+      const { code, stdout } = await runToStdout();
 
       const { results } = parseReport(stdout, "stdout");
-      expect({
-        code,
-        results: results.length,
-        tableLast: stderr.endsWith(formatTable(results)),
-      }).toStrictEqual({ code: 0, results: 2, tableLast: true });
+      expect({ code, results: results.length }).toStrictEqual({ code: 0, results: 2 });
+    });
+
+    it("prints the table on stderr", async () => {
+      const { stdout, stderr } = await runToStdout();
+
+      const { results } = parseReport(stdout, "stdout");
+      expect(stderr.endsWith(formatTable(results))).toBe(true);
     });
   });
 
-  describe("--metric-lines", () => {
-    it("prints each measured result's metric line on stdout as it finishes, and the table on stderr", async () => {
+  describe("when --metric-lines is given", () => {
+    /**
+     * Runs two files with metric lines, the second case failing, recording stdout as each child
+     * starts.
+     */
+    async function runWithMetricLines(): Promise<
+      Ended & {
+        readonly printedAtStart: readonly string[];
+        readonly results: readonly Result[];
+        readonly metricText: string;
+      }
+    > {
       const dir = workspace();
       const stdout = captured();
       const printedAtStart: string[] = [];
@@ -584,34 +596,43 @@ describe("main", () => {
         printedAtStart.push(stdout.text);
         return failsParse(runtime, request, options);
       });
-
       const { code, stderr } = await command(
         dir,
         ["sort.bench.ts", "parse.bench.ts", "--metric-lines", "--out", "report.json"],
         { stdout, startChild: watchesStdout },
       );
-
       const { results } = reportAt(join(dir, "report.json"));
       const metricText = results
         .map((result) => metricLine(result))
         .filter((line) => line !== undefined)
         .map((line) => `${line}\n`)
         .join("");
-      expect({
-        code,
-        printedAtStart,
-        stdout: stdout.text,
-        tableLast: stderr.endsWith(formatTable(results)),
-      }).toStrictEqual({
+      return { code, stdout: stdout.text, stderr, printedAtStart, results, metricText };
+    }
+
+    it("prints each measured result's metric line on stdout, exiting 1 when a case failed", async () => {
+      const ended = await runWithMetricLines();
+
+      expect({ code: ended.code, stdout: ended.stdout }).toStrictEqual({
         code: 1,
-        printedAtStart: ["", metricText],
-        stdout: metricText,
-        tableLast: true,
+        stdout: ended.metricText,
       });
+    });
+
+    it("prints each metric line as its result finishes", async () => {
+      const ended = await runWithMetricLines();
+
+      expect(ended.printedAtStart).toStrictEqual(["", ended.metricText]);
+    });
+
+    it("prints the table on stderr", async () => {
+      const ended = await runWithMetricLines();
+
+      expect(ended.stderr.endsWith(formatTable(ended.results))).toBe(true);
     });
   });
 
-  describe("--once", () => {
+  describe("when --once is given", () => {
     it("prints one line per case, naming a failure's phase and message, exiting 1", async () => {
       const dir = workspace();
 

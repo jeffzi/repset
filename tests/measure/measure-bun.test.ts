@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,6 +21,24 @@ const setup = () => ({ values });
 const fn = (world) => { for (const value of world.values) sink += value; };
 `;
 
+/**
+ * Runs `bun` with `args` to completion, killing it at {@link BUN_TIMEOUT_MS}.
+ *
+ * @param args - The arguments to `bun`.
+ * @param cwd - The directory Bun starts in, this process's own when omitted.
+ * @returns How Bun exited and what it printed.
+ * @throws The spawn's own error, as when Bun cannot start or ran past its timeout.
+ */
+function runBun(args: readonly string[], cwd?: string): SpawnSyncReturns<string> {
+  const child = spawnSync("bun", args, {
+    ...(cwd === undefined ? {} : { cwd }),
+    encoding: "utf8",
+    timeout: BUN_TIMEOUT_MS,
+  });
+  if (child.error !== undefined) throw child.error;
+  return child;
+}
+
 interface BunTestRun {
   readonly status: number | null;
   /** The JSON the test printed after `REPORT `, or `null` when it printed none. */
@@ -37,6 +55,7 @@ interface BunTestRun {
  * @returns How `bun test` exited and the parsed report.
  * @throws Error from the filesystem when the temporary directory or test file cannot be written.
  * @throws SyntaxError when the printed report is not valid JSON.
+ * @throws The spawn's own error, as when Bun cannot start or ran past {@link BUN_TIMEOUT_MS}.
  */
 function bunTestWithJscMock(body: string, bunJsc: string): BunTestRun {
   const dir = temporaryDir("repset-bun-");
@@ -56,7 +75,7 @@ ${body}
 `,
   );
 
-  const child = spawnSync("bun", ["test", file], { cwd: dir, encoding: "utf8" });
+  const child = runBun(["test", file], dir);
 
   const report = /REPORT (.*)/.exec(`${child.stdout}\n${child.stderr}`)?.[1];
   return { status: child.status, report: JSON.parse(report ?? "null") };
@@ -76,7 +95,7 @@ console.log(JSON.stringify({
 }));
 `;
 
-      const child = spawnSync("bun", ["--expose-gc", "-e", script], { encoding: "utf8" });
+      const child = runBun(["--expose-gc", "-e", script]);
 
       expect(child.stderr).toBe("");
       expect(JSON.parse(child.stdout)).toStrictEqual({

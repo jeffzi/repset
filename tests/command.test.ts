@@ -694,7 +694,7 @@ describe("main", () => {
       },
     );
 
-    it("exits 130 on SIGINT in a --list run", async () => {
+    it("exits 130 on SIGINT in a --list run, printing nothing on stdout", async () => {
       const dir = workspace();
       const signals = new EventEmitter();
       const stops: StartChild = async () => {
@@ -704,7 +704,7 @@ describe("main", () => {
 
       const ended = await command(dir, ["--list", "sort.bench.ts"], { signals, startChild: stops });
 
-      expect(ended.code).toBe(130);
+      expect({ code: ended.code, stdout: ended.stdout }).toStrictEqual({ code: 130, stdout: "" });
     });
 
     it("exits 130, not 2, when a listing fails after SIGINT, still printing the failure", async () => {

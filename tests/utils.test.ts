@@ -5,13 +5,18 @@ import { describe as describeValue, thrownMessage, timerResolutionMs } from "../
 const RESOLUTION = 0.125;
 
 /**
- * How many leading transitions span several resolutions.
+ * The first transition that spans a single resolution; every one before it spans several.
  *
- * Tied to `TRANSITIONS_PER_PASS` (P) in `src/utils.ts`: it must stay in [P, 2P), so the discarded
- * first pass is entirely coarse and the measured second pass reaches the fine transitions. Move it
- * when P changes.
+ * Tied to `TRANSITIONS_PER_PASS` (P) in `src/utils.ts`, together with {@link FINE_TRANSITIONS_END}:
+ * both must stay strictly between P and 2P, this one first. The discarded first pass is then
+ * entirely coarse, and the measured second pass runs coarse, fine, then coarse again, so a probe
+ * that keeps its largest, first or last change instead of the smallest fails. Move both when P
+ * changes.
  */
-const COARSE_TRANSITIONS = 2000;
+const COARSE_TRANSITIONS = 3000;
+
+/** The first transition after {@link COARSE_TRANSITIONS} that spans several resolutions again. */
+const FINE_TRANSITIONS_END = 3500;
 
 /**
  * Builds a clock that advances by `resolutionsAt(transition)` resolutions per transition, repeating each value a few times.
@@ -35,10 +40,13 @@ function scriptedClock(
 }
 
 describe("timerResolutionMs", () => {
-  describe("when the first transitions span several multiples of the resolution and later ones span one", () => {
+  describe("when most transitions span several multiples of the resolution and a run of them spans one", () => {
     it("returns the single resolution", () => {
       const now = scriptedClock(
-        (transition) => (transition < COARSE_TRANSITIONS ? 2 + (transition % 2) : 1),
+        (transition) =>
+          transition >= COARSE_TRANSITIONS && transition < FINE_TRANSITIONS_END
+            ? 1
+            : 2 + (transition % 2),
         RESOLUTION,
       );
 

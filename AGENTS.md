@@ -75,8 +75,9 @@ module that nothing but its registrar imports is a module of its own at any size
 modules also import is placed by those importers alone.
 
 The **generic-helpers module**, `src/utils.ts`, holds code that passes this admission test: it names
-no project type, imports nothing but Node built-ins (`node:` modules), and would make sense pasted
-unchanged into an unrelated repository.
+no project type, imports nothing, Node built-ins (`node:` modules) included, and would make sense
+pasted unchanged into an unrelated repository. The measure modules import it and load in a browser
+page, so code that needs a Node built-in goes to its home under rule 2's later tests instead.
 
 1. **New code goes in the module that uses it.** One user: that module. No new file until rule 2 or
    rule 6 calls for one.

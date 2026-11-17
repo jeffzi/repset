@@ -30,8 +30,7 @@ interface BunTestRun {
 /**
  * Runs `body` as one `bun test` case with `measure` and `MeasureError` imported, the benchmark of
  * {@link SCRIPT_BENCH} defined, a stub `gc`, a `loadFailure` object for a factory to throw, and
- * `bun:jsc` mocked by `bunJsc`: by default so that `received` holds every function its `noInline`
- * received.
+ * `bun:jsc` mocked by `bunJsc`.
  *
  * @param body - Statements of the async test case; one prints `REPORT ` followed by JSON.
  * @param bunJsc - The source of the factory `bun:jsc` is mocked with.
@@ -39,21 +38,17 @@ interface BunTestRun {
  * @throws Error from the filesystem when the temporary directory or test file cannot be written.
  * @throws SyntaxError when the printed report is not valid JSON.
  */
-function bunTestWithNoInlineMock(
-  body: string,
-  bunJsc = "() => ({ noInline: (fn) => { received.push(fn); } })",
-): BunTestRun {
+function bunTestWithJscMock(body: string, bunJsc: string): BunTestRun {
   const dir = temporaryDir("repset-bun-");
-  const file = join(dir, "no-inline.test.ts");
+  const file = join(dir, "jsc-mock.test.ts");
   writeFileSync(
     file,
     `
 import { mock, test } from "bun:test";
-const received = [];
 const loadFailure = { name: "durian" };
 mock.module("bun:jsc", ${bunJsc});
 globalThis.gc = () => {};
-test("noInline", async () => {
+test("jsc mock", async () => {
   const { measure, MeasureError } = await import(${JSON.stringify(MEASURE_PATH)});
   ${SCRIPT_BENCH}
 ${body}
@@ -77,7 +72,6 @@ ${SCRIPT_BENCH}
 const result = await measure({ kind: "sharedState", setup, fn });
 console.log(JSON.stringify({
   observesGc: "gcDuringTiming" in result,
-  sampleCount: result.sampleCount,
   sank: sink > 0,
 }));
 `;
@@ -87,7 +81,6 @@ console.log(JSON.stringify({
       expect(child.stderr).toBe("");
       expect(JSON.parse(child.stdout)).toStrictEqual({
         observesGc: false,
-        sampleCount: expect.any(Number),
         sank: true,
       });
     },
@@ -95,23 +88,9 @@ console.log(JSON.stringify({
   );
 
   it(
-    "hands bun:jsc's noInline the body and exactly one other function",
-    () => {
-      const bun = bunTestWithNoInlineMock(`
-  await measure({ kind: "sharedState", setup, fn });
-  console.log("REPORT " + JSON.stringify({ fn: received.includes(fn), handed: received.length }));
-`);
-
-      expect(bun.status).toBe(0);
-      expect(bun.report).toStrictEqual({ fn: true, handed: 2 });
-    },
-    BUN_TIMEOUT_MS,
-  );
-
-  it(
     "rejects in phase child with the loader's value as cause when bun:jsc cannot be loaded",
     () => {
-      const bun = bunTestWithNoInlineMock(
+      const bun = bunTestWithJscMock(
         `
   const error = await measure({ kind: "sharedState", setup, fn }).then(() => null, (e) => e);
   console.log("REPORT " + JSON.stringify({

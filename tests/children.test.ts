@@ -482,13 +482,19 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
       expect(outcome.output).toContain("pear\n");
     });
 
+    it("keeps the last 16 KiB of output longer than one read", async () => {
+      const outcome = await startFixture("megabyte.ts");
+
+      expect(outcome.output).toBe("z".repeat(16 * 1024));
+    });
+
     it("keeps the last 16 KiB, cut at a character boundary", async () => {
       const outcome = await startFixture("euro.ts");
 
       expect(outcome.output).toBe("€".repeat(Math.floor((16 * 1024) / 3)));
     });
 
-    it("returns the result of a child entry that prints a megabyte to each stream, keeping 16 KiB", async () => {
+    it("returns the result of a child entry that prints a megabyte to each stream", async () => {
       const outcome = await startChild(
         NODE,
         { mode: "list", file: benchFile("loud.ts") },
@@ -496,7 +502,6 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
       );
 
       expect(outcome).toMatchObject({ status: "ok", result: { cases: [{ id: "loud" }] } });
-      expect(Buffer.byteLength(outcome.output)).toBe(16 * 1024);
     });
   });
 

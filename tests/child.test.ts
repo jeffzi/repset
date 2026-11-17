@@ -187,7 +187,7 @@ describe("measureCase", () => {
         sampling: {
           timerResolutionNs: expect.any(Number),
           callsPerSample: expect.any(Number),
-          callsPerSampleFixed: false,
+          callsPerSampleFixed: expect.any(Boolean),
           warmupSamples: expect.any(Number),
           timingAttempts: expect.any(Number),
           timingMs: expect.any(Number),

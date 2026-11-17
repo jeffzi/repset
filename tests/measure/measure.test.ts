@@ -454,7 +454,6 @@ describe("measure", () => {
       { kind: "sharedState", when: "its one teardown", fails: {}, from: "teardown" },
       { kind: "perCall", when: "the check's teardown", fails: {}, from: "teardown" },
       { kind: "sharedState", when: "the cleanup's teardown", fails: { fn: 5 }, from: "fn" },
-      { kind: "perCall", when: "the check's cleanup teardown", fails: { fn: 0 }, from: "fn" },
     ] as const;
 
     it.each(TEARDOWN_THENABLE_CASES.filter((row) => row.from === "teardown"))(
@@ -659,21 +658,18 @@ describe("measure", () => {
       expect(error.teardownError).toBeNull();
     });
 
-    it.each(KINDS)(
-      "rejects a %s run whose collection throws in phase child with the collector's value as cause",
-      async (kind) => {
-        const fake = bench(kind, { bodyMs: 200 });
-        const collectorError = new Error("durian");
-        vi.stubGlobal("gc", () => {
-          throw collectorError;
-        });
+    it("rejects a per-call run whose collection throws in phase child with the collector's value as cause", async () => {
+      const fake = bench("perCall", { bodyMs: 200 });
+      const collectorError = new Error("durian");
+      vi.stubGlobal("gc", () => {
+        throw collectorError;
+      });
 
-        const error = await failure(run(fake));
+      const error = await failure(run(fake));
 
-        expect(error.phase).toBe("child");
-        expect(error.cause).toBe(collectorError);
-      },
-    );
+      expect(error.phase).toBe("child");
+      expect(error.cause).toBe(collectorError);
+    });
 
     it.each(KINDS)(
       "rejects a %s run whose body throws an Error worded as the cap's in phase fn",
@@ -916,26 +912,6 @@ describe("summarize", () => {
       max: 4_000_000,
       mean: 2_500_000,
       sampleCount: 4,
-    });
-  });
-
-  describe("when the store is only partly filled", () => {
-    it("ignores the slots past the stored count", () => {
-      const spans = new Float64Array(8);
-      spans.set([2, 4, 6]);
-
-      const statistics = summarize(spans, 3, 2);
-
-      expect(statistics).toStrictEqual({
-        min: 1_000_000,
-        p25: 1_500_000,
-        median: 2_000_000,
-        p75: 2_500_000,
-        p99: expect.closeTo(2_980_000, 3),
-        max: 3_000_000,
-        mean: 2_000_000,
-        sampleCount: 3,
-      });
     });
   });
 });

@@ -393,7 +393,7 @@ describe("main", () => {
       });
     });
 
-    it("prints a progress line on stderr as each child starts, naming its file or its runtime and case", async () => {
+    it("prints a progress line on stderr as each case's child starts, naming its runtime and case", async () => {
       const dir = workspace();
 
       const { stderr } = await command(dir, [
@@ -403,16 +403,14 @@ describe("main", () => {
         "parse.bench.ts",
       ]);
 
-      const lines = linesOf(stderr);
-      expect({ listing: lines.slice(0, -4), measuring: lines.slice(-4) }).toStrictEqual({
-        listing: expect.arrayContaining([naming("sort.bench.ts"), naming("parse.bench.ts")]),
-        measuring: expect.arrayContaining([
+      expect(linesOf(stderr)).toStrictEqual(
+        expect.arrayContaining([
           naming("bun", "sort/fast"),
           naming("bun", "parse/fast"),
           naming("node", "sort/fast"),
           naming("node", "parse/fast"),
         ]),
-      });
+      );
     });
   });
 

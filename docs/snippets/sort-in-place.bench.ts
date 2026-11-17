@@ -1,7 +1,9 @@
 import { bench } from "repset";
 
+const size = 1000;
+
 bench("sort/in-place", {
-  setup: () => Array.from({ length: 1000 }, (_, index) => (index * 7919) % 1000),
+  setup: () => Array.from({ length: size }, (_, index) => (index * 7919) % size),
   // oxlint-disable-next-line unicorn/no-array-sort -- the in-place sort is what this case times
   fn: (values) => values.sort((a, b) => a - b),
   setupPerCall: true,

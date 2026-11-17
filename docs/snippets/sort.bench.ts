@@ -1,5 +1,6 @@
 import { bench } from "repset";
 
-const input = Array.from({ length: 1000 }, (_, index) => (index * 7919) % 1000);
+const size = 1000;
+const shuffled = Array.from({ length: size }, (_, index) => (index * 7919) % size);
 
-bench("sort/copy", () => input.toSorted((a, b) => a - b));
+bench("sort/copy", () => shuffled.toSorted((a, b) => a - b));

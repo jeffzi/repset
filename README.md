@@ -44,9 +44,10 @@ function returns, which keeps the engine from deleting work whose result nothing
 // benchmarks/sort.bench.ts
 import { bench } from "repset";
 
-const input = Array.from({ length: 1000 }, (_, index) => (index * 7919) % 1000);
+const size = 1000;
+const shuffled = Array.from({ length: size }, (_, index) => (index * 7919) % size);
 
-bench("sort/copy", () => input.toSorted((a, b) => a - b));
+bench("sort/copy", () => shuffled.toSorted((a, b) => a - b));
 ```
 
 <!-- /docs -->
@@ -105,8 +106,10 @@ then times `fn` alone.
 // benchmarks/sort-in-place.bench.ts
 import { bench } from "repset";
 
+const size = 1000;
+
 bench("sort/in-place", {
-  setup: () => Array.from({ length: 1000 }, (_, index) => (index * 7919) % 1000),
+  setup: () => Array.from({ length: size }, (_, index) => (index * 7919) % size),
   fn: (values) => values.sort((a, b) => a - b),
   setupPerCall: true,
 });

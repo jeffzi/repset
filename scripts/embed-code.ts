@@ -20,8 +20,11 @@ type ProcessFile = (options: Record<string, unknown>) => Promise<unknown>;
 
 const FENCE = "```";
 
-/** A line holding nothing but an oxlint directive comment, which readers of the docs do not need. */
-const OXLINT_DIRECTIVE = /^\s*\/\/\s*oxlint-(?:disable|enable)\b/u;
+/**
+ * A line holding nothing but an oxlint or fallow directive comment: it is addressed to this repo's
+ * checkers, and readers of the docs do not need it.
+ */
+const CHECKER_DIRECTIVE = /^\s*\/\/\s*(?:oxlint-(?:disable|enable)|fallow-ignore-)/u;
 
 const RELATIVE_SRC = /^\.\.?\//u;
 
@@ -62,7 +65,7 @@ function embed({ options, srcPath }: TransformInput): string {
   const shown = code
     .replace(/\n$/u, "")
     .split("\n")
-    .filter((line) => !OXLINT_DIRECTIVE.test(line));
+    .filter((line) => !CHECKER_DIRECTIVE.test(line));
   if (typeof header === "string") shown.unshift(header);
   return [`${FENCE}ts`, ...shown, FENCE].join("\n");
 }
@@ -84,7 +87,7 @@ async function embedFile(processFile: ProcessFile, file: string, content: string
 
 /**
  * Rewrite each `CODE` block in the given markdown files to a `ts` fence holding its source file,
- * without the lines that hold only an oxlint directive, under the block's `header` option if any.
+ * without the lines that hold only an oxlint or fallow directive, under the block's `header` option if any.
  * Markers other than `CODE` are left as they are. No file is written until every file has been
  * embedded.
  *

@@ -12,11 +12,11 @@ this file. It is gitignored for personal, machine-specific preferences and never
 - `task install` — install the pinned tools, the npm dependencies and the git hooks
 - `task test` — build `dist/`, then run the tests with coverage; coverage thresholds fail the run.
   Arguments after `--` go to Vitest, which then runs without coverage.
-- `task check` — every check; run before committing. Fixing steps rewrite files in place. The types
-  step builds `dist/` before it type-checks. The quality step refuses a coverage report older than
-  `src/`, `tests/` or `vitest.config.ts`: run `task test` first. `ONLY=<names>` runs some steps;
-  files after `--` narrow them. Security candidates never fail the run: verify each before reporting
-  it.
+- `task check` — every check; run before committing. Fixing steps rewrite files in place; the first
+  re-embeds the docs' code from its files (`docs/snippets/`). The types step builds `dist/` before
+  it type-checks. The quality step refuses a coverage report older than `src/`, `tests/` or
+  `vitest.config.ts`: run `task test` first. `ONLY=<names>` runs some steps; files after `--` narrow
+  them. Security candidates never fail the run: verify each before reporting it.
 - `task fix` — auto-fix, then delete unused exports, dependencies and enum members. Review the diff.
 - `task build` — compile `src/` to `dist/`
 - `task check-package` — pack the package, install it in an empty app, import every entry and run

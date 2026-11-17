@@ -63,10 +63,11 @@ describe("embedCode", () => {
       );
     });
 
-    it("omits lines holding only an oxlint-disable or oxlint-enable comment", async () => {
+    it("omits lines holding only an oxlint or fallow-ignore directive comment", async () => {
       const dir = createProject({
         "x.ts": [
           "// oxlint-disable no-console",
+          "// fallow-ignore-next-line code-duplication -- a reason",
           "function log(): void {",
           "  // oxlint-disable-next-line no-console",
           "  console.log(1); // oxlint-disable-line no-console",

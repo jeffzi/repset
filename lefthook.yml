@@ -4,33 +4,37 @@ lefthook: mise exec -- lefthook
 
 pre-commit:
   commands:
+    docs:
+      priority: 1
+      run: mise exec -- task check ONLY=docs -- {staged_files}
+      stage_fixed: true
     lint:
       priority: 1
       run: mise exec -- task check ONLY=lint -- {staged_files}
       stage_fixed: true
     md:
-      priority: 1
+      priority: 2
       run: mise exec -- task check ONLY=md -- {staged_files}
       stage_fixed: true
     fmt:
-      priority: 2
+      priority: 3
       run: mise exec -- task check ONLY=fmt -- {staged_files}
       stage_fixed: true
     links:
-      priority: 2
+      priority: 3
       run: mise exec -- task check ONLY=links -- {staged_files}
     types:
-      priority: 3
+      priority: 4
       glob: "**/*.{ts,tsx,mts,cts}"
       run: mise exec -- task check ONLY=types
     spelling:
-      priority: 3
+      priority: 4
       run: mise exec -- task check ONLY=spelling -- {staged_files}
     actions:
-      priority: 3
+      priority: 4
       run: mise exec -- task check ONLY=actions -- {staged_files}
     secrets:
-      priority: 4
+      priority: 5
       run: mise exec -- task check ONLY=secrets
 
 commit-msg:

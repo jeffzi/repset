@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 
 /** The `tsx` loader as a URL, which `--import` resolves from any working directory. */
-export const TSX = import.meta.resolve("tsx");
+const TSX = import.meta.resolve("tsx");
 
 /** How a started command ended: its exit code, `null` when a signal ended it, and what it printed. */
 export interface Ended {

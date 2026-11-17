@@ -1,6 +1,5 @@
-import { readdirSync, realpathSync, statSync } from "node:fs";
+import { readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
-import { fileURLToPath } from "node:url";
 
 const COVERAGE_REPORT = "coverage/coverage-final.json";
 const VITEST_CONFIG = "vitest.config.ts";
@@ -9,27 +8,30 @@ function isSourceFile(name: string): boolean {
   return name.endsWith(".ts") && !name.endsWith(".d.ts");
 }
 
-function exists(path: string): boolean {
-  return statSync(path, { throwIfNoEntry: false }) !== undefined;
+function isAnyFile(): boolean {
+  return true;
 }
 
 /**
  * @param dir - Root to walk.
- * @returns `dir`, every directory below it, and every `.ts` source; directories count because
- * deleting or renaming a file only bumps its directory's mtime.
+ * @param isInput - Whether a regular file, given its name, counts as an input.
+ * @returns `dir`, every directory below it, and every regular file `isInput` accepts; directories
+ * count because deleting or renaming a file only bumps its directory's mtime.
+ * @throws The filesystem error from `readdirSync` when `dir` is missing or unreadable.
  */
-function listInputs(dir: string): string[] {
+function listInputs(dir: string, isInput: (name: string) => boolean): string[] {
   const entries = readdirSync(dir, { recursive: true, withFileTypes: true })
-    .filter((entry) => entry.isDirectory() || (entry.isFile() && isSourceFile(entry.name)))
+    .filter((entry) => entry.isDirectory() || (entry.isFile() && isInput(entry.name)))
     .map((entry) => join(entry.parentPath, entry.name));
   return [dir, ...entries];
 }
 
 /**
- * Fail when `src/`, `tests/`, a directory or `.ts` file below them, or `vitest.config.ts` is
- * newer than the coverage report. A missing report passes.
+ * Fail when `src/`, `tests/`, a directory below them, a `.ts` source under `src/`, any regular
+ * file under `tests/` (fixtures included), or `vitest.config.ts` is newer than the coverage
+ * report. A missing report passes.
  *
- * @param projectRoot - Directory holding `src/` and `coverage/`.
+ * @param projectRoot - Directory holding `src/`, `tests/`, `vitest.config.ts` and `coverage/`.
  * @throws Error naming each stale input, or the filesystem error.
  */
 export function checkCoverageFresh(projectRoot: string): void {
@@ -38,12 +40,10 @@ export function checkCoverageFresh(projectRoot: string): void {
     return;
   }
 
-  const testsDir = join(projectRoot, "tests");
-  const vitestConfig = join(projectRoot, VITEST_CONFIG);
   const inputs = [
-    ...listInputs(join(projectRoot, "src")),
-    ...(exists(testsDir) ? listInputs(testsDir) : []),
-    ...(exists(vitestConfig) ? [vitestConfig] : []),
+    ...listInputs(join(projectRoot, "src"), isSourceFile),
+    ...listInputs(join(projectRoot, "tests"), isAnyFile),
+    join(projectRoot, VITEST_CONFIG),
   ];
   const stale = inputs
     .filter((path) => statSync(path).mtimeMs > coverage.mtimeMs)
@@ -57,11 +57,6 @@ export function checkCoverageFresh(projectRoot: string): void {
   }
 }
 
-const entry = process.argv[1];
-if (
-  entry !== undefined &&
-  exists(entry) &&
-  realpathSync(entry) === fileURLToPath(import.meta.url)
-) {
+if (import.meta.main) {
   checkCoverageFresh(process.cwd());
 }

@@ -17,7 +17,7 @@ runs:
       id: min-version
       shell: bash
       run: sed -n 's/^min_version = "\(.*\)"$/version=\1/p' mise.toml >>"$GITHUB_OUTPUT"
-    - uses: jdx/mise-action@6612f0ef07ed2a736cd1e00a94a065522dd41195 # v5.2.5
+    - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
       with:
         version: ${{ steps.min-version.outputs.version }}
         install_args: ${{ inputs.install_args }}

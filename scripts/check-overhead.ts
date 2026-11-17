@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { SamplingReport } from "../src/child.js";
-import { findRuntime } from "../src/children.js";
+import { childRuntimeFlags, findRuntime } from "../src/children.js";
 import { CALLS_PER_SAMPLE } from "../src/command.js";
 import { RUNTIMES, type Runtime } from "../src/measure/runtime.js";
 import { MIN_RESOLUTIONS_PER_SAMPLE } from "../src/measure/sampler.js";
@@ -285,12 +285,6 @@ function readRepset(scenario: Scenario): RepsetReading {
   }
 }
 
-/** What each runtime's baseline child takes before its script: Node loads tsx to run TypeScript. */
-const RUNTIME_ARGS: Readonly<Record<Runtime, readonly string[]>> = {
-  node: ["--import", "tsx"],
-  bun: [],
-};
-
 /** The executable each runtime's children start on. */
 type Executables = Readonly<Record<Runtime, string>>;
 
@@ -314,8 +308,9 @@ async function findExecutables(): Promise<Executables> {
  * @param executables - Each runtime's executable.
  * @param scenario - The scenario to read.
  * @param counts - The calls per sample and sample count to run at.
- * @returns The scenario's runtime executable, and the arguments: the runtime's own, the baseline
- *   child, the body, then the two counts.
+ * @returns The scenario's runtime executable, and the arguments: the flags repset's own children
+ *   start with (Node loading tsx to run TypeScript), the baseline child, the body, then the two
+ *   counts.
  */
 function baselineCommand(
   executables: Executables,
@@ -325,8 +320,7 @@ function baselineCommand(
   return {
     executable: executables[scenario.runtime],
     args: [
-      ...RUNTIME_ARGS[scenario.runtime],
-      "--expose-gc",
+      ...childRuntimeFlags(scenario.runtime, "tsx"),
       BASELINE_CHILD,
       scenario.body,
       String(counts.callsPerSample),

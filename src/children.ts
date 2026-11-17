@@ -338,6 +338,18 @@ export async function startChild(
   });
 }
 
+/**
+ * Builds the flags a child's runtime starts with, before the script it runs.
+ *
+ * @param runtime - The runtime the child starts on.
+ * @param nodeImport - The module a Node child imports first, or `undefined` for none.
+ * @returns `--expose-gc`, then `--import <nodeImport>` on Node when a module is given.
+ */
+export function childRuntimeFlags(runtime: Runtime, nodeImport: string | undefined): string[] {
+  const imports = runtime === "node" && nodeImport !== undefined ? ["--import", nodeImport] : [];
+  return ["--expose-gc", ...imports];
+}
+
 /** A child process just started, and what it prints and writes as it runs. */
 interface StartedChild {
   readonly child: ChildProcess;
@@ -361,11 +373,9 @@ function spawnChild(
   options: Pick<StartOptions, "nodeImport" | "entry">,
 ): StartedChild {
   const { nodeImport, entry = CHILD_ENTRY } = options;
-  const imports =
-    runtime.runtime === "node" && nodeImport !== undefined ? ["--import", nodeImport] : [];
   const child = spawn(
     runtime.executable,
-    ["--expose-gc", ...imports, entry, JSON.stringify(request)],
+    [...childRuntimeFlags(runtime.runtime, nodeImport), entry, JSON.stringify(request)],
     { stdio: ["ignore", "pipe", "pipe", "pipe"], windowsHide: true },
   );
   const tail = new OutputTail();

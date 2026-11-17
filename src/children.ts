@@ -244,7 +244,7 @@ class OutputTail {
     const kept = Buffer.from(this.#chunks.join(""), "utf8");
     let start = Math.max(0, kept.length - OUTPUT_TAIL_BYTES);
     // A UTF-8 continuation byte is 0b10xxxxxx; the cut moves past the rest of a split character.
-    while (start > 0 && start < kept.length && ((kept[start] ?? 0) & 0xc0) === 0x80) start += 1;
+    while (start > 0 && ((kept[start] ?? 0) & 0xc0) === 0x80) start += 1;
     return kept.toString("utf8", start);
   }
 

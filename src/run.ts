@@ -186,6 +186,11 @@ function startOptions(options: ResolvedOptions, signal: AbortSignal | undefined)
   return { timeout: options.timeout, nodeImport: options.nodeImport?.resolved, signal };
 }
 
+/** `path` relative to `cwd` with `/` separators, as the report and the progress lines show it. */
+export function shownPath(cwd: string, path: string): string {
+  return relative(cwd, path).replaceAll(sep, "/");
+}
+
 /**
  * Lists the cases of `files`, one listing child per file on `runtime`, in file order.
  *
@@ -206,7 +211,7 @@ async function listFiles(
   const cases: SelectedCase[] = [];
   for (const path of files) {
     if (signal?.aborted === true) return undefined;
-    const file = relative(cwd, path).replaceAll(sep, "/");
+    const file = shownPath(cwd, path);
     const outcome = await startChild(runtime, { mode: "list", file: path }, childOptions);
     if (outcome.status === "stopped") return undefined;
     if (outcome.status === "failed") throw new ListingError(file, outcome.error, outcome.output);

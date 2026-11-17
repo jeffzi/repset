@@ -295,7 +295,7 @@ const ROOT = fileURLToPath(new URL("../", import.meta.url));
 
 const CHILD = fileURLToPath(new URL("../src/child.ts", import.meta.url));
 
-/** A runtime and tsx starting, then a short measurement, on a slow CI runner. */
+/** A runtime and tsx starting, then a list or once request, on a slow CI runner. */
 const SPAWN_TIMEOUT_MS = 60_000;
 
 /** How long a child may run before it is killed, so one that never exits fails instead of hanging. */

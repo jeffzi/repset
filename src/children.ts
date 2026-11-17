@@ -248,7 +248,15 @@ class OutputTail {
     return kept.toString("utf8", start);
   }
 
-  /** Keeps `text`, dropping the oldest chunks that leave the tail. */
+  /**
+   * Keeps what a stream decoded, dropping the oldest chunks that leave the tail.
+   *
+   * Dropping chunks only bounds the memory a loud child holds: {@link OutputTail.text} cuts to the
+   * last {@link OUTPUT_TAIL_BYTES} bytes whether or not any chunk was dropped, so no output shows
+   * the drop.
+   *
+   * @param text - What the stream decoded since the last call.
+   */
   add(text: string): void {
     if (text === "") return;
     this.#chunks.push(text);

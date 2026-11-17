@@ -643,7 +643,7 @@ interface PerCallRunOptions extends RunOptions {
  *
  * @param fake - The harness whose clock and lifecycle the sampler runs.
  * @param options - The timer resolution; `minTime` and `minSamples`, 1000 ms and 64 unless given;
- *   and `callsPerSample` and `inFlight`, forwarded only when set.
+ *   `callsPerSample`, forwarded only when set; and `inFlight`, a fresh holder unless given.
  * @returns What the sampler returned.
  * @throws Whatever the sampler throws.
  */
@@ -656,7 +656,7 @@ function runPerCall(fake: PerCallHarness, options: PerCallRunOptions): SamplerRe
     teardown: fake.teardown,
     collect: fake.collect,
     ...samplingOptions(options),
-    ...(options.inFlight === undefined ? {} : { inFlight: options.inFlight }),
+    inFlight: options.inFlight ?? { held: false, state: undefined },
   });
 }
 

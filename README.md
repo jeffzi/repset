@@ -44,8 +44,10 @@ function returns, which keeps the engine from deleting work whose result nothing
 // benchmarks/sort.bench.ts
 import { bench } from "repset";
 
-const size = 1000;
-const shuffled = Array.from({ length: size }, (_, index) => (index * 7919) % size);
+const SIZE = 1000;
+// Prime, so the stride visits every value once.
+const STRIDE = 7919;
+const shuffled = Array.from({ length: SIZE }, (_, index) => (index * STRIDE) % SIZE);
 
 bench("sort/copy", () => shuffled.toSorted((a, b) => a - b));
 ```
@@ -106,10 +108,12 @@ then times `fn` alone.
 // benchmarks/sort-in-place.bench.ts
 import { bench } from "repset";
 
-const size = 1000;
+const SIZE = 1000;
+// Prime, so the stride visits every value once.
+const STRIDE = 7919;
 
 bench("sort/in-place", {
-  setup: () => Array.from({ length: size }, (_, index) => (index * 7919) % size),
+  setup: () => Array.from({ length: SIZE }, (_, index) => (index * STRIDE) % SIZE),
   fn: (values) => values.sort((a, b) => a - b),
   setupPerCall: true,
 });

@@ -46,6 +46,9 @@ const SHORT_TIMEOUT_MS = 1000;
 /** How long past its `timeout` or its stop a killed child's call may take to return. */
 const RETURN_MARGIN_MS = 2000;
 
+/** How a runtime lookup is bounded when its probe must not be killed. */
+const LOOKUP = { timeout: KILL_AFTER_MS } as const;
+
 const NODE: FoundRuntime = {
   runtime: "node",
   executable: process.execPath,
@@ -79,8 +82,8 @@ function failureLine(error: object): string {
   return `${JSON.stringify({ status: "failed", error })}\n`;
 }
 
-/** Runs `start` and returns its outcome with the milliseconds it took. */
-async function timed(start: () => Promise<Outcome>): Promise<[Outcome, number]> {
+/** Runs `start` and returns what it resolved to with the milliseconds it took. */
+async function timed<T>(start: () => Promise<T>): Promise<[T, number]> {
   const started = performance.now();
   const outcome = await start();
   return [outcome, performance.now() - started];
@@ -110,12 +113,12 @@ const MEASURED_PEAR_LINE = JSON.stringify({
   gc: null,
 });
 
-describe("findRuntime", () => {
+describe("findRuntime", { timeout: SPAWN_TIMEOUT_MS }, () => {
   describe("when the runtime is the one the parent runs on", () => {
     it("returns the parent's own executable and version, whatever PATH holds", async () => {
       vi.stubEnv("PATH", FIXTURES);
 
-      const found = await findRuntime("node");
+      const found = await findRuntime("node", LOOKUP);
 
       expect(found).toStrictEqual(NODE);
     });
@@ -135,7 +138,7 @@ describe("findRuntime", () => {
       it("returns that executable and its version without a leading v", async () => {
         vi.stubEnv("PATH", dir.path);
 
-        const found = await findRuntime("bun");
+        const found = await findRuntime("bun", LOOKUP);
 
         expect(found).toStrictEqual({
           runtime: "bun",
@@ -150,7 +153,7 @@ describe("findRuntime", () => {
           // Node refuses an unknown option in NODE_OPTIONS with exit status 9, before `--version`.
           vi.stubEnv("NODE_OPTIONS", "--banana");
 
-          const found = findRuntime("bun");
+          const found = findRuntime("bun", LOOKUP);
 
           await expectConfigError(found, [bun, /\b9\b/]);
         });
@@ -160,7 +163,7 @@ describe("findRuntime", () => {
           async () => {
             vi.stubEnv("PATH", fixture("bin/killed"));
 
-            const found = findRuntime("bun");
+            const found = findRuntime("bun", LOOKUP);
 
             await expectConfigError(found, [fixture("bin/killed/bun"), /SIGKILL/]);
           },
@@ -171,18 +174,54 @@ describe("findRuntime", () => {
           async () => {
             vi.stubEnv("PATH", fixture("bin/silent"));
 
-            const found = findRuntime("bun");
+            const found = findRuntime("bun", LOOKUP);
 
             await expectConfigError(found, [fixture("bin/silent/bun")]);
           },
         );
+
+        it.runIf(POSIX)(
+          "throws a ConfigError naming the executable and the timeout when its probe runs past it",
+          async () => {
+            vi.stubEnv("PATH", fixture("bin/hang"));
+
+            const found = findRuntime("bun", { timeout: SHORT_TIMEOUT_MS });
+
+            await expectConfigError(found, [
+              fixture("bin/hang/bun"),
+              new RegExp(`\\b${String(SHORT_TIMEOUT_MS)}\\b`, "u"),
+            ]);
+          },
+        );
+
+        it.runIf(POSIX)(
+          "throws a ConfigError naming the executable when its probe cannot be started",
+          async () => {
+            vi.stubEnv("PATH", fixture("bin/no-interpreter"));
+
+            const found = findRuntime("bun", LOOKUP);
+
+            await expectConfigError(found, [fixture("bin/no-interpreter/bun")]);
+          },
+        );
+      });
+    });
+
+    describe("when its probe exits while a process it started holds its stdout", () => {
+      it.runIf(POSIX)("returns the printed version in time", async () => {
+        vi.stubEnv("PATH", fixture("bin/linger"));
+
+        const [found, elapsed] = await timed(async () => findRuntime("bun", LOOKUP));
+
+        expect(found.version).toBe("1.3.2");
+        expect(elapsed).toBeLessThan(RETURN_MARGIN_MS);
       });
     });
 
     it("throws a ConfigError naming the runtime when PATH holds no executable for it", async () => {
       vi.stubEnv("PATH", FIXTURES);
 
-      const found = findRuntime("bun");
+      const found = findRuntime("bun", LOOKUP);
 
       await expectConfigError(found, [/\bbun\b/]);
     });
@@ -190,7 +229,7 @@ describe("findRuntime", () => {
     it("throws a ConfigError naming the runtime when PATH is unset", async () => {
       vi.stubEnv("PATH", undefined);
 
-      const found = findRuntime("bun");
+      const found = findRuntime("bun", LOOKUP);
 
       await expectConfigError(found, [/\bbun\b/]);
     });
@@ -210,7 +249,7 @@ describe("findRuntime", () => {
         // A copy found in the working directory would then fail its probe instead of resolving.
         vi.stubEnv("NODE_OPTIONS", "--banana");
 
-        const found = findRuntime("bun");
+        const found = findRuntime("bun", LOOKUP);
 
         await expectConfigError(found, [/\bbun\b/]);
         // Every error of a probe that ran names its `--version`; one found on no PATH entry does not.
@@ -508,7 +547,7 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
   describe.each(runtimesHere())("with the child entry on $runtime", ({ runtime, here }) => {
     describe.runIf(here)("when the request is valid", () => {
       it("returns the measurement of one case", async () => {
-        const found = await findRuntime(runtime);
+        const found = await findRuntime(runtime, LOOKUP);
 
         const outcome = await startChild(
           found,
@@ -549,7 +588,7 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
     const LIST = { mode: "list", file: benchFile("three-cases.ts") } as const;
 
     it.runIf(requiresRealBunHere())("runs a Bun child as it does without one", async () => {
-      const bun = await findRuntime("bun");
+      const bun = await findRuntime("bun", LOOKUP);
 
       const outcome = await startChild(bun, LIST, { timeout: KILL_AFTER_MS, nodeImport: "banana" });
 

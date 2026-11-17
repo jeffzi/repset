@@ -18,6 +18,7 @@ import type { SamplingReport } from "../src/child.js";
 import { childRuntimeFlags, findRuntime } from "../src/children.js";
 import { CALLS_PER_SAMPLE } from "../src/command.js";
 import { RUNTIMES, type Runtime } from "../src/measure/runtime.js";
+import { DEFAULT_TIMEOUT } from "../src/options.js";
 import type { Report } from "../src/report.js";
 import { isRecord, thrownMessage } from "../src/utils.js";
 import { BODY_NAMES, type BodyName } from "./check-overhead/bodies.js";
@@ -293,11 +294,12 @@ type Executables = Readonly<Record<Runtime, string>>;
  *
  * @returns Each runtime's executable.
  * @throws The `ConfigError` `findRuntime` throws when a runtime's executable is not on `PATH` or
- *   its version probe fails.
+ *   its version probe fails or runs past the default timeout a repset run gets.
  * @throws Error When `process.versions` holds no version for the runtime this process runs on.
  */
 async function findExecutables(): Promise<Executables> {
-  const [node, bun] = await Promise.all([findRuntime("node"), findRuntime("bun")]);
+  const lookup = { timeout: DEFAULT_TIMEOUT };
+  const [node, bun] = await Promise.all([findRuntime("node", lookup), findRuntime("bun", lookup)]);
   return { node: node.executable, bun: bun.executable };
 }
 

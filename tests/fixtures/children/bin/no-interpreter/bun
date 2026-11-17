@@ -1,0 +1,2 @@
+#!/missing/interpreter
+# Names an interpreter that does not exist, so starting it fails before it runs.

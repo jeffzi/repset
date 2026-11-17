@@ -111,7 +111,8 @@ const MAX_TIMEOUT = 2_147_483_647;
 
 const DEFAULT_INCLUDE = ["**/*.bench.{ts,mts,js,mjs}"];
 const DEFAULT_RUNTIMES: readonly Runtime[] = ["node"];
-const DEFAULT_TIMEOUT = 600_000;
+/** How many milliseconds a child may run when no option sets `timeout`. */
+export const DEFAULT_TIMEOUT = 600_000;
 
 /**
  * Whether `path` names a regular file; a missing path or a directory is not an error.

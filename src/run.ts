@@ -42,7 +42,7 @@ export interface SelectedCase {
   readonly setupPerCall: boolean;
 }
 
-/** The runtimes and cases a run measures, or a stop that came during listing. */
+/** The runtimes and cases a run measures, or a stop that came during runtime discovery or listing. */
 export type Selection =
   | {
       readonly status: "selected";
@@ -66,7 +66,7 @@ export interface SelectInput extends ChildFunctionOverrides {
   /** The positional files, relative to `cwd`; when there are some, they replace `include`. */
   readonly files: readonly string[];
   readonly cwd: string;
-  /** Ends the selection as stopped when it fires during listing. */
+  /** Ends the selection as stopped when it fires during runtime discovery or listing. */
   readonly signal?: AbortSignal | undefined;
 }
 
@@ -229,16 +229,21 @@ async function listFiles(
  * @param input - The options, the positional files, the working directory, the stop signal, and
  *   the functions that look a runtime up and start a child, the real ones by default.
  * @returns The runtimes with their versions and the selected cases, or a stop when the signal fired
- *   during listing.
+ *   during runtime discovery or listing.
  * @throws {@link ConfigError} When an argument matches no file, a runtime cannot be found, a
  *   listing child fails (a {@link ListingError}), two cases share an id, or no case is selected.
  * @throws {@link Error} What starting a listing child throws, and the plain `Error` that finding the
  *   runtime this process runs on throws when `process.versions` holds no version for it.
  */
 export async function selectCases(input: SelectInput): Promise<Selection> {
-  const { options, files, cwd, findRuntime = realFindRuntime } = input;
+  const { options, files, cwd, signal, findRuntime = realFindRuntime } = input;
   const found = benchmarkFiles(options, files, cwd);
-  const runtimes = await Promise.all(options.runtimes.map(async (runtime) => findRuntime(runtime)));
+  const lookup = { timeout: options.timeout, signal };
+  const looked = await Promise.all(
+    options.runtimes.map(async (runtime) => findRuntime(runtime, lookup)),
+  );
+  const runtimes = looked.filter((runtime) => runtime !== undefined);
+  if (runtimes.length < looked.length) return { status: "stopped" };
   const [first] = runtimes;
   if (first === undefined) throw new ConfigError("runtimes must name at least one runtime");
 

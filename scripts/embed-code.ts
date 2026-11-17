@@ -8,7 +8,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 
-import { isRecord } from "../src/utils.js";
+import { property } from "../src/utils.js";
 
 /** The fields of a markdown-magic transform's argument this script reads. */
 interface TransformInput {
@@ -35,32 +35,35 @@ function isProcessFile(value: unknown): value is ProcessFile {
 /**
  * markdown-magic's `processFile` runs only the transforms it is given. Its `markdownMagic` merges
  * them over its built-ins, which would keep `remote` fetching URLs and `TOC` rewriting its block.
+ *
+ * @returns markdown-magic's `processFile`.
+ * @throws Error when markdown-magic exports no `processFile` function.
  */
 function loadProcessFile(): ProcessFile {
   // markdown-magic is CommonJS and ships no types, so it is loaded as an untyped value and narrowed.
   const module: unknown = createRequire(import.meta.url)("markdown-magic");
-  const processFile = isRecord(module) ? module["processFile"] : undefined;
+  const processFile = property(module, "processFile");
   if (!isProcessFile(processFile)) {
     throw new Error("markdown-magic exports no processFile function");
   }
   return processFile;
 }
 
-function embed({ options, srcPath }: TransformInput): string {
-  const fields: Record<string, unknown> = isRecord(options) ? options : {};
-  const { src, header } = fields;
-  if (typeof srcPath !== "string" || typeof src !== "string") {
-    throw new Error(`a CODE block in ${String(srcPath)} has no src option`);
+function embed({ options, srcPath: markdownPath }: TransformInput): string {
+  const src = property(options, "src");
+  const header = property(options, "header");
+  if (typeof markdownPath !== "string" || typeof src !== "string") {
+    throw new Error(`a CODE block in ${String(markdownPath)} has no src option`);
   }
   if (!RELATIVE_SRC.test(src)) {
-    throw new Error(`${srcPath}: CODE src "${src}" must start with ./ or ../`);
+    throw new Error(`${markdownPath}: CODE src "${src}" must start with ./ or ../`);
   }
-  const path = resolve(dirname(srcPath), src);
+  const codePath = resolve(dirname(markdownPath), src);
   let code: string;
   try {
-    code = readFileSync(path, "utf8");
+    code = readFileSync(codePath, "utf8");
   } catch (error) {
-    throw new Error(`${srcPath}: cannot read CODE src ${path}`, { cause: error });
+    throw new Error(`${markdownPath}: cannot read CODE src ${codePath}`, { cause: error });
   }
   const shown = code
     .replace(/\n$/u, "")
@@ -71,14 +74,14 @@ function embed({ options, srcPath }: TransformInput): string {
 }
 
 async function embedFile(processFile: ProcessFile, file: string, content: string): Promise<string> {
-  const result = await processFile({
+  const processed = await processFile({
     content,
     srcPath: file,
     open: "docs",
     close: "/docs",
     transforms: { CODE: embed },
   });
-  const updated = isRecord(result) ? result["updatedContents"] : undefined;
+  const updated = property(processed, "updatedContents");
   if (typeof updated !== "string") {
     throw new TypeError(`markdown-magic returned no updated contents for ${file}`);
   }

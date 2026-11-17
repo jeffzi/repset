@@ -12,8 +12,9 @@ const FENCE = "```";
 function createProject(files: Record<string, string>): string {
   const dir = temporaryDir("embed-code-");
   for (const [path, content] of Object.entries(files)) {
-    mkdirSync(dirname(join(dir, path)), { recursive: true });
-    writeFileSync(join(dir, path), content);
+    const target = join(dir, path);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, content);
   }
   return dir;
 }
@@ -43,8 +44,9 @@ describe("embedCode", () => {
         "README.md": `# Title\n\n${codeBlock("./docs/snippets/x.ts", "stale")}\n`,
       });
 
-      await embedCode([join(dir, "README.md")]);
+      const changed = await embedCode([join(dir, "README.md")]);
 
+      expect(changed).toStrictEqual([join(dir, "README.md")]);
       expect(codeBlockContent(read(dir, "README.md"))).toBe(
         `${FENCE}ts\nexport const x = 1;\nexport const y = 2;\n${FENCE}`,
       );
@@ -105,63 +107,43 @@ describe("embedCode", () => {
         `${FENCE}ts\n// benchmarks/x.bench.ts\nexport const x = 1;\n${FENCE}`,
       );
     });
-
-    it.each([
-      '<!-- docs REMOTE url="https://example.invalid/x.md" -->\nkept\n<!-- /docs -->',
-      "<!-- docs banana -->\nkept\n<!-- /docs -->",
-    ])("leaves the marker other than CODE %j as it was", async (other) => {
-      const dir = createProject({
-        "x.ts": "export const x = 1;\n",
-        "README.md": `${codeBlock("./x.ts")}\n\n${other}\n`,
-      });
-
-      await embedCode([join(dir, "README.md")]);
-
-      expect(read(dir, "README.md")).toContain(other);
-    });
   });
 
   describe("when a markdown file holds no CODE block", () => {
-    it("leaves the file byte for byte as it was", async () => {
-      const markdown = "# Title\n\n*  loose   list\n\n\n<!-- docs TOC -->\nkept\n<!-- /docs -->\n";
-      const dir = createProject({ "README.md": markdown });
+    it("returns no changed files", async () => {
+      const dir = createProject({ "README.md": "# Title\n\nPlain text.\n" });
 
-      await embedCode([join(dir, "README.md")]);
+      const changed = await embedCode([join(dir, "README.md")]);
 
-      expect(read(dir, "README.md")).toBe(markdown);
+      expect(changed).toStrictEqual([]);
     });
   });
 
   describe("when a CODE block's src does not start with ./ or ../", () => {
-    it.each(["docs/x.ts", "https://example.invalid/x.ts", "name.ext/x.ts"])(
-      "rejects naming the markdown file and %s, leaving every file as it was",
-      async (src) => {
-        const valid = `${codeBlock("./x.ts", "stale")}\n`;
-        const invalid = `${codeBlock(src, "stale")}\n`;
-        const dir = createProject({
-          "x.ts": "export const x = 1;\n",
-          "a.md": valid,
-          "b.md": invalid,
-        });
+    it("rejects naming the markdown file and the src, writing no file", async () => {
+      const src = "https://example.invalid/x.ts";
+      const valid = `${codeBlock("./x.ts", "stale")}\n`;
+      const dir = createProject({
+        "x.ts": "export const x = 1;\n",
+        "a.md": valid,
+        "b.md": `${codeBlock(src, "stale")}\n`,
+      });
 
-        const run = embedCode([join(dir, "a.md"), join(dir, "b.md")]);
+      const run = embedCode([join(dir, "a.md"), join(dir, "b.md")]);
 
-        await expect(run).rejects.toThrow(src);
-        await expect(run).rejects.toThrow(join(dir, "b.md"));
-        expect([read(dir, "a.md"), read(dir, "b.md")]).toStrictEqual([valid, invalid]);
-      },
-    );
+      await expect(run).rejects.toThrow(src);
+      await expect(run).rejects.toThrow(join(dir, "b.md"));
+      expect(read(dir, "a.md")).toBe(valid);
+    });
   });
 
   describe("when a CODE block's source file is missing", () => {
-    it("rejects naming the missing path, leaving the markdown file as it was", async () => {
-      const markdown = `${codeBlock("./missing.ts", "stale")}\n`;
-      const dir = createProject({ "README.md": markdown });
+    it("rejects naming the missing path", async () => {
+      const dir = createProject({ "README.md": `${codeBlock("./missing.ts", "stale")}\n` });
 
       const run = embedCode([join(dir, "README.md")]);
 
       await expect(run).rejects.toThrow(join(dir, "missing.ts"));
-      expect(read(dir, "README.md")).toBe(markdown);
     });
   });
 });

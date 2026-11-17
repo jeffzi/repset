@@ -86,20 +86,17 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Reads the message of a thrown value, without letting a conversion throw in place of the failure
- * it describes.
+ * Reads the message of a thrown value, without letting a read or a conversion throw in place of the
+ * failure it describes.
  *
  * @param value - The thrown value.
- * @returns The value's own `message` when it is an `Error`; otherwise `String(value)`, or
- *   `"a value with no string form"` when that conversion throws, as it does for a null-prototype
- *   object.
+ * @returns The value's own `message` when it is an `Error`; otherwise `String(value)`. Either is
+ *   `"a value with no string form"` when it throws, as the conversion does for a null-prototype
+ *   object and the read does for a `message` getter that throws.
  */
 export function thrownMessage(value: unknown): string {
-  if (value instanceof Error) {
-    return value.message;
-  }
   try {
-    return String(value);
+    return value instanceof Error ? value.message : String(value);
   } catch {
     return "a value with no string form";
   }

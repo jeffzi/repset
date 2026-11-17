@@ -79,4 +79,18 @@ describe("thrownMessage", () => {
       expect(message).not.toThrow();
     });
   });
+
+  describe("when the value is an Error whose message cannot be read", () => {
+    it("returns a string instead of throwing", () => {
+      const unreadable = Object.defineProperty(new Error("plum"), "message", {
+        get: () => {
+          throw new Error("kiwi");
+        },
+      });
+
+      const message = (): string => thrownMessage(unreadable);
+
+      expect(message).not.toThrow();
+    });
+  });
 });

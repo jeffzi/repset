@@ -108,10 +108,10 @@ export interface Measurement extends Statistics {
 }
 
 /**
- * Where a case failed: `setup`, `fn` or `teardown` threw, or its first call returned a thenable;
- * `optimized-away`, the body is too close to the empty body to tell apart;
- * `calibration`, a count passed the cap or a third timing attempt was discarded; `child`, the
- * runtime lacks what measuring needs.
+ * Where a case failed: `setup`, `fn` or `teardown` threw, or its first call returned a thenable or
+ * a value whose `then` property throws when read; `optimized-away`, the body is too close to the
+ * empty body to tell apart; `calibration`, a count passed the cap or a third timing attempt was
+ * discarded; `child`, the runtime lacks what measuring needs.
  */
 export type Phase = "setup" | "fn" | "teardown" | "optimized-away" | "calibration" | "child";
 
@@ -170,8 +170,8 @@ interface BodySampling extends Sampling, TimedMinimums {}
  *   and when the forced GC throws, with the collector's value as cause, after every state left
  *   alive is torn down.
  * @throws MeasureError in phase `setup`, `fn` or `teardown` when that callback's first call returns
- *   a thenable, after every state left alive is torn down; a per-call case's later calls are not
- *   checked.
+ *   a thenable, or a value whose `then` read throws, with the read's error as cause, after every
+ *   state left alive is torn down; a per-call case's later calls are not checked.
  * @throws MeasureError in phase `setup`, `fn` or `teardown` when that callback throws, with the
  *   thrown value unchanged as cause, after every state left alive is torn down; a teardown error
  *   during that cleanup is attached to the error as its `teardownError`, and a per-call state whose
@@ -376,14 +376,15 @@ function keep(): void {
  * @param use - Runs on the state once the body's first call has returned without a thenable.
  * @returns What `use` returned.
  * @throws MeasureError in phase `setup` when `setup` throws, before anything else runs.
- * @throws MeasureError in phase `setup` when `setup` returns a thenable, and in phase `fn` when the
- *   body throws or its first call returns a thenable, after teardown ran; a teardown error or
- *   thenable then is attached to the error as its `teardownError`.
+ * @throws MeasureError in phase `setup` when `setup` returns a thenable or a value whose `then` read
+ *   throws, and in phase `fn` when the body throws or its first call returns either, after teardown
+ *   ran; a teardown error, thenable or `then` read error then is attached to the error as its
+ *   `teardownError`.
  * @throws MeasureError in phase `calibration` when `use` throws a `CalibrationError`, in the phase
- *   of any `MeasureError` it throws, otherwise in phase `fn`, after teardown ran; a teardown error
- *   or thenable then is attached to the error as its `teardownError`.
- * @throws MeasureError in phase `teardown` when `teardown` throws or returns a thenable and the body
- *   succeeded.
+ *   of any `MeasureError` it throws, otherwise in phase `fn`, after teardown ran; a teardown error,
+ *   thenable or `then` read error then is attached to the error as its `teardownError`.
+ * @throws MeasureError in phase `teardown` when `teardown` throws, returns a thenable or returns a
+ *   value whose `then` read throws, and the body succeeded.
  */
 export function withCaseState<State, Result>(
   benchmark: Case<State>,
@@ -405,13 +406,8 @@ export function withCaseState<State, Result>(
   } catch (error) {
     throw failedIn("fn", error, tearDownCatching(teardown, state));
   }
-  let returned: unknown;
-  try {
-    returned = teardown(state);
-  } catch (error) {
-    throw new MeasureError("teardown", error);
-  }
-  requireSynchronous(returned, "teardown");
+  const teardownFailure = tearDownCatching(teardown, state);
+  if (teardownFailure !== null) throw teardownFailure;
   return result;
 }
 
@@ -426,14 +422,15 @@ export function withCaseState<State, Result>(
  *   run; the forced GC before each run records their start.
  * @returns What the body's sampler returned.
  * @throws MeasureError in phase `setup` when `setup` throws, before anything else runs.
- * @throws MeasureError in phase `setup` when `setup` returns a thenable, and in phase `fn` when the
- *   body throws or its first call returns a thenable, after teardown ran; a teardown error or
- *   thenable then is attached to the error as its `teardownError`.
+ * @throws MeasureError in phase `setup` when `setup` returns a thenable or a value whose `then` read
+ *   throws, and in phase `fn` when the body throws or its first call returns either, after teardown
+ *   ran; a teardown error, thenable or `then` read error then is attached to the error as its
+ *   `teardownError`.
  * @throws MeasureError in phase `calibration` when the sampler refuses a count or a fourth run, and in
- *   phase `child` when the forced GC throws, after teardown ran; a teardown error or thenable then
- *   is attached to the error as its `teardownError`.
- * @throws MeasureError in phase `teardown` when `teardown` throws or returns a thenable and the body
- *   succeeded.
+ *   phase `child` when the forced GC throws, after teardown ran; a teardown error, thenable or
+ *   `then` read error then is attached to the error as its `teardownError`.
+ * @throws MeasureError in phase `teardown` when `teardown` throws, returns a thenable or returns a
+ *   value whose `then` read throws, and the body succeeded.
  */
 function measureSharedState<State>(
   benchmark: Case<State>,
@@ -463,10 +460,11 @@ function measureSharedState<State>(
  * @param timing - Receives the end of the timed samples; the forced GC records their start.
  * @returns What the body's sampler returned.
  * @throws MeasureError in phase `setup`, `fn` or `teardown` when that callback throws or its first
- *   call returns a thenable, `calibration` when the sampler refuses a count, and `child` when the
- *   forced GC throws, after the state built and not torn down, if any, is torn down, save one whose
- *   teardown threw or returned a thenable; a teardown error or thenable during that cleanup is
- *   attached to the error as its `teardownError`.
+ *   call returns a thenable or a value whose `then` read throws, `calibration` when the sampler
+ *   refuses a count, and `child` when the forced GC throws, after the state built and not torn
+ *   down, if any, is torn down, save one whose teardown threw or returned either; a teardown error,
+ *   thenable or `then` read error during that cleanup is attached to the error as its
+ *   `teardownError`.
  */
 function measurePerCall<State>(
   benchmark: Case<State>,
@@ -546,7 +544,8 @@ type Callback = "setup" | "fn" | "teardown";
  *
  * @param returned - What the callback's call returned.
  * @param callback - The callback that returned it, which is also the phase it fails in.
- * @throws MeasureError in phase `callback` when `returned` has a callable `then`.
+ * @throws MeasureError in phase `callback` when `returned` has a callable `then`, or when reading
+ *   its `then` throws, with the read's error as cause.
  */
 function requireSynchronous(returned: unknown, callback: Callback): void {
   const failure = thenableFailure(returned, callback);
@@ -562,17 +561,21 @@ function requireSynchronous(returned: unknown, callback: Callback): void {
  *
  * @param returned - What the callback's call returned.
  * @param callback - The callback that returned it, which is also the phase it fails in.
- * @returns A `MeasureError` in phase `callback` when `returned` has a callable `then`; `null`
- *   otherwise.
+ * @returns A `MeasureError` in phase `callback` when `returned` has a callable `then`, or with the
+ *   read's error as cause when reading its `then` throws (a getter or a proxy trap); `null`
+ *   otherwise. It never throws, so a cleanup that calls it keeps the error already in flight.
  */
 function thenableFailure(returned: unknown, callback: Callback): MeasureError | null {
-  if (
-    (typeof returned !== "object" && typeof returned !== "function") ||
-    returned === null ||
-    typeof Reflect.get(returned, "then") !== "function"
-  ) {
+  if ((typeof returned !== "object" && typeof returned !== "function") || returned === null) {
     return null;
   }
+  let then: unknown;
+  try {
+    then = Reflect.get(returned, "then");
+  } catch (error) {
+    return new MeasureError(callback, error);
+  }
+  if (typeof then !== "function") return null;
   // A promise's resolve function never throws: a `then` getter or call that throws rejects the
   // new promise instead, so the thenable failure below is the one that surfaces.
   new Promise((resolve) => {
@@ -585,15 +588,16 @@ function thenableFailure(returned: unknown, callback: Callback): MeasureError | 
 }
 
 /**
- * Tears `state` down while an error is already in flight: that error wins, so the teardown's own
- * error is caught and handed back for the caller to attach, rather than replacing it, which a
- * `finally` would do.
+ * Tears `state` down and hands back its failure instead of throwing it. On the success path the
+ * caller throws that failure; while an error is already in flight, that error wins, so the caller
+ * attaches the teardown's failure to it rather than letting it replace the error, which a `finally`
+ * would do.
  *
  * @param teardown - The benchmark's teardown.
  * @param state - The state to release.
  * @returns A `MeasureError` in phase `teardown` with the teardown's thrown value as cause, whatever
- *   that value, `null` included, or for a teardown that returned a thenable; `null` when the
- *   teardown returned anything else.
+ *   that value, `null` included, or for a teardown that returned a thenable or a value whose `then`
+ *   read throws; `null` when the teardown returned anything else.
  */
 function tearDownCatching<State>(
   teardown: (state: State) => unknown,

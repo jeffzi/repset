@@ -1,12 +1,13 @@
 name: Security audit
 
+# Pull requests audit only what ships; the daily run audits everything.
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
   schedule:
-    - cron: "0 6 * * 1"
+    - cron: "0 6 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -17,8 +18,9 @@ permissions:
   contents: read
 
 jobs:
-  audit:
-    name: Known vulnerabilities
+  runtime:
+    name: Runtime dependencies
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -28,5 +30,20 @@ jobs:
       - uses: ./.github/actions/setup-mise # zizmor: ignore[self-repository] -- actionlint 1.7.12 rejects the $/ form
         with:
           install_args: --locked node
-      - name: Audit dependencies for known vulnerabilities
+      - name: Audit runtime dependencies for known vulnerabilities
+        run: npm audit --omit=dev
+
+  all:
+    name: All dependencies
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-mise # zizmor: ignore[self-repository] -- actionlint 1.7.12 rejects the $/ form
+        with:
+          install_args: --locked node
+      - name: Audit all dependencies for known vulnerabilities
         run: npm audit

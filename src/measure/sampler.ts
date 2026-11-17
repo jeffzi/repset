@@ -19,7 +19,7 @@
  */
 
 /** Every sample spans at least this many multiples of the timer resolution once warmup calibrates its count. */
-export const MIN_RESOLUTIONS_PER_SAMPLE = 200;
+const MIN_RESOLUTIONS_PER_SAMPLE = 200;
 
 /** A warmup sample that read no clock change multiplies its count by this: a zero span gives no ratio. */
 const ZERO_STEP_GROWTH = 100;
@@ -112,7 +112,7 @@ export interface SamplerResult {
   readonly timingMs: number;
 }
 
-export type WarmupResult = Pick<SamplerResult, "callsPerSample" | "warmupSamples">;
+type WarmupResult = Pick<SamplerResult, "callsPerSample" | "warmupSamples">;
 
 // ---------------------------------------------------------------------------
 // Count calibration
@@ -124,7 +124,7 @@ export type WarmupResult = Pick<SamplerResult, "callsPerSample" | "warmupSamples
  * @param resolutionMs - The timer resolution, in milliseconds.
  * @returns 200 times the resolution, in milliseconds.
  */
-export function calibratedSampleMs(resolutionMs: number): number {
+function calibratedSampleMs(resolutionMs: number): number {
   return MIN_RESOLUTIONS_PER_SAMPLE * resolutionMs;
 }
 
@@ -136,7 +136,7 @@ export function calibratedSampleMs(resolutionMs: number): number {
  * @param sampleMs - The span, in milliseconds, each sample is expected to reach.
  * @returns The zeroed store.
  */
-export function sampleBuffer(minimums: TimedMinimums, sampleMs: number): Float64Array {
+function sampleBuffer(minimums: TimedMinimums, sampleMs: number): Float64Array {
   return new Float64Array(Math.ceil(minimums.minTime / sampleMs) + minimums.minSamples);
 }
 
@@ -268,7 +268,7 @@ export function recordWarmup(progress: WarmupProgress, spanMs: number): void {
  * @param progress - The warmup's bookkeeping after its last sample.
  * @returns The count warmup ended on, and the samples it recorded.
  */
-export function warmedUp(progress: WarmupProgress): WarmupResult {
+function warmedUp(progress: WarmupProgress): WarmupResult {
   return { callsPerSample: progress.count, warmupSamples: progress.samples };
 }
 
@@ -564,7 +564,7 @@ export interface PerCallOptions<State> extends Sampling, TimedMinimums {
   /** Tears down a state once its body call returned. */
   readonly teardown: (state: State) => void;
   /** Receives the state in flight; no two states are ever alive at once. */
-  readonly inFlight?: InFlight<State>;
+  readonly inFlight: InFlight<State>;
 }
 
 interface PerCall<State> {
@@ -687,8 +687,7 @@ function timePerCallSamples<State>(
  *   sample runs it.
  */
 export function samplePerCall<State>(options: PerCallOptions<State>): SamplerResult {
-  const { setup, fn, teardown, collect, callsPerSample, now, resolutionMs } = options;
-  const inFlight = options.inFlight ?? { held: false, state: undefined };
+  const { setup, fn, teardown, collect, callsPerSample, now, resolutionMs, inFlight } = options;
   const perCall: PerCall<State> = { now, setup, fn, teardown, inFlight };
   const warmed = perCallWarmup(perCall, resolutionMs, callsPerSample);
   const spans = sampleBuffer(options, calibratedSampleMs(resolutionMs));

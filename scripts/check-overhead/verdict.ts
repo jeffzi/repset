@@ -78,45 +78,42 @@ function signFlipPValue(differences: readonly number[], observedSum: number): nu
   return extreme / signedSums.length;
 }
 
+/** The median of `values`, which are left unsorted. */
+function median(values: readonly number[]): number {
+  return quantile(
+    values.toSorted((left, right) => left - right),
+    0.5,
+  );
+}
+
 /**
- * Summarizes one round, keeping the direction the p-value tested.
+ * Summarizes one round.
  *
  * @param pairs - The round's paired medians and each pair's per-call resolution.
- * @returns The round's summary, and the sign of the summed paired differences: 1 when repset
- * reads higher, -1 when lower, 0 when they sum to nothing. It is never 0 at p < 0.05.
+ * @returns The round's summary. The sign of its `meanDifference` is the direction the p-value
+ * tested: positive when repset reads higher, negative when lower, zero when the paired differences
+ * sum to nothing, which never happens at p < 0.05.
  * @throws RangeError when `pairs.baseline` is empty or the three arrays differ in length.
  */
-function summarizeWithDirection(pairs: Pairs): {
-  readonly summary: RoundSummary;
-  readonly direction: number;
-} {
+function summarizeRound(pairs: Pairs): RoundSummary {
   const { baseline, repset, perCallResolutions } = pairs;
   if (baseline.length !== repset.length || baseline.length !== perCallResolutions.length) {
     throw new RangeError(
       `expected paired values, got ${baseline.length} baseline, ${repset.length} repset and ${perCallResolutions.length} per-call resolutions`,
     );
   }
-  const baselineMedian = quantile(
-    baseline.toSorted((left, right) => left - right),
-    0.5,
-  );
-  const repsetMedian = quantile(
-    repset.toSorted((left, right) => left - right),
-    0.5,
-  );
+  const baselineMedian = median(baseline);
+  const repsetMedian = median(repset);
   const differences = repset.map((repsetValue, index) =>
     pairedDifference(at(baseline, index), repsetValue, at(perCallResolutions, index)),
   );
   const observedSum = differences.reduce((sum, difference) => sum + difference, 0);
   return {
-    summary: {
-      baselineMedian,
-      repsetMedian,
-      gap: (repsetMedian - baselineMedian) / baselineMedian,
-      pValue: signFlipPValue(differences, observedSum),
-      meanDifference: observedSum / differences.length,
-    },
-    direction: Math.sign(observedSum),
+    baselineMedian,
+    repsetMedian,
+    gap: (repsetMedian - baselineMedian) / baselineMedian,
+    pValue: signFlipPValue(differences, observedSum),
+    meanDifference: observedSum / differences.length,
   };
 }
 
@@ -135,16 +132,13 @@ function summarizeWithDirection(pairs: Pairs): {
  * `confirmationRound` propagates.
  */
 export function judgeScenario(first: Pairs, confirmationRound: () => Pairs): ScenarioVerdict {
-  const firstRound = summarizeWithDirection(first);
-  if (firstRound.summary.pValue >= SIGNIFICANCE) {
-    return { passed: true, first: firstRound.summary };
+  const firstRound = summarizeRound(first);
+  if (firstRound.pValue >= SIGNIFICANCE) {
+    return { passed: true, first: firstRound };
   }
-  const confirmation = summarizeWithDirection(confirmationRound());
+  const confirmation = summarizeRound(confirmationRound());
   const differenceConfirmed =
-    confirmation.summary.pValue < SIGNIFICANCE && confirmation.direction === firstRound.direction;
-  return {
-    passed: !differenceConfirmed,
-    first: firstRound.summary,
-    confirmation: confirmation.summary,
-  };
+    confirmation.pValue < SIGNIFICANCE &&
+    Math.sign(confirmation.meanDifference) === Math.sign(firstRound.meanDifference);
+  return { passed: !differenceConfirmed, first: firstRound, confirmation };
 }

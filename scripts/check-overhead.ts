@@ -15,10 +15,10 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { SamplingReport } from "../src/child.js";
-import { findRuntime } from "../src/children.js";
+import { childRuntimeFlags, findRuntime } from "../src/children.js";
 import { CALLS_PER_SAMPLE } from "../src/command.js";
 import { RUNTIMES, type Runtime } from "../src/measure/runtime.js";
-import { MIN_RESOLUTIONS_PER_SAMPLE } from "../src/measure/sampler.js";
+import { DEFAULT_TIMEOUT } from "../src/options.js";
 import type { Report } from "../src/report.js";
 import { isRecord, thrownMessage } from "../src/utils.js";
 import { BODY_NAMES, type BodyName } from "./check-overhead/bodies.js";
@@ -49,7 +49,7 @@ export interface RepsetReading {
   readonly sampleCount: number;
   readonly timerResolutionNs: number;
   readonly timingMs: number;
-  /** The report's `minTime`, which the timing floors hold timing to. */
+  /** The report's `minTime`, which a calibrated reading's timing must last at least. */
   readonly minTime: number;
 }
 
@@ -285,12 +285,6 @@ function readRepset(scenario: Scenario): RepsetReading {
   }
 }
 
-/** What each runtime's baseline child takes before its script: Node loads tsx to run TypeScript. */
-const RUNTIME_ARGS: Readonly<Record<Runtime, readonly string[]>> = {
-  node: ["--import", "tsx"],
-  bun: [],
-};
-
 /** The executable each runtime's children start on. */
 type Executables = Readonly<Record<Runtime, string>>;
 
@@ -300,11 +294,12 @@ type Executables = Readonly<Record<Runtime, string>>;
  *
  * @returns Each runtime's executable.
  * @throws The `ConfigError` `findRuntime` throws when a runtime's executable is not on `PATH` or
- *   its version probe fails.
+ *   its version probe fails or runs past the default timeout a repset run gets.
  * @throws Error When `process.versions` holds no version for the runtime this process runs on.
  */
 async function findExecutables(): Promise<Executables> {
-  const [node, bun] = await Promise.all([findRuntime("node"), findRuntime("bun")]);
+  const lookup = { timeout: DEFAULT_TIMEOUT };
+  const [node, bun] = await Promise.all([findRuntime("node", lookup), findRuntime("bun", lookup)]);
   return { node: node.executable, bun: bun.executable };
 }
 
@@ -314,8 +309,9 @@ async function findExecutables(): Promise<Executables> {
  * @param executables - Each runtime's executable.
  * @param scenario - The scenario to read.
  * @param counts - The calls per sample and sample count to run at.
- * @returns The scenario's runtime executable, and the arguments: the runtime's own, the baseline
- *   child, the body, then the two counts.
+ * @returns The scenario's runtime executable, and the arguments: the flags repset's own children
+ *   start with (Node loading tsx to run TypeScript), the baseline child, the body, then the two
+ *   counts.
  */
 function baselineCommand(
   executables: Executables,
@@ -325,8 +321,7 @@ function baselineCommand(
   return {
     executable: executables[scenario.runtime],
     args: [
-      ...RUNTIME_ARGS[scenario.runtime],
-      "--expose-gc",
+      ...childRuntimeFlags(scenario.runtime, "tsx"),
       BASELINE_CHILD,
       scenario.body,
       String(counts.callsPerSample),
@@ -410,17 +405,6 @@ function takeRound(scenario: Scenario, readers: Readers): Round {
 // ---------------------------------------------------------------------------
 
 /**
- * Measures the span of a reading's median timed sample.
- *
- * @param reading - The repset reading.
- * @returns The span in timer resolutions: the median per call times the count, over the timer
- *   resolution.
- */
-function spanInResolutions(reading: RepsetReading): number {
-  return (reading.median * reading.callsPerSample) / reading.timerResolutionNs;
-}
-
-/**
  * Formats a number with two decimals and an explicit sign.
  *
  * @param value - The number to format.
@@ -470,30 +454,26 @@ function roundLines(
 }
 
 /**
- * Lists the readings of a calibrated scenario that fall below the timing floors.
+ * Lists the readings of a calibrated scenario whose timing lasted under `minTime`.
+ *
+ * The sampler already keeps a calibrated run only when its upper median sample, rounded to whole
+ * resolutions, reaches the span floor, and fails the case otherwise, so the check does not judge
+ * that floor again: the report's interpolated median cannot reproduce the value the sampler judged.
  *
  * @param name - The scenario's name.
  * @param rounds - The scenario's rounds: the first, then the confirmation one when it was taken.
- * @returns One line per floor broken, naming the round, the pair's number in it and the value.
+ * @returns One line per reading under `minTime`, naming the round, the pair's number in it and the
+ *   value.
  */
 function floorBreaks(name: string, rounds: readonly Round[]): string[] {
   return rounds.flatMap((round, roundIndex) =>
-    round.readings.flatMap((reading, index) => {
-      const where = pairPlace(name, roundIndex, index);
-      const span = spanInResolutions(reading);
-      const lines: string[] = [];
-      if (span < MIN_RESOLUTIONS_PER_SAMPLE) {
-        lines.push(
-          `${where} median sample spans ${span.toFixed(1)} resolutions, under ${String(MIN_RESOLUTIONS_PER_SAMPLE)}`,
-        );
-      }
-      if (reading.timingMs < reading.minTime) {
-        lines.push(
-          `${where} timing lasted ${reading.timingMs.toFixed(1)} ms, under minTime ${String(reading.minTime)} ms`,
-        );
-      }
-      return lines;
-    }),
+    round.readings.flatMap((reading, index) =>
+      reading.timingMs < reading.minTime
+        ? [
+            `${pairPlace(name, roundIndex, index)} timing lasted ${reading.timingMs.toFixed(1)} ms, under minTime ${String(reading.minTime)} ms`,
+          ]
+        : [],
+    ),
   );
 }
 
@@ -503,7 +483,8 @@ function floorBreaks(name: string, rounds: readonly Round[]): string[] {
  * @param scenario - The scenario.
  * @param verdict - The scenario's verdict.
  * @param rounds - The scenario's rounds: the first, then the confirmation one when it was taken.
- * @returns The lines to print, and the lines of readings below the timing floors.
+ * @returns The lines to print, and the lines of calibrated readings whose timing lasted under
+ *   `minTime`.
  * @throws Error when a confirmation round was taken but the verdict holds no confirmation summary,
  *   and RangeError when a round holds fewer repset medians than baseline ones.
  */
@@ -526,11 +507,8 @@ function scenarioReport(
     return { lines, floorBreaks: [] };
   }
   const readings = rounds.flatMap((round) => round.readings);
-  const smallestSpan = Math.min(...readings.map(spanInResolutions));
   const shortestTiming = Math.min(...readings.map((reading) => reading.timingMs));
-  lines.push(
-    `${name}  smallest span ${smallestSpan.toFixed(1)} resolutions  shortest timing ${shortestTiming.toFixed(1)} ms`,
-  );
+  lines.push(`${name}  shortest timing ${shortestTiming.toFixed(1)} ms`);
   const breaks = floorBreaks(name, rounds);
   lines.push(...breaks, outcome);
   return { lines, floorBreaks: breaks };
@@ -545,7 +523,7 @@ function scenarioReport(
  *
  * @param readers - The two sides' readers; the real ones run `dist/cli.js` and the baseline child.
  * @param print - Where each scenario's lines go.
- * @returns 1 when any scenario failed or any calibrated reading fell below its timing floors, 0
+ * @returns 1 when any scenario failed or any calibrated reading's timing lasted under `minTime`, 0
  *   otherwise.
  * @throws Error naming the scenario when a reading cannot be trusted; the real repset reader's
  *   filesystem errors from creating or removing its temporary directory, which name no scenario;

@@ -44,12 +44,22 @@ describe("embedCode", () => {
         "README.md": `# Title\n\n${codeBlock("./docs/snippets/x.ts", "stale")}\n`,
       });
 
-      const changed = await embedCode([join(dir, "README.md")]);
+      await embedCode([join(dir, "README.md")]);
 
-      expect(changed).toStrictEqual([join(dir, "README.md")]);
       expect(codeBlockContent(read(dir, "README.md"))).toBe(
         `${FENCE}ts\nexport const x = 1;\nexport const y = 2;\n${FENCE}`,
       );
+    });
+
+    it("returns the markdown file as changed", async () => {
+      const dir = createProject({
+        "docs/snippets/x.ts": "export const x = 1;\nexport const y = 2;\n",
+        "README.md": `# Title\n\n${codeBlock("./docs/snippets/x.ts", "stale")}\n`,
+      });
+
+      const changed = await embedCode([join(dir, "README.md")]);
+
+      expect(changed).toStrictEqual([join(dir, "README.md")]);
     });
 
     it("resolves a src starting with ../ from the markdown file's directory", async () => {
@@ -120,19 +130,28 @@ describe("embedCode", () => {
   });
 
   describe("when a CODE block's src does not start with ./ or ../", () => {
-    it("rejects naming the markdown file and the src, writing no file", async () => {
+    it("rejects naming the markdown file and the src", async () => {
       const src = "https://example.invalid/x.ts";
+      const dir = createProject({ "b.md": `${codeBlock(src, "stale")}\n` });
+
+      const run = embedCode([join(dir, "b.md")]);
+
+      await expect(run).rejects.toThrow(src);
+      await expect(run).rejects.toThrow(join(dir, "b.md"));
+    });
+  });
+
+  describe("when a later markdown file fails", () => {
+    it("writes no file", async () => {
       const valid = `${codeBlock("./x.ts", "stale")}\n`;
       const dir = createProject({
         "x.ts": "export const x = 1;\n",
         "a.md": valid,
-        "b.md": `${codeBlock(src, "stale")}\n`,
+        "b.md": `${codeBlock("https://example.invalid/x.ts", "stale")}\n`,
       });
 
-      const run = embedCode([join(dir, "a.md"), join(dir, "b.md")]);
+      await embedCode([join(dir, "a.md"), join(dir, "b.md")]).catch(() => undefined);
 
-      await expect(run).rejects.toThrow(src);
-      await expect(run).rejects.toThrow(join(dir, "b.md"));
       expect(read(dir, "a.md")).toBe(valid);
     });
   });

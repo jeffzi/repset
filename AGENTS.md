@@ -25,8 +25,8 @@ this file. It is gitignored for personal, machine-specific preferences and never
   the installed `repset --version` once, which loads the command's static imports. CI runs it.
 - `task check-overhead` — build, then compare repset's timings with a baseline loop. It exits 1 when
   repset and the baseline differ significantly in the same direction in both rounds, or a calibrated
-  reading falls below its timing floors. Run it before a release, alone on a quiet machine; never in
-  CI, and `task check` does not run it.
+  reading's timing lasted under its `minTime`. Run it before a release, alone on a quiet machine;
+  never in CI, and `task check` does not run it.
 
 ## Tools (mise)
 
@@ -75,8 +75,9 @@ module that nothing but its registrar imports is a module of its own at any size
 modules also import is placed by those importers alone.
 
 The **generic-helpers module**, `src/utils.ts`, holds code that passes this admission test: it names
-no project type, imports nothing but Node built-ins (`node:` modules), and would make sense pasted
-unchanged into an unrelated repository.
+no project type, imports nothing, Node built-ins (`node:` modules) included, and would make sense
+pasted unchanged into an unrelated repository. The measure modules import it and load in a browser
+page, so code that needs a Node built-in goes to its home under rule 2's later tests instead.
 
 1. **New code goes in the module that uses it.** One user: that module. No new file until rule 2 or
    rule 6 calls for one.

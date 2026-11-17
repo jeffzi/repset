@@ -1,9 +1,9 @@
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import type { Outcome } from "../src/children.js";
+import { findRuntime, type Outcome } from "../src/children.js";
 import { ConfigError, type ResolvedOptions } from "../src/options.js";
 import { selectCases, type SelectedCase, type Selection } from "../src/run.js";
 import { expectConfigError } from "./config-error.js";
@@ -12,6 +12,21 @@ import { findAny, found, type FindRuntime, listed, type StartChild } from "./fak
 const FIXTURES = fileURLToPath(new URL("fixtures/discovery", import.meta.url));
 
 const TESTS = fileURLToPath(new URL(".", import.meta.url));
+
+/** A directory whose `bun` prints a version, then runs for 5 s. */
+const HANGING_BUN = fileURLToPath(new URL("fixtures/children/bin/hang", import.meta.url));
+
+/** Windows runs no shell script as an executable. */
+const POSIX = process.platform !== "win32";
+
+/** How long after the selection starts its stop signal fires. */
+const STOP_AFTER_MS = 300;
+
+/** A runtime starting on a slow CI runner. */
+const SPAWN_TIMEOUT_MS = 60_000;
+
+/** How long past its stop a selection may take to return. */
+const RETURN_MARGIN_MS = 2000;
 
 /** The absolute path of the discovery fixture `name`. */
 function fixture(name: string): string {
@@ -50,7 +65,7 @@ const FAILED: Outcome = {
   output: "",
 };
 
-/** Selects from the discovery fixtures, with the working directory `cwd` and no stop signal. */
+/** Selects from the discovery fixtures, passing the stop signal on only when one is given. */
 async function select(
   input: {
     options?: Partial<ResolvedOptions>;
@@ -320,5 +335,29 @@ describe("selectCases", () => {
 
       expect(selection).toStrictEqual({ status: "stopped" });
     });
+  });
+
+  describe("when the stop signal fires during runtime discovery", () => {
+    it.runIf(POSIX)(
+      "ends as stopped, killing the runtime's version probe",
+      async () => {
+        vi.stubEnv("PATH", HANGING_BUN);
+        const controller = new AbortController();
+        setTimeout(() => {
+          controller.abort();
+        }, STOP_AFTER_MS);
+        const started = performance.now();
+
+        const selection = await select({
+          options: { runtimes: ["node", "bun"] },
+          signal: controller.signal,
+          findRuntime,
+        });
+
+        expect(selection).toStrictEqual({ status: "stopped" });
+        expect(performance.now() - started).toBeLessThan(STOP_AFTER_MS + RETURN_MARGIN_MS);
+      },
+      SPAWN_TIMEOUT_MS,
+    );
   });
 });

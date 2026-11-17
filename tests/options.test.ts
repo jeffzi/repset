@@ -27,6 +27,7 @@ function minSamplesInNode(config: string): string {
   return execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
     cwd: ROOT,
     encoding: "utf8",
+    timeout: SPAWN_TIMEOUT_MS,
   });
 }
 

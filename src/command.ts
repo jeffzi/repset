@@ -4,11 +4,11 @@
  */
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { constants } from "node:os";
-import { dirname, relative, resolve, sep } from "node:path";
+import { dirname, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
 import { findRuntime as realFindRuntime, startChild as realStartChild } from "./children.js";
-import type { Runtime } from "./measure/runtime.js";
+import { RUNTIMES, type Runtime } from "./measure/runtime.js";
 import {
   ConfigError,
   failedWith,
@@ -28,6 +28,7 @@ import {
   runOnce,
   selectCases,
   type SelectInput,
+  shownPath,
 } from "./run.js";
 import { failureLines, formatTable, metricLine } from "./table.js";
 import { describe, thrownMessage } from "./utils.js";
@@ -101,7 +102,7 @@ Measures the benchmark cases in the given files, or in the files the config's in
 
 Options:
   --filter <regex>        Run only the cases whose id matches the expression
-  --runtime <list>        Comma-separated runtimes, run in the order given: node, bun
+  --runtime <list>        Comma-separated runtimes, run in the order given: ${RUNTIMES.join(", ")}
   --min-time <ms>         Timing lasts at least this long
   --min-samples <n>       Timing takes at least this many samples
   --timeout <ms>          The longest one child may run
@@ -260,7 +261,7 @@ function announcing(context: Context): typeof realStartChild {
   const { cwd, stderr, startChild } = context;
   return async (runtime, request, options) => {
     if (request.mode === "list") {
-      stderr.write(`listing ${relative(cwd, request.file).replaceAll(sep, "/")}\n`);
+      stderr.write(`listing ${shownPath(cwd, request.file)}\n`);
     } else {
       const verb = request.mode === "once" ? "running" : "measuring";
       stderr.write(`${verb} ${request.id} on ${runtime.runtime}\n`);
@@ -284,11 +285,6 @@ function childInput(
 /** The report as a file or stdout holds it: JSON indented by two spaces, and a newline. */
 function reportText(report: Report): string {
   return `${JSON.stringify(report, null, 2)}\n`;
-}
-
-/** The message for a report that could not be written to `shown`, the path as the user wrote it. */
-function reportWriteFailure(shown: string, error: unknown): string {
-  return `cannot write the report to ${shown}: ${thrownMessage(error)}`;
 }
 
 /**
@@ -379,7 +375,9 @@ async function measure(command: Command, context: Context): Promise<number> {
     try {
       writeReport(file.path, report);
     } catch (error) {
-      stderr.write(`repset: ${reportWriteFailure(file.name, error)}\n`);
+      stderr.write(
+        `repset: ${failedWith(`cannot write the report to ${file.name}`, error).message}\n`,
+      );
       written = false;
     }
   }

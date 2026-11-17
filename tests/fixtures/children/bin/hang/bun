@@ -1,0 +1,4 @@
+#!/bin/sh
+# Prints a version, then never exits within a test: ends by itself after 5 s.
+echo 1.3.2
+exec /bin/sleep 5

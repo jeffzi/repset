@@ -35,7 +35,7 @@ const CHILD_ENTRY = join(dirname(THIS_FILE), `child${extname(THIS_FILE)}`);
 const OUTPUT_TAIL_BYTES = 16 * 1024;
 
 /**
- * How long to wait for the child's pipes to close once it exited. A process the child started can
+ * How long to wait for a spawned process's pipes to close once it exited. A process it started can
  * hold them open for as long as it lives, and the call must not wait for it.
  */
 const CLOSE_GRACE_MS = 250;
@@ -94,6 +94,9 @@ type Ending =
   | { readonly kind: "timeout" }
   | { readonly kind: "exit"; readonly code: number | null; readonly signal: string | null };
 
+/** How a spawned process ended, or the error that kept it from starting. */
+type Ended = Ending | { readonly kind: "error"; readonly error: Error };
+
 /** Every {@link ChildPhase}: a phase missing here fails to compile. */
 const CHILD_PHASE_KEYS: Readonly<Record<ChildPhase, true>> = {
   setup: true,
@@ -149,19 +152,36 @@ const GC_NUMBERS = Object.keys(GC_NUMBER_KEYS);
 // Runtime discovery
 // ---------------------------------------------------------------------------
 
+/** How long a runtime lookup's version probe may run, and the stop signal that ends it. */
+export type LookupOptions = Pick<StartOptions, "timeout" | "signal">;
+
 /**
  * Finds the executable a runtime's children start on, and its version.
  *
  * The runtime the parent runs on is its own executable, with the version from `process.versions`.
- * The other one is looked up by name on `PATH` and probed with `--version`.
+ * The other one is looked up by name on `PATH` and probed with `--version`, which is killed at
+ * `timeout` or when `signal` fires.
  *
  * @param runtime - The runtime to find.
- * @returns The executable and the version it reports, without a leading `v`.
+ * @param options - How long the version probe may run, and the stop signal that kills it.
+ * @returns The executable and the version it reports, without a leading `v`, or `undefined` when
+ *   the stop signal killed the probe; a lookup with no stop signal always finds one.
  * @throws {@link ConfigError} When no executable for `runtime` is on `PATH`, or its probe exits
- *   non-zero, dies on a signal, cannot be started or prints nothing.
+ *   non-zero, dies on a signal, runs past `timeout`, cannot be started or prints nothing.
  * @throws Error When `process.versions` holds no version for the runtime this process runs on.
  */
-export async function findRuntime(runtime: Runtime): Promise<FoundRuntime> {
+export function findRuntime(
+  runtime: Runtime,
+  options: LookupOptions & { readonly signal?: undefined },
+): Promise<FoundRuntime>;
+export function findRuntime(
+  runtime: Runtime,
+  options: LookupOptions,
+): Promise<FoundRuntime | undefined>;
+export async function findRuntime(
+  runtime: Runtime,
+  options: LookupOptions,
+): Promise<FoundRuntime | undefined> {
   if (runtime === runningRuntime()) {
     const version = process.versions[runtime];
     if (version === undefined) throw new Error(`process.versions holds no ${runtime} version`);
@@ -169,7 +189,8 @@ export async function findRuntime(runtime: Runtime): Promise<FoundRuntime> {
   }
   const executable = onPath(runtime);
   if (executable === undefined) throw new ConfigError(`no ${runtime} executable on PATH`);
-  return { runtime, executable, version: await probeVersion(executable) };
+  const version = await probeVersion(executable, options);
+  return version === undefined ? undefined : { runtime, executable, version };
 }
 
 /** The first executable file named `name` in a `PATH` directory, or `undefined` when none is. */
@@ -200,11 +221,16 @@ function isExecutableFile(path: string): boolean {
  * Runs `<executable> --version`.
  *
  * @param executable - The executable to probe.
- * @returns What it printed on stdout, trimmed and without a leading `v`.
- * @throws {@link ConfigError} When the probe cannot be started, exits non-zero, dies on a signal or
- *   prints nothing.
+ * @param options - How long the probe may run, and the stop signal that kills it.
+ * @returns What it printed on stdout, trimmed and without a leading `v`, or `undefined` when the
+ *   stop signal killed it.
+ * @throws {@link ConfigError} When the probe cannot be started, exits non-zero, dies on a signal,
+ *   runs past `timeout` or prints nothing.
  */
-async function probeVersion(executable: string): Promise<string> {
+async function probeVersion(
+  executable: string,
+  options: LookupOptions,
+): Promise<string | undefined> {
   const probe = spawn(executable, ["--version"], {
     stdio: ["ignore", "pipe", "ignore"],
     windowsHide: true,
@@ -213,17 +239,19 @@ async function probeVersion(executable: string): Promise<string> {
   probe.stdout.setEncoding("utf8").on("data", (text: string) => {
     printed += text;
   });
-  const [code, signal] = await new Promise<[number | null, string | null]>((resolve, reject) => {
-    probe.once("error", (error) => {
-      reject(failedWith(`cannot run ${executable} --version`, error));
-    });
-    probe.once("close", (exitCode, exitSignal) => {
-      resolve([exitCode, exitSignal]);
-    });
-  });
-  if (signal !== null) throw new ConfigError(`${executable} --version was killed by ${signal}`);
-  if (code !== 0) {
-    throw new ConfigError(`${executable} --version exited with status ${code ?? "unknown"}`);
+  const ended = await processEnded(probe, options);
+  if (ended.kind === "error") throw failedWith(`cannot run ${executable} --version`, ended.error);
+  if (ended.kind === "stopped") return undefined;
+  if (ended.kind === "timeout") {
+    throw new ConfigError(
+      `${executable} --version was killed after its ${options.timeout} ms timeout`,
+    );
+  }
+  if (ended.signal !== null) {
+    throw new ConfigError(`${executable} --version was killed by ${ended.signal}`);
+  }
+  if (ended.code !== 0) {
+    throw new ConfigError(`${executable} --version exited with status ${ended.code ?? "unknown"}`);
   }
   const version = printed.trim().replace(/^v/, "");
   if (version === "") throw new ConfigError(`${executable} --version printed nothing`);
@@ -244,11 +272,19 @@ class OutputTail {
     const kept = Buffer.from(this.#chunks.join(""), "utf8");
     let start = Math.max(0, kept.length - OUTPUT_TAIL_BYTES);
     // A UTF-8 continuation byte is 0b10xxxxxx; the cut moves past the rest of a split character.
-    while (start > 0 && start < kept.length && ((kept[start] ?? 0) & 0xc0) === 0x80) start += 1;
+    while (start > 0 && ((kept[start] ?? 0) & 0xc0) === 0x80) start += 1;
     return kept.toString("utf8", start);
   }
 
-  /** Keeps `text`, dropping the oldest chunks that leave the tail. */
+  /**
+   * Keeps what a stream decoded, dropping the oldest chunks that leave the tail.
+   *
+   * Dropping chunks only bounds the memory a loud child holds: {@link OutputTail.text} cuts to the
+   * last {@link OUTPUT_TAIL_BYTES} bytes whether or not any chunk was dropped, so no output shows
+   * the drop.
+   *
+   * @param text - What the stream decoded since the last call.
+   */
   add(text: string): void {
     if (text === "") return;
     this.#chunks.push(text);
@@ -275,17 +311,35 @@ class OutputTail {
  * @returns The child's result, the child's own failure, a failure in phase `child` when it left no
  *   result that answers `request`, could not start or ran past `timeout`, or a stop when `signal`
  *   fired while it ran. Each carries the last 16 KiB the child printed. A result line the child
- *   wrote stands however the child then ended.
+ *   wrote stands however the child then ended, unless the caller's signal stopped it.
+ * @throws Error What starting the process throws, such as an argument `spawn` rejects.
  */
 export async function startChild(
   runtime: FoundRuntime,
   request: ChildRequest,
   options: StartOptions,
 ): Promise<Outcome> {
-  const { timeout, signal } = options;
   const { child, tail, written } = spawnChild(runtime, request, options);
+  const ended = await processEnded(child, options);
+  if (ended.kind === "error") {
+    return noResult(`could not start the child: ${ended.error.message}`, tail.text());
+  }
+  return outcomeOf(ended, readResult(written(), request.mode), options.timeout, tail.text());
+}
 
-  return new Promise<Outcome>((resolve) => {
+/**
+ * Waits for a spawned process to end, killing it at `timeout` or when `signal` fires.
+ *
+ * Once the process exited, its pipes get {@link CLOSE_GRACE_MS} to close before they are
+ * destroyed, so a process it started that holds them open does not hold the wait.
+ *
+ * @param child - The process just spawned.
+ * @param options - How long it may run, and the stop signal that kills it.
+ * @returns How it ended, or the error that kept it from starting.
+ */
+async function processEnded(child: ChildProcess, options: LookupOptions): Promise<Ended> {
+  const { timeout, signal } = options;
+  return new Promise((resolve) => {
     let ending: Ending | undefined;
     let settled = false;
     const kill = (kind: "stopped" | "timeout"): void => {
@@ -304,30 +358,39 @@ export async function startChild(
       signal?.removeEventListener("abort", stop);
     };
 
-    const settle = (outcome: (output: string) => Outcome): void => {
+    const settle = (ended: Ended): void => {
       if (settled) return;
       settled = true;
       disarm();
       for (const stream of child.stdio) stream?.destroy();
-      resolve(outcome(tail.text()));
+      resolve(ended);
     };
 
     child.once("error", (error) => {
-      settle((output) => noResult(`could not start the child: ${error.message}`, output));
+      settle({ kind: "error", error });
     });
     child.once("exit", (code, exitSignal) => {
       disarm();
       const ended = ending ?? { kind: "exit", code, signal: exitSignal };
-      const finish = (): void => {
-        settle((output) => outcomeOf(ended, readResult(written(), request.mode), timeout, output));
-      };
-      const grace = setTimeout(finish, CLOSE_GRACE_MS);
+      const grace = setTimeout(settle, CLOSE_GRACE_MS, ended);
       child.once("close", () => {
         clearTimeout(grace);
-        finish();
+        settle(ended);
       });
     });
   });
+}
+
+/**
+ * Builds the flags a child's runtime starts with, before the script it runs.
+ *
+ * @param runtime - The runtime the child starts on.
+ * @param nodeImport - The module a Node child imports first, or `undefined` for none.
+ * @returns `--expose-gc`, then `--import <nodeImport>` on Node when a module is given.
+ */
+export function childRuntimeFlags(runtime: Runtime, nodeImport: string | undefined): string[] {
+  const imports = runtime === "node" && nodeImport !== undefined ? ["--import", nodeImport] : [];
+  return ["--expose-gc", ...imports];
 }
 
 /** A child process just started, and what it prints and writes as it runs. */
@@ -353,11 +416,9 @@ function spawnChild(
   options: Pick<StartOptions, "nodeImport" | "entry">,
 ): StartedChild {
   const { nodeImport, entry = CHILD_ENTRY } = options;
-  const imports =
-    runtime.runtime === "node" && nodeImport !== undefined ? ["--import", nodeImport] : [];
   const child = spawn(
     runtime.executable,
-    ["--expose-gc", ...imports, entry, JSON.stringify(request)],
+    [...childRuntimeFlags(runtime.runtime, nodeImport), entry, JSON.stringify(request)],
     { stdio: ["ignore", "pipe", "pipe", "pipe"], windowsHide: true },
   );
   const tail = new OutputTail();

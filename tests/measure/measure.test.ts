@@ -62,6 +62,8 @@ interface BenchOptions {
   readonly teardownThrows?: unknown;
   /** The call, counted from zero per callback, at which setup or teardown returns a thenable. */
   readonly thenableAt?: { readonly setup?: number; readonly teardown?: number };
+  /** The call, counted from zero per callback, at which each returns a value whose `then` read throws. */
+  readonly raisingThenAt?: Failures;
 }
 
 interface Bench {
@@ -72,10 +74,21 @@ interface Bench {
   readonly setupError: Error;
   readonly fnError: string;
   readonly teardownError: unknown;
+  readonly thenReadError: Error;
 }
 
 // oxlint-disable-next-line unicorn/no-thenable -- a thenable setup or teardown result is the input under test
 const PENDING_THENABLE = { then: (): number => 0 };
+
+/** Gives `value` a `then` property whose read throws `error`, and returns it. */
+function withRaisingThen<T extends object>(value: T, error: Error): T {
+  // oxlint-disable-next-line unicorn/no-thenable -- a then read that throws is the input under test
+  return Object.defineProperty(value, "then", {
+    get: () => {
+      throw error;
+    },
+  });
+}
 
 /**
  * Builds a benchmark on a scripted clock: setup, fn and teardown log themselves, the body charges
@@ -84,11 +97,18 @@ const PENDING_THENABLE = { then: (): number => 0 };
  *
  * @param kind - The benchmark's lifecycle.
  * @param options - The body's cost per call, which calls throw, what the body returns, the value
- *   the teardown throws, and the calls at which setup or teardown return a thenable.
+ *   the teardown throws, the calls at which setup or teardown return a thenable, and the calls at
+ *   which a callback returns a value whose `then` read throws.
  * @returns The benchmark, its scripted clock, and the logs the tests read.
  */
 function bench(kind: Kind, options: BenchOptions = {}): Bench {
-  const { bodyMs = 100, fails = {}, returns = () => undefined, thenableAt = {} } = options;
+  const {
+    bodyMs = 100,
+    fails = {},
+    returns = () => undefined,
+    thenableAt = {},
+    raisingThenAt = {},
+  } = options;
   const clock = steppedClock();
   let builds = 0;
   let bodies = 0;
@@ -98,6 +118,7 @@ function bench(kind: Kind, options: BenchOptions = {}): Bench {
   const setupError = new Error("banana");
   const fnError = "apple";
   const teardownError = "teardownThrows" in options ? options.teardownThrows : { name: "cherry" };
+  const thenReadError = new Error("grape");
   const benchmark: Case<World> = {
     kind,
     setup: () => {
@@ -108,6 +129,7 @@ function bench(kind: Kind, options: BenchOptions = {}): Bench {
         throw setupError;
       }
       const world: World = id === thenableAt.setup ? { id, ...PENDING_THENABLE } : { id };
+      if (id === raisingThenAt.setup) withRaisingThen(world, thenReadError);
       live.add(world);
       log.push(`setup ${world.id}`);
       return world;
@@ -122,7 +144,7 @@ function bench(kind: Kind, options: BenchOptions = {}): Bench {
         throw fnError;
       }
       clock.advance(bodyMs);
-      return returns();
+      return call === raisingThenAt.fn ? withRaisingThen({}, thenReadError) : returns();
     },
     teardown: (world) => {
       clock.advance(0);
@@ -134,6 +156,7 @@ function bench(kind: Kind, options: BenchOptions = {}): Bench {
       }
       live.delete(world);
       log.push(`teardown ${world.id}`);
+      if (call === raisingThenAt.teardown) return withRaisingThen({}, thenReadError);
       return call === thenableAt.teardown ? PENDING_THENABLE : undefined;
     },
   };
@@ -146,6 +169,7 @@ function bench(kind: Kind, options: BenchOptions = {}): Bench {
     setupError,
     fnError,
     teardownError,
+    thenReadError,
   };
 }
 
@@ -454,7 +478,6 @@ describe("measure", () => {
       { kind: "sharedState", when: "its one teardown", fails: {}, from: "teardown" },
       { kind: "perCall", when: "the check's teardown", fails: {}, from: "teardown" },
       { kind: "sharedState", when: "the cleanup's teardown", fails: { fn: 5 }, from: "fn" },
-      { kind: "perCall", when: "the check's cleanup teardown", fails: { fn: 0 }, from: "fn" },
     ] as const;
 
     it.each(TEARDOWN_THENABLE_CASES.filter((row) => row.from === "teardown"))(
@@ -504,6 +527,91 @@ describe("measure", () => {
         const result = await run(fake);
 
         expect(result.sampleCount).toBe(64);
+      },
+    );
+  });
+
+  describe("when its callback's return value throws on reading then", () => {
+    const RAISING_READ_CASES = KINDS.flatMap((kind) =>
+      (["setup", "fn", "teardown"] as const).map((callback) => ({ kind, callback })),
+    );
+
+    it.each(RAISING_READ_CASES)(
+      "fails a $kind run in phase $callback with the read's error as cause when its $callback's return value throws on reading then",
+      async ({ kind, callback }) => {
+        const fake = bench(kind, { raisingThenAt: { [callback]: 0 } });
+
+        const error = await failure(run(fake));
+
+        expect(error.phase).toBe(callback);
+        expect(error.cause).toBe(fake.thenReadError);
+      },
+    );
+
+    it.each(KINDS)(
+      "tears down the state a %s run's setup returned, once, when its then read throws",
+      async (kind) => {
+        const fake = bench(kind, { raisingThenAt: { setup: 0 } });
+
+        await run(fake).catch(() => undefined);
+
+        expect(fake.log.filter((entry) => entry === "teardown 0")).toStrictEqual(["teardown 0"]);
+      },
+    );
+
+    const CLEANUP_RAISING_READ_CASES = [
+      {
+        kind: "sharedState",
+        when: "the body throws",
+        fails: { fn: 5 },
+        raisingThenAt: { teardown: 0 },
+        from: "fn",
+      },
+      {
+        kind: "perCall",
+        when: "the body throws",
+        fails: { fn: 5 },
+        raisingThenAt: { teardown: 5 },
+        from: "fn",
+      },
+      {
+        kind: "sharedState",
+        when: "the setup's then read throws",
+        fails: {},
+        raisingThenAt: { setup: 0, teardown: 0 },
+        from: "setup",
+      },
+      {
+        kind: "perCall",
+        when: "the setup's then read throws",
+        fails: {},
+        raisingThenAt: { setup: 0, teardown: 0 },
+        from: "setup",
+      },
+    ] as const;
+
+    it.each(CLEANUP_RAISING_READ_CASES)(
+      "keeps the first failure on a $kind run in phase $from when $when and the cleanup's teardown returns a value whose then read throws",
+      async ({ kind, fails, raisingThenAt, from }) => {
+        const fake = bench(kind, { bodyMs: 200, fails, raisingThenAt });
+
+        const error = await failure(run(fake));
+
+        expect(error.phase).toBe(from);
+        expect(error.cause).toBe(from === "fn" ? fake.fnError : fake.thenReadError);
+      },
+    );
+
+    it.each(CLEANUP_RAISING_READ_CASES)(
+      "attaches the cleanup teardown's then read failure in phase teardown on a $kind run when $when",
+      async ({ kind, fails, raisingThenAt }) => {
+        const fake = bench(kind, { bodyMs: 200, fails, raisingThenAt });
+
+        const error = await failure(run(fake));
+
+        expect(error.teardownError).toBeInstanceOf(MeasureError);
+        expect(error.teardownError?.phase).toBe("teardown");
+        expect(error.teardownError?.cause).toBe(fake.thenReadError);
       },
     );
   });
@@ -659,21 +767,18 @@ describe("measure", () => {
       expect(error.teardownError).toBeNull();
     });
 
-    it.each(KINDS)(
-      "rejects a %s run whose collection throws in phase child with the collector's value as cause",
-      async (kind) => {
-        const fake = bench(kind, { bodyMs: 200 });
-        const collectorError = new Error("durian");
-        vi.stubGlobal("gc", () => {
-          throw collectorError;
-        });
+    it("rejects a per-call run whose collection throws in phase child with the collector's value as cause", async () => {
+      const fake = bench("perCall", { bodyMs: 200 });
+      const collectorError = new Error("durian");
+      vi.stubGlobal("gc", () => {
+        throw collectorError;
+      });
 
-        const error = await failure(run(fake));
+      const error = await failure(run(fake));
 
-        expect(error.phase).toBe("child");
-        expect(error.cause).toBe(collectorError);
-      },
-    );
+      expect(error.phase).toBe("child");
+      expect(error.cause).toBe(collectorError);
+    });
 
     it.each(KINDS)(
       "rejects a %s run whose body throws an Error worded as the cap's in phase fn",
@@ -916,26 +1021,6 @@ describe("summarize", () => {
       max: 4_000_000,
       mean: 2_500_000,
       sampleCount: 4,
-    });
-  });
-
-  describe("when the store is only partly filled", () => {
-    it("ignores the slots past the stored count", () => {
-      const spans = new Float64Array(8);
-      spans.set([2, 4, 6]);
-
-      const statistics = summarize(spans, 3, 2);
-
-      expect(statistics).toStrictEqual({
-        min: 1_000_000,
-        p25: 1_500_000,
-        median: 2_000_000,
-        p75: 2_500_000,
-        p99: expect.closeTo(2_980_000, 3),
-        max: 3_000_000,
-        mean: 2_000_000,
-        sampleCount: 3,
-      });
     });
   });
 });

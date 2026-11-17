@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
-  "entry": ["src/index.ts", "src/child.ts", "src/cli.ts"],
+  "entry": ["src/child.ts"],
   "supportEntry": [
     "scripts/*.ts",
     "scripts/check-overhead/baseline-child.ts",
@@ -10,16 +10,7 @@
     "tests/**/*.test-d.ts"
   ],
   "ignoreExportsUsedInFile": true,
-  "ignoreDependencies": [
-    "@arethetypeswrong/cli",
-    "cspell",
-    "fallow",
-    "markdownlint-cli2",
-    "oxfmt",
-    "oxlint",
-    "oxlint-tsgolint",
-    "publint"
-  ],
+  "ignoreDependencies": ["@arethetypeswrong/cli", "publint"],
   "duplicates": { "ignore": ["tests/**"] },
   "rules": { "duplicate-exports": "off" },
   "health": {

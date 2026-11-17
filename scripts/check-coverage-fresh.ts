@@ -8,10 +8,6 @@ function isSourceFile(name: string): boolean {
   return name.endsWith(".ts") && !name.endsWith(".d.ts");
 }
 
-function isAnyFile(): boolean {
-  return true;
-}
-
 /**
  * @param dir - Root to walk.
  * @param isInput - Whether a regular file, given its name, counts as an input.
@@ -42,7 +38,7 @@ export function checkCoverageFresh(projectRoot: string): void {
 
   const inputs = [
     ...listInputs(join(projectRoot, "src"), isSourceFile),
-    ...listInputs(join(projectRoot, "tests"), isAnyFile),
+    ...listInputs(join(projectRoot, "tests"), () => true),
     join(projectRoot, VITEST_CONFIG),
   ];
   const stale = inputs

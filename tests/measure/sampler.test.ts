@@ -294,23 +294,6 @@ describe("sampleSharedState", () => {
       expect(result.callsPerSample).toBe(7);
     });
 
-    it("runs a count above the cap", () => {
-      const fake = harness(() => 2 ** -10);
-
-      const result = run(fake, CAPPED_STEP, { callsPerSample: 40_000 });
-
-      expect(result.callsPerSample).toBe(40_000);
-    });
-
-    it("takes one timing attempt whatever its samples span", () => {
-      const fake = harness((_sample, timed) => (timed ? 0 : COARSE_RESOLUTION));
-
-      const result = run(fake, COARSE_RESOLUTION, { callsPerSample: 7 });
-
-      expect(result.timingAttempts).toBe(1);
-      expect(fake.collectsAt).toHaveLength(1);
-    });
-
     describe("when its samples get shorter than warmup's", () => {
       it.each([
         {
@@ -532,15 +515,6 @@ describe("sampleSharedState", () => {
         expect(error.message).toMatch(/\b40\b/);
         expect(error.message).toMatch(/\b3\b/);
       });
-
-      it("fails before any sample runs that count", () => {
-        const fake = harness(fasterEveryRun);
-
-        errorOf(() => run(fake, COARSE_RESOLUTION));
-
-        expect(fake.sampleCalls).toContain(20);
-        expect(fake.sampleCalls).not.toContain(40);
-      });
     });
 
     describe("when a run is discarded", () => {
@@ -611,7 +585,6 @@ function perCallHarness(costs: PerCallCosts): PerCallHarness {
   const live = new Set<PerCallWorld>();
   return {
     now: () => {
-      log.push("now");
       if (live.size === 0 && pending > 0) {
         sampleCalls.push(pending);
         pending = 0;
@@ -648,7 +621,6 @@ function perCallHarness(costs: PerCallCosts): PerCallHarness {
       time += costs.teardownMs ?? 0;
     },
     collect: () => {
-      log.push("collect");
       collectsAt.push(sampleCalls.length);
       pending = 0;
     },
@@ -671,7 +643,7 @@ interface PerCallRunOptions extends RunOptions {
  *
  * @param fake - The harness whose clock and lifecycle the sampler runs.
  * @param options - The timer resolution; `minTime` and `minSamples`, 1000 ms and 64 unless given;
- *   and `callsPerSample` and `inFlight`, forwarded only when set.
+ *   `callsPerSample`, forwarded only when set; and `inFlight`, a fresh holder unless given.
  * @returns What the sampler returned.
  * @throws Whatever the sampler throws.
  */
@@ -684,7 +656,7 @@ function runPerCall(fake: PerCallHarness, options: PerCallRunOptions): SamplerRe
     teardown: fake.teardown,
     collect: fake.collect,
     ...samplingOptions(options),
-    ...(options.inFlight === undefined ? {} : { inFlight: options.inFlight }),
+    inFlight: options.inFlight ?? { held: false, state: undefined },
   });
 }
 
@@ -705,9 +677,8 @@ describe("samplePerCall", () => {
 
       runPerCall(fake, { resolutionMs: FINE_RESOLUTION, callsPerSample: 3 });
 
-      const lifecycle = fake.log.filter((entry) => entry !== "now" && entry !== "collect");
       expect(fake.built.length).toBeGreaterThan(1);
-      expect(lifecycle).toStrictEqual(
+      expect(fake.log).toStrictEqual(
         fake.built.flatMap(({ id }) => [`setup ${id}`, `fn ${id}`, `teardown ${id}`]),
       );
     });

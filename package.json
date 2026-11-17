@@ -1,6 +1,6 @@
 {
   "name": "repset",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "repset times synchronous JavaScript and TypeScript functions on Node and Bun.",
   "license": "MIT",
   "repository": {

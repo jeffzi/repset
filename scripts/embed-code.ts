@@ -1,0 +1,121 @@
+/**
+ * Embeds source files into markdown: each `<!-- docs CODE src="./x.ts" -->` block's content becomes
+ * a `ts` fence holding the file at `src`, resolved from the markdown file's directory.
+ *
+ * Run as `node --import tsx scripts/embed-code.ts <markdown files>`.
+ */
+import { readFileSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, resolve } from "node:path";
+
+import { property } from "../src/utils.js";
+
+/** The fields of a markdown-magic transform's argument this script reads. */
+interface TransformInput {
+  readonly options: unknown;
+  readonly srcPath: unknown;
+}
+
+type ProcessFile = (options: Record<string, unknown>) => Promise<unknown>;
+
+const FENCE = "```";
+
+/**
+ * A line holding nothing but an oxlint or fallow directive comment: it is addressed to this repo's
+ * checkers, and readers of the docs do not need it.
+ */
+const CHECKER_DIRECTIVE = /^\s*\/\/\s*(?:oxlint-(?:disable|enable)|fallow-ignore-)/u;
+
+const RELATIVE_SRC = /^\.\.?\//u;
+
+function isProcessFile(value: unknown): value is ProcessFile {
+  return typeof value === "function";
+}
+
+/**
+ * markdown-magic's `processFile` runs only the transforms it is given. Its `markdownMagic` merges
+ * them over its built-ins, which would keep `remote` fetching URLs and `TOC` rewriting its block.
+ *
+ * @returns markdown-magic's `processFile`.
+ * @throws Error when markdown-magic exports no `processFile` function.
+ */
+function loadProcessFile(): ProcessFile {
+  // markdown-magic is CommonJS and ships no types, so it is loaded as an untyped value and narrowed.
+  const module: unknown = createRequire(import.meta.url)("markdown-magic");
+  const processFile = property(module, "processFile");
+  if (!isProcessFile(processFile)) {
+    throw new Error("markdown-magic exports no processFile function");
+  }
+  return processFile;
+}
+
+function embed({ options, srcPath: markdownPath }: TransformInput): string {
+  const src = property(options, "src");
+  const header = property(options, "header");
+  if (typeof markdownPath !== "string" || typeof src !== "string") {
+    throw new Error(`a CODE block in ${String(markdownPath)} has no src option`);
+  }
+  if (!RELATIVE_SRC.test(src)) {
+    throw new Error(`${markdownPath}: CODE src "${src}" must start with ./ or ../`);
+  }
+  const codePath = resolve(dirname(markdownPath), src);
+  let code: string;
+  try {
+    code = readFileSync(codePath, "utf8");
+  } catch (error) {
+    throw new Error(`${markdownPath}: cannot read CODE src ${codePath}`, { cause: error });
+  }
+  const shown = code
+    .replace(/\n$/u, "")
+    .split("\n")
+    .filter((line) => !CHECKER_DIRECTIVE.test(line));
+  if (typeof header === "string") shown.unshift(header);
+  return [`${FENCE}ts`, ...shown, FENCE].join("\n");
+}
+
+async function embedFile(processFile: ProcessFile, file: string, content: string): Promise<string> {
+  const processed = await processFile({
+    content,
+    srcPath: file,
+    open: "docs",
+    close: "/docs",
+    transforms: { CODE: embed },
+  });
+  const updated = property(processed, "updatedContents");
+  if (typeof updated !== "string") {
+    throw new TypeError(`markdown-magic returned no updated contents for ${file}`);
+  }
+  return updated;
+}
+
+/**
+ * Rewrite each `CODE` block in the given markdown files to a `ts` fence holding its source file,
+ * without the lines that hold only an oxlint or fallow directive, under the block's `header` option if any.
+ * Markers other than `CODE` are left as they are. No file is written until every file has been
+ * embedded.
+ *
+ * @param files - Paths of the markdown files to rewrite.
+ * @returns The markdown files that changed.
+ * @throws Error naming the markdown file when a `CODE` block has no `src` option or its `src` does
+ *   not start with `./` or `../`, or naming the path of a source file that cannot be read.
+ * @throws Error when markdown-magic exports no `processFile` function.
+ * @throws TypeError when markdown-magic returns no updated contents.
+ * @throws Error from the filesystem when a markdown file cannot be read or written.
+ */
+export async function embedCode(files: readonly string[]): Promise<string[]> {
+  const processFile = loadProcessFile();
+  const changes: [file: string, content: string][] = [];
+  for (const file of files) {
+    const original = readFileSync(file, "utf8");
+    const updated = await embedFile(processFile, file, original);
+    if (updated !== original) changes.push([file, updated]);
+  }
+  for (const [file, content] of changes) writeFileSync(file, content);
+  return changes.map(([file]) => file);
+}
+
+if (import.meta.main) {
+  for (const file of await embedCode(process.argv.slice(2))) {
+    console.log(`embedded code in ${file}`);
+  }
+}

@@ -28,6 +28,7 @@
     "@vitest/coverage-istanbul": "^5.1.0",
     "cspell": "^10.4.0",
     "fallow": "^3.42.0",
+    "markdown-magic": "~4.11.0",
     "markdownlint-cli2": "^0.24.0",
     "oxfmt": "^0.78.0",
     "oxlint": "^1.93.0",

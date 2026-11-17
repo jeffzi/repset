@@ -35,14 +35,24 @@ A benchmark file is any file named `*.bench.ts`, `.mts`, `.js` or `.mjs`. Its to
 Pass a name and the function to time. Return the result of the work: repset consumes what the
 function returns, which keeps the engine from deleting work whose result nothing uses.
 
+<!-- docs CODE
+  src="./docs/snippets/sort.bench.ts"
+  header="// benchmarks/sort.bench.ts"
+-->
+
 ```ts
 // benchmarks/sort.bench.ts
 import { bench } from "repset";
 
-const input = Array.from({ length: 1000 }, (_, index) => (index * 7919) % 1000);
+const SIZE = 1000;
+// Prime, so the stride visits every value once.
+const STRIDE = 7919;
+const shuffled = Array.from({ length: SIZE }, (_, index) => (index * STRIDE) % SIZE);
 
-bench("sort/copy", () => input.toSorted((a, b) => a - b));
+bench("sort/copy", () => shuffled.toSorted((a, b) => a - b));
 ```
+
+<!-- /docs -->
 
 ### 2. Build the state once with `setup`
 
@@ -52,6 +62,11 @@ and `fn` receives it. `setup` runs once, and every call of `fn` reuses its state
 Shared state fits a function that leaves its state as it found it, such as a search or a read. It
 also fits one that changes its state while its cost stays the same from call to call, such as a
 simulation step: the thousandth call must cost what the tenth did.
+
+<!-- docs CODE
+  src="./docs/snippets/search.bench.ts"
+  header="// benchmarks/search.bench.ts"
+-->
 
 ```ts
 // benchmarks/search.bench.ts
@@ -76,22 +91,35 @@ bench("search/binary", {
 });
 ```
 
+<!-- /docs -->
+
 ### 3. Give every call a fresh state with `setupPerCall`
 
 A function that changes its state, such as an in-place sort, would measure something else on its
 second call. Set `setupPerCall: true` and every call gets a state of its own: repset runs `setup`,
 then times `fn` alone.
 
+<!-- docs CODE
+  src="./docs/snippets/sort-in-place.bench.ts"
+  header="// benchmarks/sort-in-place.bench.ts"
+-->
+
 ```ts
 // benchmarks/sort-in-place.bench.ts
 import { bench } from "repset";
 
+const SIZE = 1000;
+// Prime, so the stride visits every value once.
+const STRIDE = 7919;
+
 bench("sort/in-place", {
-  setup: () => Array.from({ length: 1000 }, (_, index) => (index * 7919) % 1000),
+  setup: () => Array.from({ length: SIZE }, (_, index) => (index * STRIDE) % SIZE),
   fn: (values) => values.sort((a, b) => a - b),
   setupPerCall: true,
 });
 ```
+
+<!-- /docs -->
 
 ## Run it
 

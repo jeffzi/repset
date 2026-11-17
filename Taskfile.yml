@@ -41,7 +41,7 @@ tasks:
     desc: Run the checks, fixing what they can; ONLY=<names> runs some, files after -- narrow them
     vars:
       STEPS:
-        '{{.ONLY | default "mise-lock lint md fmt links types spelling actions quality security
+        '{{.ONLY | default "docs mise-lock lint md fmt links types spelling actions quality security
         secrets"}}'
     cmds:
       - for:
@@ -52,7 +52,7 @@ tasks:
     desc: Fix what the checks can, then delete unused code
     deps: [_deps]
     cmds:
-      - for: [lint, md, fmt]
+      - for: [docs, lint, md, fmt]
         task: "_{{.ITEM}}"
       - "{{.MISE}} npx fallow fix --yes --no-create-config"
 
@@ -118,6 +118,17 @@ tasks:
           PATTERN: '\.(ts|tsx|mts|cts|js)$'
           CMD: "{{.MISE}} npx oxlint --fix"
 
+  # Copies each docs CODE marker's source file into the markdown, so markdownlint and oxfmt see the
+  # embedded code.
+  _docs:
+    internal: true
+    deps: [_deps]
+    cmds:
+      - task: _on-files
+        vars:
+          PATTERN: '\.md$'
+          CMD: "{{.MISE}} node --import tsx scripts/embed-code.ts"
+
   _md:
     internal: true
     deps: [_deps]
@@ -159,7 +170,8 @@ tasks:
     internal: true
     deps: [_deps]
     cmds:
-      # The overhead check's benchmark file and the examples import the built entry from dist/.
+      # The overhead check's benchmark file, the examples and docs/snippets/ import the built entry
+      # from dist/.
       - task: build
       - "{{.MISE}} npx tsc -p tsconfig.json"
       - "{{.MISE}} npx oxlint --type-aware --disable-nested-config"

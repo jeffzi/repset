@@ -193,7 +193,12 @@ export async function findRuntime(
   return version === undefined ? undefined : { runtime, executable, version };
 }
 
-/** The first executable file named `name` in a `PATH` directory, or `undefined` when none is. */
+/**
+ * Finds the first executable file named `name` in a `PATH` directory, in `PATH` order.
+ *
+ * @param name - The executable's name, without an extension.
+ * @returns The executable's path, or `undefined` when no `PATH` directory holds one.
+ */
 function onPath(name: string): string | undefined {
   // Without a shell, Windows starts only these, so a `.cmd` on PATH would be found but not run.
   const extensions = process.platform === "win32" ? [".com", ".exe"] : [""];
@@ -242,16 +247,8 @@ async function probeVersion(
   const ended = await processEnded(probe, options);
   if (ended.kind === "error") throw failedWith(`cannot run ${executable} --version`, ended.error);
   if (ended.kind === "stopped") return undefined;
-  if (ended.kind === "timeout") {
-    throw new ConfigError(
-      `${executable} --version was killed after its ${options.timeout} ms timeout`,
-    );
-  }
-  if (ended.signal !== null) {
-    throw new ConfigError(`${executable} --version was killed by ${ended.signal}`);
-  }
-  if (ended.code !== 0) {
-    throw new ConfigError(`${executable} --version exited with status ${ended.code ?? "unknown"}`);
+  if (ended.kind === "timeout" || ended.signal !== null || ended.code !== 0) {
+    throw new ConfigError(howItEnded(`${executable} --version`, ended, options.timeout));
   }
   const version = printed.trim().replace(/^v/, "");
   if (version === "") throw new ConfigError(`${executable} --version printed nothing`);
@@ -457,7 +454,7 @@ function outcomeOf(
       ? { status: "failed", error: read.error, output }
       : { status: "ok", result: read, output };
   }
-  return noResult(`${howItEnded(ending, timeout)}: ${read}`, output);
+  return noResult(`${howItEnded("the child", ending, timeout)}: ${read}`, output);
 }
 
 /** A failure in phase `child`, which has no stack. */
@@ -470,11 +467,23 @@ function noResult(message: string, output: string): ChildFailed {
   return { status: "failed", error: childFailure(message), output };
 }
 
-/** The timeout, the signal or the exit status (`unknown` when null) a failure message opens with. */
-function howItEnded(ending: Exclude<Ending, { kind: "stopped" }>, timeout: number): string {
-  if (ending.kind === "timeout") return `the child was killed after its ${timeout} ms timeout`;
-  if (ending.signal !== null) return `the child was killed by ${ending.signal}`;
-  return `the child exited with status ${ending.code ?? "unknown"}`;
+/**
+ * Says how a process that did not end cleanly ended, for the start of a failure message.
+ *
+ * @param subject - What ran, as the sentence's subject, such as `the child`.
+ * @param ending - How it ended: at its timeout, or on its own.
+ * @param timeout - The timeout it ran under, in milliseconds.
+ * @returns `<subject> was killed after its <timeout> ms timeout`, `<subject> was killed by
+ *   <signal>`, or `<subject> exited with status <code>`, with `unknown` for a null code.
+ */
+function howItEnded(
+  subject: string,
+  ending: Exclude<Ending, { kind: "stopped" }>,
+  timeout: number,
+): string {
+  if (ending.kind === "timeout") return `${subject} was killed after its ${timeout} ms timeout`;
+  if (ending.signal !== null) return `${subject} was killed by ${ending.signal}`;
+  return `${subject} exited with status ${ending.code ?? "unknown"}`;
 }
 
 // ---------------------------------------------------------------------------

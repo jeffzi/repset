@@ -36,7 +36,11 @@ export function defineConfig(config: Config): Config {
   return config;
 }
 
-/** A config that cannot be found, loaded or checked, or an option value that is out of range. */
+/**
+ * A problem with the setup the person running repset can fix: a config, option or flag that is
+ * invalid, a selection that matches no file or case, a runtime that cannot be found or probed, or a
+ * report that cannot be written. The command prints its message without a stack and exits 2.
+ */
 export class ConfigError extends Error {
   override readonly name: string = "ConfigError";
 }

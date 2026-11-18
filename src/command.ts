@@ -10,7 +10,13 @@ import { styleText } from "node:util";
 import { CommanderError } from "commander";
 
 import { findRuntime as realFindRuntime, startChild as realStartChild } from "./children.js";
-import { type Command, commandLine, OUT_STDOUT, parseCommand } from "./command-line.js";
+import {
+  type Command,
+  commandLine,
+  noColorGiven,
+  OUT_STDOUT,
+  parseCommand,
+} from "./command-line.js";
 import { ConfigError, failedWith, resolveOptions } from "./options.js";
 import { reportText, reportWrites, writeReport } from "./report-output.js";
 import type { Result } from "./report.js";
@@ -88,12 +94,6 @@ interface Context extends ChildFunctions {
 // Color and errors
 // ---------------------------------------------------------------------------
 
-/** Whether `flag` is among the arguments before a `--` terminator. */
-function flagged(args: readonly string[], flag: string): boolean {
-  const end = args.indexOf("--");
-  return (end === -1 ? args : args.slice(0, end)).includes(flag);
-}
-
 /** The color depth of a terminal that reports none: one bit under `NO_COLOR` or a dumb `TERM`. */
 function environmentColorDepth(): number {
   const noColor = process.env["NO_COLOR"];
@@ -118,8 +118,8 @@ function showsColor(output: Output): boolean {
 }
 
 /**
- * Judges each stream on its own: it shows color when it would by `styleText`'s rules and
- * `--no-color` is not among the arguments before a `--` terminator.
+ * Judges each stream on its own: it shows color when it would by `styleText`'s rules and the
+ * command line does not give `--no-color`.
  *
  * @param args - The command's arguments.
  * @param stdout - The stream the command's output goes to.
@@ -127,7 +127,7 @@ function showsColor(output: Output): boolean {
  * @returns Whether each stream shows color.
  */
 export function streamColors(args: readonly string[], stdout: Output, stderr: Output): Colors {
-  const noColor = flagged(args, "--no-color");
+  const noColor = noColorGiven(args);
   return { stdout: !noColor && showsColor(stdout), stderr: !noColor && showsColor(stderr) };
 }
 

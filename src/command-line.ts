@@ -161,6 +161,26 @@ export function commandLine(version: string, stdout: Output, colors: Colors): Pa
 }
 
 /**
+ * Whether the command line asks for no color, read as the parser reads it: `--no-color` before a
+ * `--` terminator, and not as the value a value flag takes. It is read before the command line is
+ * checked, so a usage error honors it too.
+ *
+ * @param args - The command's arguments.
+ * @returns Whether `--no-color` is given.
+ */
+export function noColorGiven(args: readonly string[]): boolean {
+  const options = commandLine("", { write: () => true }, { stdout: false, stderr: false }).options;
+  const takesValue = new Set(options.filter((option) => option.required).map(({ long }) => long));
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--") return false;
+    if (arg === "--no-color") return true;
+    if (takesValue.has(arg)) index += 1;
+  }
+  return false;
+}
+
+/**
  * Reads the command line and `REPSET_CALLS_PER_SAMPLE`.
  *
  * @param args - The command's arguments.

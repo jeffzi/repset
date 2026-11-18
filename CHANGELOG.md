@@ -9,7 +9,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Add color to the table, error lines and `--once` results on a terminal, decided per stream.
+- Add color to the table, error lines, `--once` results and `--help` on a terminal, decided per
+  stream.
 - Add `--no-color` to turn color off on every stream.
 - Add a live progress line on a terminal stderr, counting the children of each phase, with a line
   per finished case of a measuring run.
@@ -22,6 +23,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Draw the table with column rules and separators, its rows flush with the runtime heading.
 - Take the last value of a flag given twice instead of rejecting it.
 - Print the version, not the help, when `--version` and `--help` are both given.
+- Fail a value flag given last with no value before printing `--help`.
+- Take a value that starts with `-` as a flag's value: `--filter --list` filters on `--list`.
+- Reword the messages of command-line errors.
 
 ### Fixed
 

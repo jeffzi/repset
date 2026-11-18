@@ -129,6 +129,38 @@ describe("main", () => {
       });
     });
 
+    it.each([
+      { why: "after a -- terminator", args: ["--", "--no-color"] },
+      { why: "as the value of a value flag", args: ["--filter", "--no-color", "--banana"] },
+    ])("keeps color on a terminal stderr when --no-color comes $why", async ({ args }) => {
+      const { code, stderr } = await command(workspace(), args, {
+        startChild: startsNoChild,
+        stderr: terminal(),
+      });
+
+      expect({ code, styled: styled(stderr) }).toStrictEqual({ code: 2, styled: true });
+    });
+
+    it("prints the colored table on a terminal stdout when NO_COLOR is empty", async () => {
+      vi.stubEnv("NO_COLOR", "");
+
+      const ended = await runTable([], { stdout: terminal() });
+
+      expect(ended.stdout).toBe(formatTable(ended.results, { color: true }));
+    });
+
+    it("keeps the METRIC lines on stdout plain while the live line shows on a terminal stderr", async () => {
+      const args = ["sort.bench.ts", "parse.bench.ts", "--metric-lines"];
+      const plain = await command(workspace(), args, { startChild: failsParse });
+
+      const live = await command(workspace(), args, { startChild: failsParse, stderr: terminal() });
+
+      expect({ styled: styled(live.stderr), stdout: live.stdout }).toStrictEqual({
+        styled: true,
+        stdout: plain.stdout,
+      });
+    });
+
     it("colors the --once status words on a terminal stdout", async () => {
       const { code, stdout } = await command(
         workspace(),

@@ -20,7 +20,7 @@ import { CALLS_PER_SAMPLE } from "../src/command-line.js";
 import { RUNTIMES, type Runtime } from "../src/measure/runtime.js";
 import { DEFAULT_TIMEOUT } from "../src/options.js";
 import type { Report } from "../src/report.js";
-import { isRecord, thrownMessage } from "../src/utils.js";
+import { isRecord, property, thrownMessage } from "../src/utils.js";
 import { BODY_NAMES, type BodyName } from "./check-overhead/bodies.js";
 import {
   judgeScenario,
@@ -246,7 +246,7 @@ function checkedBaselineMedian(scenario: Scenario, status: number | null, stdout
   } catch {
     printed = undefined;
   }
-  const median = isRecord(printed) ? printed["median"] : undefined;
+  const median = property(printed, "median");
   if (typeof median !== "number" || !Number.isFinite(median)) {
     throw new Error(`${name}: the baseline child printed no finite median`);
   }

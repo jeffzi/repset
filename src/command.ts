@@ -42,7 +42,7 @@ export interface Output {
 }
 
 /** The signals that interrupt a run. */
-const SIGNALS = ["SIGINT", "SIGTERM"] as const;
+const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 
 type Signal = (typeof SIGNALS)[number];
 
@@ -462,8 +462,9 @@ function printError(stderr: Output, error: ConfigError): void {
  * @param io - The working directory, the streams, the signal source and the child functions; the
  *   process's own by default.
  * @returns 0 when every selected case ran, 1 when one failed or the last report write failed, 2
- *   when the command line, the config or the selection is wrong, and 130 or 143 when `SIGINT` or
- *   `SIGTERM` interrupted it, even when a wrong selection or config follows the interrupt.
+ *   when the command line, the config or the selection is wrong, and 130, 143 or 129 when `SIGINT`,
+ *   `SIGTERM` or `SIGHUP` interrupted it, even when a wrong selection or config follows the
+ *   interrupt.
  * @throws {Error} An error that is not a {@link ConfigError}, such as one reading the package's
  *   `package.json`.
  */

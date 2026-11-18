@@ -662,6 +662,7 @@ describe("main", () => {
     it.each([
       { signal: "SIGINT", code: 130 },
       { signal: "SIGTERM", code: 143 },
+      { signal: "SIGHUP", code: 129 },
     ])(
       "exits $code on $signal after a failed case, with the finished results in the report and table",
       async ({ signal, code }) => {

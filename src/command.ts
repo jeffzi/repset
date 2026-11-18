@@ -6,7 +6,10 @@ import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { constants } from "node:os";
 import { dirname, resolve } from "node:path";
 import { Writable } from "node:stream";
-import { parseArgs, styleText } from "node:util";
+import { styleText } from "node:util";
+
+import { createHelpConfig } from "@jeffzi/epaulettes";
+import { Command as Parser, CommanderError } from "commander";
 
 import { findRuntime as realFindRuntime, startChild as realStartChild } from "./children.js";
 import { RUNTIMES, type Runtime } from "./measure/runtime.js";
@@ -32,7 +35,7 @@ import {
   shownPath,
 } from "./run.js";
 import { failureLines, formatTable, metricLine, paint } from "./table.js";
-import { describe, thrownMessage } from "./utils.js";
+import { describe } from "./utils.js";
 
 /** Like `Omit`, but `K` must be a key of `T`, so a misspelled or removed key fails to compile. */
 export type StrictOmit<T, K extends keyof T> = Omit<T, K>;
@@ -66,26 +69,8 @@ export interface CommandIo extends ChildFunctionOverrides {
   readonly signals?: SignalSource | undefined;
 }
 
-const FLAGS = {
-  filter: { type: "string" },
-  runtime: { type: "string" },
-  "min-time": { type: "string" },
-  "min-samples": { type: "string" },
-  timeout: { type: "string" },
-  "node-import": { type: "string" },
-  out: { type: "string" },
-  "metric-lines": { type: "boolean" },
-  list: { type: "boolean" },
-  once: { type: "boolean" },
-  config: { type: "string" },
-  "no-color": { type: "boolean" },
-  help: { type: "boolean" },
-  version: { type: "boolean" },
-} as const;
-
-type FlagName = keyof typeof FLAGS;
-
-const EXCLUSIVE: readonly (readonly [FlagName, FlagName])[] = [
+/** Flags that cannot be given together, by name without the leading dashes. */
+const EXCLUSIVE: readonly (readonly [string, string])[] = [
   ["list", "once"],
   ["list", "out"],
   ["list", "metric-lines"],
@@ -102,26 +87,16 @@ export const CALLS_PER_SAMPLE = "REPSET_CALLS_PER_SAMPLE";
 /** The `--out` value that sends the report to stdout instead of a file. */
 const OUT_STDOUT = "-";
 
-const USAGE = `Usage: repset [options] [file...]
+/** The README's common commands; keep them in step with it. */
+const EXAMPLES: readonly (readonly [string, string])[] = [
+  ["repset benchmarks/sort.bench.ts", "Runs the benchmarks of that file only"],
+  ["repset --filter '^sort/'", "Runs the cases whose id matches the regular expression"],
+  ["repset --runtime node,bun", "Runs every case on Node, then on Bun"],
+  ["repset --out report.json", "Writes the JSON report to report.json"],
+  ["repset --once", "Runs every case once, without timing, to check it works"],
+];
 
-Measures the benchmark cases in the given files, or in the files the config's include matches.
-
-Options:
-  --filter <regex>        Run only the cases whose id matches the expression
-  --runtime <list>        Comma-separated runtimes, run in the order given: ${RUNTIMES.join(", ")}
-  --min-time <ms>         Timing lasts at least this long
-  --min-samples <n>       Timing takes at least this many samples
-  --timeout <ms>          The longest one child may run
-  --node-import <module>  A module Node children import first, such as tsx
-  --out <file>            Write the report there; - writes it to stdout and the table to stderr
-  --metric-lines          Print one METRIC line per result on stdout and the table to stderr
-  --list                  Print the selected case ids and exit
-  --once                  Run every selected case once per runtime, with no timing
-  --config <file>         Read this config file instead of looking for one
-  --no-color              Print no color, even on a terminal
-  --help                  Print this help
-  --version               Print the version
-`;
+const README = "https://github.com/jeffzi/repset#readme";
 
 interface CommandInput extends StrictOmit<OptionsInput, "cwd"> {
   readonly files: readonly string[] | undefined;
@@ -257,30 +232,87 @@ function runtimeList(text: string | undefined): Runtime[] | undefined {
   return runtimes;
 }
 
+/** The help's closing text: the examples, then where the README lives. */
+function helpEpilogue(color: boolean): string {
+  const width = Math.max(...EXAMPLES.map(([example]) => example.length));
+  const examples = EXAMPLES.map(([example, what]) => `  ${example.padEnd(width)}  ${what}`);
+  const heading = paint("bold", "Examples:", color);
+  return ["", heading, ...examples, "", `Documentation: ${README}`].join("\n");
+}
+
 /**
- * Reads the command line and `REPSET_CALLS_PER_SAMPLE`, past `--help` and `--version`.
+ * Builds the command-line parser. Its help and version go to `stdout`, styled when that stream
+ * shows color. It prints no error and never exits the process: it throws instead.
+ *
+ * @param version - The version `--version` prints.
+ * @param stdout - The stream the help and the version go to.
+ * @param colors - Whether each stream shows color.
+ * @returns The parser, with no arguments parsed yet.
+ */
+function commandLine(version: string, stdout: Output, colors: Colors): Parser {
+  return new Parser("repset")
+    .description(
+      "Measures the benchmark cases in the given files, or in the files the config's include matches.",
+    )
+    .argument("[file...]")
+    .option("--filter <regex>", "Run only the cases whose id matches the expression")
+    .option(
+      "--runtime <list>",
+      `Comma-separated runtimes, run in the order given: ${RUNTIMES.join(", ")}`,
+    )
+    .option("--min-time <ms>", "Timing lasts at least this long")
+    .option("--min-samples <n>", "Timing takes at least this many samples")
+    .option("--timeout <ms>", "The longest one child may run")
+    .option("--node-import <module>", "A module Node children import first, such as tsx")
+    .option("--out <file>", "Write the report there; - writes it to stdout and the table to stderr")
+    .option("--metric-lines", "Print one METRIC line per result on stdout and the table to stderr")
+    .option("--list", "Print the selected case ids and exit")
+    .option("--once", "Run every selected case once per runtime, with no timing")
+    .option("--config <file>", "Read this config file instead of looking for one")
+    .option("--no-color", "Print no color, even on a terminal")
+    .helpOption("--help", "Print this help")
+    .version(version, "--version", "Print the version")
+    .addHelpText("after", helpEpilogue(colors.stdout))
+    .configureHelp(createHelpConfig())
+    .configureOutput({
+      writeOut: (text) => {
+        stdout.write(text);
+      },
+      // A usage error reaches stderr through the ConfigError the exit override throws.
+      outputError: () => undefined,
+      getOutHasColors: () => colors.stdout,
+    })
+    .exitOverride((error) => {
+      if (error.exitCode === 0) throw error;
+      throw new ConfigError(error.message.replace(/^error: /u, ""), { cause: error });
+    });
+}
+
+/**
+ * Reads the command line and `REPSET_CALLS_PER_SAMPLE`.
  *
  * @param args - The command's arguments.
+ * @param parser - The parser {@link commandLine} built.
  * @returns What the command line and the environment ask for.
- * @throws {ConfigError} When a flag is unknown, given twice, missing its value or holding a value
- *   that is not a decimal number where one is due, when two flags conflict, or when
- *   `REPSET_CALLS_PER_SAMPLE` holds a bad value.
+ * @throws {CommanderError} With exit code 0 once `--help` or `--version` printed, before any other
+ *   check.
+ * @throws {ConfigError} When a flag is unknown, missing its value or holding a value that is not a
+ *   decimal number where one is due, when two flags conflict, or when `REPSET_CALLS_PER_SAMPLE`
+ *   holds a bad value.
  */
-function parseCommand(args: readonly string[]): Command {
-  let parsed;
-  try {
-    parsed = parseArgs({ args: [...args], options: FLAGS, allowPositionals: true, tokens: true });
-  } catch (error) {
-    throw new ConfigError(thrownMessage(error), { cause: error });
-  }
-  const { values, positionals, tokens } = parsed;
-  const given = new Set<string>();
-  for (const token of tokens) {
-    if (token.kind !== "option") continue;
-    if (given.has(token.name)) throw new ConfigError(`--${token.name} is given more than once`);
-    given.add(token.name);
-  }
-  if (values["metric-lines"] === true && values.out === OUT_STDOUT) {
+function parseCommand(args: readonly string[], parser: Parser): Command {
+  parser.parse(args, { from: "user" });
+  const values = parser.opts<Record<string, unknown>>();
+  const text = (key: string): string | undefined => {
+    const value = values[key];
+    return typeof value === "string" ? value : undefined;
+  };
+  const given = new Set(
+    parser.options
+      .filter((option) => parser.getOptionValueSource(option.attributeName()) === "cli")
+      .map((option) => option.name()),
+  );
+  if (given.has("metric-lines") && text("out") === OUT_STDOUT) {
     throw new ConfigError("--metric-lines cannot be used with --out -");
   }
   const conflict = EXCLUSIVE.find(([one, other]) => given.has(one) && given.has(other));
@@ -288,22 +320,22 @@ function parseCommand(args: readonly string[]): Command {
     throw new ConfigError(`--${conflict[0]} cannot be used with --${conflict[1]}`);
   }
   let mode: Command["mode"] = "run";
-  if (values.list === true) mode = "list";
-  if (values.once === true) mode = "once";
+  if (given.has("list")) mode = "list";
+  if (given.has("once")) mode = "once";
   return {
     mode,
     input: {
-      files: positionals.length > 0 ? positionals : undefined,
-      filter: values.filter,
-      runtimes: runtimeList(values.runtime),
-      minTime: decimal("min-time", values["min-time"]),
-      minSamples: decimal("min-samples", values["min-samples"]),
-      timeout: decimal("timeout", values.timeout),
-      nodeImport: values["node-import"],
-      config: values.config,
+      files: parser.args.length > 0 ? parser.args : undefined,
+      filter: text("filter"),
+      runtimes: runtimeList(text("runtime")),
+      minTime: decimal("min-time", text("minTime")),
+      minSamples: decimal("min-samples", text("minSamples")),
+      timeout: decimal("timeout", text("timeout")),
+      nodeImport: text("nodeImport"),
+      config: text("config"),
     },
-    out: values.out,
-    metricLines: values["metric-lines"] === true,
+    out: text("out"),
+    metricLines: given.has("metric-lines"),
     callsPerSample: fixedCallsPerSample(process.env[CALLS_PER_SAMPLE]),
   };
 }
@@ -523,10 +555,10 @@ function printError(stderr: Output, error: ConfigError, color: boolean): void {
  * @param args - The command's arguments, without the runtime and the script.
  * @param io - The working directory, the streams, the signal source and the child functions; the
  *   process's own by default.
- * @returns 0 when every selected case ran, 1 when one failed or the last report write failed, 2
- *   when the command line, the config or the selection is wrong, and 130, 143 or 129 when `SIGINT`,
- *   `SIGTERM` or `SIGHUP` interrupted it, even when a wrong selection or config follows the
- *   interrupt.
+ * @returns 0 when every selected case ran or `--help` or `--version` printed, 1 when one failed
+ *   or the last report write failed, 2 when the command line, the config or the selection is
+ *   wrong, and 130, 143 or 129 when `SIGINT`, `SIGTERM` or `SIGHUP` interrupted it, even when a
+ *   wrong selection or config follows the interrupt.
  * @throws {Error} An error that is not a {@link ConfigError}, such as one reading the package's
  *   `package.json`.
  */
@@ -535,14 +567,6 @@ export async function main(args: readonly string[], io: CommandIo = {}): Promise
   const stderr = io.stderr ?? process.stderr;
   // Judged before the command line is checked, so a usage error honors --no-color too.
   const colors = streamColors(args, stdout, stderr);
-  if (flagged(args, "--help")) {
-    stdout.write(USAGE);
-    return 0;
-  }
-  if (flagged(args, "--version")) {
-    stdout.write(`${await packageVersion()}\n`);
-    return 0;
-  }
   const controller = new AbortController();
   let received: Signal | undefined;
   const listeners = SIGNALS.map((signal) => {
@@ -559,7 +583,8 @@ export async function main(args: readonly string[], io: CommandIo = {}): Promise
   const exitCode = (code: number): number =>
     received === undefined ? code : 128 + constants.signals[received];
   try {
-    const command = parseCommand(args);
+    const parser = commandLine(await packageVersion(), stdout, colors);
+    const command = parseCommand(args, parser);
     const context: Context = {
       cwd: io.cwd ?? process.cwd(),
       stdout,
@@ -572,6 +597,8 @@ export async function main(args: readonly string[], io: CommandIo = {}): Promise
     const actions = { run: measure, list, once };
     return exitCode(await actions[command.mode](command, context));
   } catch (error) {
+    // Commander ends a run that printed the help or the version with an error of exit code 0.
+    if (error instanceof CommanderError) return exitCode(0);
     if (!(error instanceof ConfigError)) throw error;
     printError(stderr, error, colors.stderr);
     return exitCode(2);

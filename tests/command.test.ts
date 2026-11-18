@@ -207,10 +207,31 @@ describe("main", () => {
     });
   });
 
+  describe("when a value flag is given twice", () => {
+    it("hands the run the last value", async () => {
+      const dir = workspace();
+
+      const { code } = await command(dir, [
+        "--filter",
+        "sort",
+        "--filter",
+        "parse",
+        "--out",
+        "report.json",
+      ]);
+
+      expect({ code, filter: reportAt(join(dir, "report.json")).options.filter }).toStrictEqual({
+        code: 0,
+        filter: "parse",
+      });
+    });
+  });
+
   describe("when the command line is wrong", () => {
     it.each([
       { why: "an unknown flag", args: ["--banana"] },
-      { why: "a value flag given twice", args: ["--filter", "sort", "--filter", "parse"] },
+      { why: "a value flag missing its value", args: ["--filter"] },
+      { why: "a value flag missing its value after --help", args: ["--help", "--filter"] },
       { why: "an exponent", args: ["--min-time", "1e3"] },
       { why: "an empty number", args: ["--min-time", ""] },
       { why: "--metric-lines with --out -", args: ["--metric-lines", "--out", "-"] },
@@ -229,6 +250,32 @@ describe("main", () => {
         });
       },
     );
+
+    it.each(["min-time", "min-samples", "timeout"])(
+      "exits 2 on a --%s that is not decimal, naming the flag and the value",
+      async (flag) => {
+        const { code, stderr } = await command(workspace(), [`--${flag}`, "1e3"], {
+          startChild: startsNoChild,
+        });
+
+        expect({
+          code,
+          named: stderr.includes(`--${flag}`) && stderr.includes('"1e3"'),
+        }).toStrictEqual({ code: 2, named: true });
+      },
+    );
+
+    it("prints a Commander error behind the repset: prefix alone", async () => {
+      const { code, stderr } = await command(workspace(), ["--banana"], {
+        startChild: startsNoChild,
+      });
+
+      expect({
+        code,
+        prefix: stderr.startsWith("repset: "),
+        commander: stderr.includes("error: "),
+      }).toStrictEqual({ code: 2, prefix: true, commander: false });
+    });
 
     it("exits 2 on an unknown --runtime name, naming the value", async () => {
       const { code, stderr } = await command(workspace(), ["--runtime", "node,banana"], {
@@ -316,14 +363,13 @@ describe("main", () => {
       });
     });
 
-    it.each([
-      { why: "an unknown flag", args: ["--banana", "--help"] },
-      { why: "--version", args: ["--version", "--help"] },
-    ])("prints the usage beside $why, checking nothing else", async ({ args }) => {
+    it("prints the usage beside an unknown flag, checking nothing else", async () => {
       const dir = workspace();
       const usage = (await command(dir, ["--help"])).stdout;
 
-      const { code, stdout, stderr } = await command(dir, args, { startChild: startsNoChild });
+      const { code, stdout, stderr } = await command(dir, ["--banana", "--help"], {
+        startChild: startsNoChild,
+      });
 
       expect({ code, stdout, stderr }).toStrictEqual({ code: 0, stdout: usage, stderr: "" });
     });
@@ -342,6 +388,17 @@ describe("main", () => {
         version: true,
         stderr: "",
       });
+    });
+
+    it("prints the version, not the usage, beside --help", async () => {
+      const dir = workspace();
+      const version = (await command(dir, ["--version"])).stdout;
+
+      const { code, stdout, stderr } = await command(dir, ["--version", "--help"], {
+        startChild: startsNoChild,
+      });
+
+      expect({ code, stdout, stderr }).toStrictEqual({ code: 0, stdout: version, stderr: "" });
     });
 
     it("takes --version after a -- terminator as a benchmark file, exiting 2 naming it", async () => {

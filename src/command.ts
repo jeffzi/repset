@@ -31,7 +31,7 @@ import {
   selectCases,
   shownPath,
 } from "./run.js";
-import { failureLines, formatTable, formatTime, metricLine, paint } from "./table.js";
+import { failureLines, formatTable, metricLine, paint } from "./table.js";
 import { thrownMessage } from "./utils.js";
 
 /** Like `Omit`, but `K` must be a key of `T`, so a misspelled or removed key fails to compile. */
@@ -163,8 +163,6 @@ const CLEAR_ROW = "\r\x1b[2K";
 
 /** What the command shows on stderr as each child starts. */
 interface Progress {
-  /** Whether a live line shows, redrawn in place, rather than one line per child. */
-  readonly live: boolean;
   /** Starts counting the children of a phase that starts `total` of them. */
   planned(total: number): void;
   /** Shows that the phase's next child starts, doing what `text` says. */
@@ -178,7 +176,6 @@ interface Progress {
 /** Progress as one line per child, with no count, animation or cursor control. */
 function linePerChild(stderr: Output): Progress {
   return {
-    live: false,
     planned: () => undefined,
     starting: (text) => {
       stderr.write(`${text}\n`);
@@ -220,7 +217,6 @@ function liveLine(stderr: Output, color: boolean): Progress {
     stderr.write(`${CLEAR_ROW}${paint("green", indicator, color)}${rest.join("")}`);
   };
   return {
-    live: true,
     planned: (count) => {
       total = count;
       started = 0;
@@ -252,14 +248,6 @@ function liveLine(stderr: Output, color: boolean): Progress {
 function progressOn(stderr: Output, color: boolean): Progress {
   const live = stderr.isTTY === true && process.env["TERM"] !== "dumb";
   return live ? liveLine(stderr, color) : linePerChild(stderr);
-}
-
-/** The line a finished case leaves above the live line: its median, or the phase it failed in. */
-function finishedLine(result: Result, color: boolean): string {
-  const ran = `${result.id} on ${result.runtime.name}`;
-  return result.status === "ok"
-    ? `${ran}  ${formatTime(result.median)}\n`
-    : `${ran}  ${paint("red", `failed in ${result.error.phase}`, color)}\n`;
 }
 
 // ---------------------------------------------------------------------------
@@ -324,7 +312,6 @@ async function measure(command: Command, context: Context): Promise<number> {
     callsPerSample: command.callsPerSample,
     onSelected: writes?.onSelected,
     onResult: (result: Result) => {
-      if (progress.live) progress.above(stderr, finishedLine(result, context.colors.stderr));
       const line = command.metricLines ? metricLine(result) : undefined;
       if (line !== undefined) progress.above(stdout, `${line}\n`);
       writes?.onResult?.(result);

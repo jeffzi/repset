@@ -648,8 +648,6 @@ describe("main", () => {
     /** A matcher for a row that contains `text`, ignoring the indicator frame before it. */
     const live = (text: string): unknown => expect.stringContaining(text);
     const listing = [[live("[1/2] listing sort.bench.ts")], [live("[2/2] listing parse.bench.ts")]];
-    const sortPassed = naming("sort/fast", "node", "4.66");
-    const parseFailed = naming("parse/fast", "node", "failed in fn");
 
     it.each([
       {
@@ -658,9 +656,8 @@ describe("main", () => {
         screens: [
           ...listing,
           [live("[1/2] measuring sort/fast on node")],
-          [sortPassed, live("[2/2] measuring parse/fast on node")],
+          [live("[2/2] measuring parse/fast on node")],
         ],
-        final: [sortPassed, parseFailed, ""],
       },
       {
         run: "a --once run",
@@ -670,11 +667,10 @@ describe("main", () => {
           [live("[1/2] running sort/fast on node")],
           [live("[2/2] running parse/fast on node")],
         ],
-        final: [""],
       },
     ])(
-      "shows one counted live line per child of $run, a line per finished measured case above it",
-      async ({ args, screens, final }) => {
+      "shows one counted live line per child of $run, leaving nothing on stderr once it ends",
+      async ({ args, screens }) => {
         const stderr = terminalOf(80);
         const seen: string[][] = [];
 
@@ -683,7 +679,7 @@ describe("main", () => {
           startChild: watching(stderr, seen, failsParse),
         });
 
-        expect({ seen, final: screen(stderr.text) }).toStrictEqual({ seen: screens, final });
+        expect({ seen, final: screen(stderr.text) }).toStrictEqual({ seen: screens, final: [""] });
       },
     );
 
@@ -774,11 +770,7 @@ describe("main", () => {
       );
 
       const { results } = parseReport(stdout, "stdout");
-      expect(screen(stderr.text)).toStrictEqual([
-        sortPassed,
-        parseFailed,
-        ...screen(formatTable(results)),
-      ]);
+      expect(screen(stderr.text)).toStrictEqual(screen(formatTable(results)));
     });
 
     it("clears the live line before printing a failed listing's error", async () => {
@@ -816,7 +808,7 @@ describe("main", () => {
       }).toStrictEqual({ tickingAtCrash: true, timersLeft: 0, last: "" });
     });
 
-    it("clears the live line on SIGINT, keeping the finished case's line, exiting 130", async () => {
+    it("clears the live line on SIGINT, exiting 130", async () => {
       const stderr = terminalOf(80);
       const signals = new EventEmitter();
       const stopsSecond = starter((request, runtime, options) => {
@@ -833,7 +825,7 @@ describe("main", () => {
 
       expect({ code, screen: screen(stderr.text) }).toStrictEqual({
         code: 130,
-        screen: [sortPassed, ""],
+        screen: [""],
       });
     });
   });

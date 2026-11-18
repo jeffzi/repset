@@ -12,8 +12,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Add color to the table, error lines, `--once` results and `--help` on a terminal, decided per
   stream.
 - Add `--no-color` to turn color off on every stream.
-- Add a live progress line on a terminal stderr, counting the children of each phase, with a line
-  per finished case of a measuring run.
+- Add a live progress line on a terminal stderr, counting the children of each phase.
 - Add examples and a link to the README to `--help`, and suggest the closest flag after an unknown
   one.
 - Add the version, the platform and a link to a prefilled GitHub issue to the output of a crash.

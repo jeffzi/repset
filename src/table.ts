@@ -50,7 +50,7 @@ function significant(value: number): string {
 }
 
 /** Prints a time in nanoseconds in the unit that keeps three significant digits, up to seconds. */
-export function formatTime(ns: number): string {
+function formatTime(ns: number): string {
   let value = ns;
   let unit = 0;
   // Compare the rounded value, so 999.7 ns prints as 1.00 µs rather than 1000 ns.

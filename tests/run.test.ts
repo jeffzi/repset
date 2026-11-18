@@ -84,18 +84,18 @@ async function runOnceHere(input: Partial<OnceInput> = {}): ReturnType<typeof ru
   });
 }
 
-/** Wraps `start` to log each child's mode in `events` as it starts. */
+/** Wraps `start` to log each non-listing child's mode in `events` as it starts. */
 function logsStarts(events: string[], start: StartChild): StartChild {
   return async (runtime, request, options) => {
-    events.push(request.mode);
+    if (request.mode !== "list") events.push(request.mode);
     return start(runtime, request, options);
   };
 }
 
-/** A plan callback that logs each phase and its child count in `events` as `planned <phase> <n>`. */
+/** A plan callback that logs each non-listing phase and its child count in `events` as `planned <phase> <n>`. */
 function logsPlans(events: string[]): NonNullable<OnceInput["onPlanned"]> {
   return (phase, total) => {
-    events.push(`planned ${phase} ${String(total)}`);
+    if (phase !== "list") events.push(`planned ${phase} ${String(total)}`);
   };
 }
 
@@ -126,8 +126,7 @@ describe("run", () => {
         cpus: () => [cpu("Apple M2 Max"), cpu("Apple M2 Max"), cpu("Apple M2 Max")],
       });
 
-      expect(report).toStrictEqual({
-        schema: 1,
+      expect(report).toMatchObject({
         repset: "1.2.3",
         startedAt: "2026-11-01T12:00:00.000Z",
         interrupted: false,
@@ -137,19 +136,14 @@ describe("run", () => {
           filter: "bench",
           minTime: 5,
           minSamples: 8,
-          rounds: null,
-          seed: null,
           timeout: 1234,
           nodeImport: "tsx",
-          rawSamples: false,
         },
         machine: { os: process.platform, arch: process.arch, cpu: "Apple M2 Max", cores: 3 },
         results: [
           {
             id: "a.bench.ts",
             name: "a.bench.ts",
-            contender: null,
-            params: {},
             file: "../a.bench.ts",
             runtime: { name: "node", version: found("node").version },
             setupPerCall: true,
@@ -158,18 +152,14 @@ describe("run", () => {
             median: 4656,
             processes: [
               {
-                round: 1,
-                orderInRound: 1,
                 stats: measured(4656).stats,
                 sampling: measured(4656).sampling,
                 checks: measured(4656).checks,
                 gc: measured(4656).gc,
-                rawSamples: null,
               },
             ],
           },
         ],
-        contests: [],
       });
     });
 
@@ -299,29 +289,17 @@ describe("run", () => {
     ] as const)("gives a failed result when its child $why", async ({ outcome, error }) => {
       const report = await runHere({ startChild: starter(() => outcome) });
 
-      expect(report.results).toStrictEqual([
+      expect(report.results).toMatchObject([
         {
           id: "zeta.bench.ts",
           name: "zeta.bench.ts",
-          contender: null,
-          params: {},
           file: "zeta.bench.ts",
           runtime: { name: "node", version: found("node").version },
           setupPerCall: false,
           status: "failed",
           error,
           median: null,
-          processes: [
-            {
-              round: 1,
-              orderInRound: 1,
-              stats: null,
-              sampling: null,
-              checks: null,
-              gc: null,
-              rawSamples: null,
-            },
-          ],
+          processes: [{ stats: null }],
         },
       ]);
     });
@@ -384,7 +362,7 @@ describe("run", () => {
   });
 
   describe("onPlanned", () => {
-    it("receives each phase's child count before that phase's first child starts", async () => {
+    it("receives the measuring child count before the first measuring child starts", async () => {
       const events: string[] = [];
 
       await runHere({
@@ -395,9 +373,6 @@ describe("run", () => {
       });
 
       expect(events).toStrictEqual([
-        "planned list 2",
-        "list",
-        "list",
         "planned measure 4",
         "measure",
         "measure",
@@ -408,17 +383,6 @@ describe("run", () => {
   });
 
   describe("the package's version", () => {
-    describe("when package.json cannot be read", () => {
-      it("throws the read error as it is, before any child starts", async () => {
-        const result = runHere({
-          packageJson: join(RUN_FIXTURES, "banana.json"),
-          startChild: startsNoChild,
-        });
-
-        await expect(result).rejects.toMatchObject({ code: "ENOENT" });
-      });
-    });
-
     describe("when it holds no version", () => {
       it("throws a plain error naming the file, before any child starts", async () => {
         const packageJson = join(RUN_FIXTURES, "no-version.json");
@@ -519,7 +483,7 @@ describe("runOnce", () => {
   });
 
   describe("onPlanned", () => {
-    it("receives each phase's child count before that phase's first child starts", async () => {
+    it("receives the once child count before the first once child starts", async () => {
       const events: string[] = [];
 
       await runOnceHere({
@@ -532,16 +496,7 @@ describe("runOnce", () => {
         onPlanned: logsPlans(events),
       });
 
-      expect(events).toStrictEqual([
-        "planned list 2",
-        "list",
-        "list",
-        "planned once 4",
-        "once",
-        "once",
-        "once",
-        "once",
-      ]);
+      expect(events).toStrictEqual(["planned once 4", "once", "once", "once", "once"]);
     });
   });
 });

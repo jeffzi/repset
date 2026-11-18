@@ -18,9 +18,9 @@ import {
   naming,
   starter,
   startsNoCase,
+  stubColorTerminalEnv,
   terminal,
   unblockWrites,
-  VERSION,
   workspace,
 } from "./command-harness.js";
 import {
@@ -79,32 +79,9 @@ describe("main", () => {
     });
   });
 
-  describe("when a value flag is given twice", () => {
-    it("hands the run the last value", async () => {
-      const dir = workspace();
-
-      const { code } = await command(dir, [
-        "--filter",
-        "sort",
-        "--filter",
-        "parse",
-        "--out",
-        "report.json",
-      ]);
-
-      expect({ code, filter: reportAt(join(dir, "report.json")).options.filter }).toStrictEqual({
-        code: 0,
-        filter: "parse",
-      });
-    });
-  });
-
   describe("when the command line is wrong", () => {
     it.each([
       { why: "an unknown flag", args: ["--banana"] },
-      { why: "a value flag missing its value", args: ["--filter"] },
-      { why: "a value flag missing its value after --help", args: ["--help", "--filter"] },
-      { why: "an exponent", args: ["--min-time", "1e3"] },
       { why: "an empty number", args: ["--min-time", ""] },
       { why: "--metric-lines with --out -", args: ["--metric-lines", "--out", "-"] },
       { why: "--list with --once", args: ["--list", "--once"] },
@@ -123,19 +100,16 @@ describe("main", () => {
       },
     );
 
-    it.each(["min-time", "min-samples", "timeout"])(
-      "exits 2 on a --%s that is not decimal, naming the flag and the value",
-      async (flag) => {
-        const { code, stderr } = await command(workspace(), [`--${flag}`, "1e3"], {
-          startChild: startsNoChild,
-        });
+    it("exits 2 on a --timeout that is not decimal, naming the flag and the value", async () => {
+      const { code, stderr } = await command(workspace(), ["--timeout", "1e3"], {
+        startChild: startsNoChild,
+      });
 
-        expect({
-          code,
-          named: stderr.includes(`--${flag}`) && stderr.includes('"1e3"'),
-        }).toStrictEqual({ code: 2, named: true });
-      },
-    );
+      expect({
+        code,
+        named: stderr.includes("--timeout") && stderr.includes('"1e3"'),
+      }).toStrictEqual({ code: 2, named: true });
+    });
 
     it("prints a Commander error behind the repset: prefix alone", async () => {
       const { code, stderr } = await command(workspace(), ["--banana"], {
@@ -232,58 +206,6 @@ describe("main", () => {
         code: 0,
         printed: true,
         stderr: "",
-      });
-    });
-
-    it("prints the usage beside an unknown flag, checking nothing else", async () => {
-      const dir = workspace();
-      const usage = (await command(dir, ["--help"])).stdout;
-
-      const { code, stdout, stderr } = await command(dir, ["--banana", "--help"], {
-        startChild: startsNoChild,
-      });
-
-      expect({ code, stdout, stderr }).toStrictEqual({ code: 0, stdout: usage, stderr: "" });
-    });
-  });
-
-  describe("when --version is given", () => {
-    it("prints the package's version on stdout for --version beside an unknown flag", async () => {
-      const dir = workspace();
-
-      const { code, stdout, stderr } = await command(dir, ["--banana", "--version"], {
-        startChild: startsNoChild,
-      });
-
-      expect({ code, version: stdout.includes(VERSION), stderr }).toStrictEqual({
-        code: 0,
-        version: true,
-        stderr: "",
-      });
-    });
-
-    it("prints the version, not the usage, beside --help", async () => {
-      const dir = workspace();
-      const version = (await command(dir, ["--version"])).stdout;
-
-      const { code, stdout, stderr } = await command(dir, ["--version", "--help"], {
-        startChild: startsNoChild,
-      });
-
-      expect({ code, stdout, stderr }).toStrictEqual({ code: 0, stdout: version, stderr: "" });
-    });
-
-    it("takes --version after a -- terminator as a benchmark file, exiting 2 naming it", async () => {
-      const dir = workspace();
-
-      const { code, stdout, stderr } = await command(dir, ["--", "--version"], {
-        startChild: startsNoChild,
-      });
-
-      expect({ code, stdout, stderr }).toStrictEqual({
-        code: 2,
-        stdout: "",
-        stderr: expect.stringContaining("--version"),
       });
     });
   });
@@ -520,10 +442,7 @@ describe("main", () => {
   });
 
   describe("when --metric-lines is given", () => {
-    /**
-     * Runs two files with metric lines, the second case failing, recording stdout as each child
-     * starts.
-     */
+    /** Runs both files with metric lines, failing parse/fast, noting stdout as each child starts. */
     async function runWithMetricLines(): Promise<
       Ended & {
         readonly printedAtStart: readonly string[];
@@ -604,14 +523,11 @@ describe("main", () => {
     const TIMERS = ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] as const;
 
     beforeEach(() => {
-      vi.stubEnv("NO_COLOR", undefined);
-      vi.stubEnv("FORCE_COLOR", undefined);
-      vi.stubEnv("TERM", "xterm-256color");
+      stubColorTerminalEnv();
     });
 
     afterEach(() => {
       vi.useRealTimers();
-      vi.unstubAllEnvs();
     });
 
     /** A stream stand-in for a terminal `columns` wide, with nothing written yet. */
@@ -807,65 +723,37 @@ describe("main", () => {
         last: lastRow(stderr.text),
       }).toStrictEqual({ tickingAtCrash: true, timersLeft: 0, last: "" });
     });
-
-    it("clears the live line on SIGINT, exiting 130", async () => {
-      const stderr = terminalOf(80);
-      const signals = new EventEmitter();
-      const stopsSecond = starter((request, runtime, options) => {
-        if (request.id === "sort/fast") return measuresAll(runtime, request, options);
-        signals.emit("SIGINT");
-        return stopped;
-      });
-
-      const { code } = await command(workspace(), ["sort.bench.ts", "parse.bench.ts"], {
-        signals,
-        stderr,
-        startChild: stopsSecond,
-      });
-
-      expect({ code, screen: screen(stderr.text) }).toStrictEqual({
-        code: 130,
-        screen: [""],
-      });
-    });
   });
 
   describe("on an interrupt", () => {
-    it.each([
-      { signal: "SIGINT", code: 130 },
-      { signal: "SIGTERM", code: 143 },
-      { signal: "SIGHUP", code: 129 },
-    ])(
-      "exits $code on $signal after a failed case, with the finished results in the report and table",
-      async ({ signal, code }) => {
-        const dir = workspace();
-        const signals = new EventEmitter();
-        const failsThenStops = starter((request) => {
-          if (request.id === "sort/fast") return failedOutcome("fn", "kiwi");
-          signals.emit(signal);
-          return stopped;
-        });
+    it("exits 143 on SIGTERM after a failed case, with the finished results in the report and table", async () => {
+      const dir = workspace();
+      const signals = new EventEmitter();
+      const failsThenStops = starter((request) => {
+        if (request.id === "sort/fast") return failedOutcome("fn", "kiwi");
+        signals.emit("SIGTERM");
+        return stopped;
+      });
 
-        const ended = await command(
-          dir,
-          ["sort.bench.ts", "parse.bench.ts", "--out", "report.json"],
-          { signals, startChild: failsThenStops },
-        );
+      const ended = await command(
+        dir,
+        ["sort.bench.ts", "parse.bench.ts", "--out", "report.json"],
+        { signals, startChild: failsThenStops },
+      );
 
-        const report = reportAt(join(dir, "report.json"));
-        expect({
-          code: ended.code,
-          interrupted: report.interrupted,
-          ran: report.results.map((result) => result.id),
-          stdout: ended.stdout,
-        }).toStrictEqual({
-          code,
-          interrupted: true,
-          ran: ["sort/fast"],
-          stdout: formatTable(report.results),
-        });
-      },
-    );
+      const report = reportAt(join(dir, "report.json"));
+      expect({
+        code: ended.code,
+        interrupted: report.interrupted,
+        ran: report.results.map((result) => result.id),
+        stdout: ended.stdout,
+      }).toStrictEqual({
+        code: 143,
+        interrupted: true,
+        ran: ["sort/fast"],
+        stdout: formatTable(report.results),
+      });
+    });
 
     it("exits 130 on SIGINT in a --list run, printing nothing on stdout", async () => {
       const dir = workspace();

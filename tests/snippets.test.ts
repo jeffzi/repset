@@ -5,15 +5,13 @@ import { describe, expect, it } from "vitest";
 
 import { runtimesHere } from "./real-bun.js";
 import { spawnCommand, TSX } from "./spawn-command.js";
+import { SPAWN_TIMEOUT_MS } from "./spawn-limits.js";
 
 /** The files the README embeds; each imports `repset`, which resolves to the built `dist/`. */
 const SNIPPETS = fileURLToPath(new URL("../docs/snippets/", import.meta.url));
 
 /** Every snippet file, by name. */
 const SNIPPET_FILES = readdirSync(SNIPPETS).filter((name) => name.endsWith(".bench.ts"));
-
-/** Node, tsx and a snippet's listing and `--once` children starting, on a slow CI runner. */
-const SPAWN_TIMEOUT_MS = 60_000;
 
 describe("the README's snippet files", () => {
   describe.each(runtimesHere())("on $runtime", ({ runtime, here }) => {

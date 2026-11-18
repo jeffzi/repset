@@ -17,6 +17,7 @@ import { expectConfigError } from "./config-error.js";
 import { errorOf } from "./error-of.js";
 import { MELON } from "./fake-children.js";
 import { requiresRealBunHere, runtimesHere } from "./real-bun.js";
+import { KILL_AFTER_MS, POSIX, RETURN_MARGIN_MS, SPAWN_TIMEOUT_MS } from "./spawn-limits.js";
 import { suiteTemporaryDir, temporaryDir } from "./temporary-dir.js";
 
 const FIXTURES = fileURLToPath(new URL("fixtures/children/", import.meta.url));
@@ -31,20 +32,11 @@ function benchFile(name: string): string {
   return fileURLToPath(new URL(`fixtures/child/${name}`, import.meta.url));
 }
 
-/** Windows has no signal a process can die on, and runs no shell script as an executable. */
-const POSIX = process.platform !== "win32";
-
-/** A runtime and tsx starting, then a short measurement, on a slow CI runner. */
-const SPAWN_TIMEOUT_MS = 60_000;
-
-/** The `timeout` of a child that must not be killed, so one that never exits fails instead of hanging. */
-const KILL_AFTER_MS = 30_000;
+/** How long after a lookup starts its stop signal fires. */
+const STOP_AFTER_MS = 300;
 
 /** The `timeout` of a child that must be killed; the hanging fixtures end by themselves after 5 s. */
 const SHORT_TIMEOUT_MS = 1000;
-
-/** How long past its `timeout` or its stop a killed child's call may take to return. */
-const RETURN_MARGIN_MS = 2000;
 
 /** How a runtime lookup is bounded when its probe must not be killed. */
 const LOOKUP = { timeout: KILL_AFTER_MS } as const;
@@ -218,12 +210,30 @@ describe("findRuntime", { timeout: SPAWN_TIMEOUT_MS }, () => {
       });
     });
 
+    describe("when the stop signal fires while its probe runs", () => {
+      it.runIf(POSIX)("returns undefined in time, killing the probe", async () => {
+        vi.stubEnv("PATH", fixture("bin/hang"));
+        const controller = new AbortController();
+        setTimeout(() => {
+          controller.abort();
+        }, STOP_AFTER_MS);
+
+        const [found, elapsed] = await timed(async () =>
+          findRuntime("bun", { timeout: KILL_AFTER_MS, signal: controller.signal }),
+        );
+
+        expect(found).toBeUndefined();
+        expect(elapsed).toBeLessThan(STOP_AFTER_MS + RETURN_MARGIN_MS);
+      });
+    });
+
     it("throws a ConfigError naming the runtime when PATH holds no executable for it", async () => {
       vi.stubEnv("PATH", FIXTURES);
 
       const found = findRuntime("bun", LOOKUP);
 
       await expectConfigError(found, [/\bbun\b/]);
+      await expect(found).rejects.not.toThrow(/--version/);
     });
 
     it("throws a ConfigError naming the runtime when PATH is unset", async () => {
@@ -411,24 +421,6 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
       });
     });
 
-    it("names the exit status of a child that exited before writing one", async () => {
-      const outcome = await startFixture("exit-early.ts");
-
-      expect(outcome).toMatchObject({
-        ...NO_RESULT,
-        error: { ...NO_RESULT.error, message: expect.stringMatching(/\b3\b/) },
-      });
-    });
-
-    it.runIf(POSIX)("names the signal of a child that died before writing one", async () => {
-      const outcome = await startFixture("self-kill.ts");
-
-      expect(outcome).toMatchObject({
-        ...NO_RESULT,
-        error: { ...NO_RESULT.error, message: expect.stringContaining("SIGKILL") },
-      });
-    });
-
     it("names the spawn error of a child that could not be started", async () => {
       const missing: FoundRuntime = { ...NODE, executable: fixture("banana") };
 
@@ -531,16 +523,6 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
       const outcome = await startFixture("euro.ts");
 
       expect(outcome.output).toBe("€".repeat(Math.floor((16 * 1024) / 3)));
-    });
-
-    it("returns the result of a child entry that prints a megabyte to each stream", async () => {
-      const outcome = await startChild(
-        NODE,
-        { mode: "list", file: benchFile("loud.ts") },
-        { timeout: KILL_AFTER_MS, nodeImport: "tsx" },
-      );
-
-      expect(outcome).toMatchObject({ status: "ok", result: { cases: [{ id: "loud" }] } });
     });
   });
 

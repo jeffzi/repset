@@ -7,15 +7,13 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_MIN_SAMPLES, DEFAULT_MIN_TIME } from "../src/measure/measure.js";
 import { ConfigError, quotedList, resolveOptions, type OptionsInput } from "../src/options.js";
 import { expectConfigError } from "./config-error.js";
+import { SPAWN_TIMEOUT_MS } from "./spawn-limits.js";
 
 const FIXTURES = fileURLToPath(new URL("fixtures/config", import.meta.url));
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 
 const OPTIONS_MODULE = new URL("../src/options.ts", import.meta.url).href;
-
-/** Node and tsx starting on a slow CI runner. */
-const SPAWN_TIMEOUT_MS = 60_000;
 
 /** The `minSamples` that `config` resolves to in a spawned Node process, through Node's own loader. */
 function minSamplesInNode(config: string): string {

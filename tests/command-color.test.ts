@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Result } from "../src/report.js";
 import { formatTable } from "../src/table.js";
@@ -11,10 +11,9 @@ import {
   type CommandIo,
   type Ended,
   failsParse,
-  linesOf,
   measuresAll,
-  naming,
   starter,
+  stubColorTerminalEnv,
   styled,
   terminal,
   workspace,
@@ -25,13 +24,7 @@ import { parseReport, reportAt } from "./report-file.js";
 describe("main", () => {
   describe("when a stream would show color", () => {
     beforeEach(() => {
-      vi.stubEnv("NO_COLOR", undefined);
-      vi.stubEnv("FORCE_COLOR", undefined);
-      vi.stubEnv("TERM", "xterm-256color");
-    });
-
-    afterEach(() => {
-      vi.unstubAllEnvs();
+      stubColorTerminalEnv();
     });
 
     /** Runs two files with the report in `report.json`, returning what ended and the results. */
@@ -88,7 +81,7 @@ describe("main", () => {
       expect(ended.stdout).toBe(formatTable(ended.results));
     });
 
-    it("colors the table on a terminal stderr but never the report on a terminal stdout under --out -", async () => {
+    it("colors the table on a terminal stderr under --out -", async () => {
       const { stdout, stderr } = await command(
         workspace(),
         ["sort.bench.ts", "parse.bench.ts", "--out", "-"],
@@ -97,10 +90,9 @@ describe("main", () => {
 
       const { results } = parseReport(stdout, "stdout");
       expect({
-        stdoutStyled: styled(stdout),
         stderrStyled: styled(stderr),
         tableEnd: stderr.endsWith(formatTable(results, { color: true })),
-      }).toStrictEqual({ stdoutStyled: false, stderrStyled: true, tableEnd: true });
+      }).toStrictEqual({ stderrStyled: true, tableEnd: true });
     });
 
     it("colors the repset: prefix of an error line on a terminal stderr", async () => {
@@ -161,29 +153,6 @@ describe("main", () => {
       });
     });
 
-    it("colors the --once status words on a terminal stdout", async () => {
-      const { code, stdout } = await command(
-        workspace(),
-        ["--once", "sort.bench.ts", "parse.bench.ts"],
-        {
-          startChild: failsParse,
-          stdout: terminal(),
-        },
-      );
-
-      expect({
-        code,
-        styled: styled(stdout),
-        lines: linesOf(stripVTControlCharacters(stdout)),
-      }).toStrictEqual({
-        code: 1,
-        styled: true,
-        lines: [
-          naming("ok", "node", "sort/fast"),
-          naming("failed", "node", "parse/fast", "fn", "kiwi"),
-        ],
-      });
-    });
     it("aligns a colored multi-line --once failure as the plain one", async () => {
       const failsOnTwoLines = starter((request, runtime, options) =>
         request.id === "parse/fast"

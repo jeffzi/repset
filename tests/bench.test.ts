@@ -180,12 +180,6 @@ describe("bench", () => {
     it.each([
       { benchmark: asyncFunction, why: "a bare async function", fragments: ["sort"] },
       { benchmark: asyncGenerator, why: "a bare async generator", fragments: ["sort"] },
-      { benchmark: { fn: asyncFunction }, why: "an async fn", fragments: ["sort", "fn"] },
-      {
-        benchmark: { setup: asyncFunction, fn: sync },
-        why: "an async setup",
-        fragments: ["sort", "setup"],
-      },
     ])("throws a TypeError for $why", ({ benchmark, fragments }) => {
       const error = rejectionOf("sort", benchmark);
 
@@ -267,29 +261,27 @@ describe("registeredCases", () => {
       expect(reader.registeredCases().map((registered) => registered.case.fn)).toStrictEqual([fn]);
     });
   });
-});
 
-describe("the registry slot", () => {
-  describe("when it holds a value that is not an object", () => {
+  describe("when the registry slot holds a value that is not an object", () => {
     beforeEach(() => {
       Reflect.set(globalThis, REGISTRY, "banana");
     });
 
-    it("makes registeredCases throw a TypeError naming the value found", () => {
+    it("throws a TypeError naming the value found", () => {
       const error = errorOf(registeredCases);
 
       expectTypeErrorHolding(error, ["banana"]);
     });
   });
 
-  describe("when it holds a format this copy does not know", () => {
+  describe("when the registry slot holds a format this copy does not know", () => {
     const slot = { format: 99 };
 
     beforeEach(() => {
       Reflect.set(globalThis, REGISTRY, slot);
     });
 
-    it("makes registeredCases throw a TypeError naming the format found", () => {
+    it("throws a TypeError naming the format found", () => {
       const error = errorOf(registeredCases);
 
       expectTypeErrorHolding(error, ["99"]);

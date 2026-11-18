@@ -1,9 +1,9 @@
 import { EventEmitter } from "node:events";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 
 import type { StrictOmit } from "../src/command-line.js";
 import { main } from "../src/command.js";
@@ -21,25 +21,6 @@ type Io = NonNullable<Parameters<typeof main>[1]>;
 
 /** The benchmark files every workspace holds; the fake children never import them. */
 const FILES = ["sort.bench.ts", "parse.bench.ts"];
-
-/** The package's own version, which `--version` prints and the report records. */
-export const VERSION = packageVersion();
-
-/** The version the package's `package.json` holds, failing the suite when it holds none. */
-function packageVersion(): string {
-  const pkg: unknown = JSON.parse(
-    readFileSync(new URL("../package.json", import.meta.url), "utf8"),
-  );
-  if (
-    typeof pkg === "object" &&
-    pkg !== null &&
-    "version" in pkg &&
-    typeof pkg.version === "string"
-  ) {
-    return pkg.version;
-  }
-  throw new Error("package.json holds no version");
-}
 
 /** The one case the fake listing child finds in `file`. */
 function caseOf(file: string): string {
@@ -91,6 +72,13 @@ export function captured(): Captured {
 /** A stream stand-in that claims to be a terminal, with nothing written yet. */
 export function terminal(): Captured {
   return Object.assign(captured(), { isTTY: true as const });
+}
+
+/** Clears the color variables and claims a 256-color terminal, so a terminal stream shows color. */
+export function stubColorTerminalEnv(): void {
+  vi.stubEnv("NO_COLOR", undefined);
+  vi.stubEnv("FORCE_COLOR", undefined);
+  vi.stubEnv("TERM", "xterm-256color");
 }
 
 /** Whether `text` holds an escape code. */

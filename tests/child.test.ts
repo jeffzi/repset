@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listCases, measureCase, parseRequest, runOnce, type ChildResult } from "../src/child.js";
 import { enabledGc } from "./measure/fixtures.js";
 import { resetRegistry } from "./registry.js";
+import { KILL_AFTER_MS, SPAWN_TIMEOUT_MS } from "./spawn-limits.js";
 
 /** The slot where the `lifecycle.ts` fixture records each callback it runs. */
 const CALLS = Symbol.for("repset.child-calls");
@@ -62,7 +63,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  vi.unstubAllGlobals();
   Reflect.deleteProperty(globalThis, CALLS);
 });
 
@@ -294,12 +294,6 @@ describe("runOnce", () => {
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 
 const CHILD = fileURLToPath(new URL("../src/child.ts", import.meta.url));
-
-/** A runtime and tsx starting, then a list or once request, on a slow CI runner. */
-const SPAWN_TIMEOUT_MS = 60_000;
-
-/** How long a child may run before it is killed, so one that never exits fails instead of hanging. */
-const KILL_AFTER_MS = 30_000;
 
 /** The bytes the `loud.ts` fixture prints to each stream, its newline included. */
 const LOUD_STREAM_BYTES = 1024 * 1024;

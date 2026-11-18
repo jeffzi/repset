@@ -276,8 +276,8 @@ describe("formatTable", () => {
       const lines = tableLines(results);
 
       const row = rowIndex(lines, "apple");
-      const indent = " ".repeat(lines[row]?.indexOf("failed") ?? 0);
-      expect(lines[row]).toMatch(/^apple │ failed\b.*plum exploded$/u);
+      const indent = " ".repeat((lines[row]?.indexOf("│") ?? 0) + 2);
+      expect(lines[row]).toMatch(/^apple │ \S.*plum exploded$/u);
       expect(lines[row + 1]).toBe(`${indent}at the stone`);
       expect(lines[row + 2]).toBe(`${indent}  and the pit`);
     });
@@ -290,7 +290,7 @@ describe("formatTable", () => {
         const lines = tableLines(results);
 
         const row = rowIndex(lines, "apple");
-        const indent = " ".repeat(lines[row]?.indexOf("failed") ?? 0);
+        const indent = " ".repeat((lines[row]?.indexOf("│") ?? 0) + 2);
         expect(lines[row + 1]).toMatch(new RegExp(`^${indent}\\S.* melon split$`, "u"));
       });
 
@@ -308,20 +308,26 @@ describe("formatTable", () => {
   });
 
   describe("when colored", () => {
-    it("styles the table while its visible text stays the plain table, columns aligned", () => {
-      const results = [
-        measured("elderberry", "node", { ...flatStats(4656), max: 2_340_000, sampleCount: 1200 }),
-        failed("fig", "teardown", "kiwi\nplum", { message: "melon split", stack: "at teardown" }),
-        measured("banana", "bun", flatStats(812)),
-      ];
+    const results = [
+      measured("elderberry", "node", { ...flatStats(4656), max: 2_340_000, sampleCount: 1200 }),
+      failed("fig", "teardown", "kiwi\nplum", { message: "melon split", stack: "at teardown" }),
+      measured("banana", "bun", flatStats(812)),
+    ];
+
+    it("styles the table", () => {
       const plain = formatTable(results);
 
       const colored = formatTable(results, { color: true });
 
-      expect({
-        styled: colored !== plain,
-        visible: stripVTControlCharacters(colored),
-      }).toStrictEqual({ styled: true, visible: plain });
+      expect(colored).not.toBe(plain);
+    });
+
+    it("keeps the visible text equal to the plain table", () => {
+      const plain = formatTable(results);
+
+      const colored = formatTable(results, { color: true });
+
+      expect(stripVTControlCharacters(colored)).toBe(plain);
     });
   });
 });

@@ -102,7 +102,12 @@ function tableLines(results: readonly Result[]): string[] {
 
 /** The index of the first line that starts with `id` and a space, or -1 when no row does. */
 function rowIndex(lines: readonly string[], id: string): number {
-  return lines.findIndex((line) => line.trimStart().startsWith(`${id} `));
+  return lines.findIndex((line) => line.startsWith(`${id} `));
+}
+
+/** A rule of `─` whose runs have the given lengths, `junction` between them. */
+function rule(junction: string, runs: readonly number[]): string {
+  return runs.map((run) => "─".repeat(run)).join(junction);
 }
 
 /** The index of the first line naming `runtime` and its version, or -1 when none does. */
@@ -110,12 +115,10 @@ function headingIndex(lines: readonly string[], runtime: Runtime): number {
   return lines.findIndex((line) => line.includes(runtime) && line.includes(found(runtime).version));
 }
 
-/** The cells of the row of case `id` in the table of `results`: runs of text two or more spaces separate. */
+/** The trimmed cells of the row of case `id` in the table of `results`, split on ` │ `. */
 function rowTexts(results: readonly Result[], id: string): string[] {
   const lines = tableLines(results);
-  return [...(lines[rowIndex(lines, id)] ?? "").matchAll(/\S+(?: \S+)*/gu)].map(
-    (match) => match[0],
-  );
+  return (lines[rowIndex(lines, id)] ?? "").split(" │ ").map((cell) => cell.trim());
 }
 
 describe("formatTable", () => {
@@ -163,12 +166,14 @@ describe("formatTable", () => {
 
       const lines = tableLines(results);
 
-      expect(lines[rowIndex(lines, "nut")]).toBe("  nut   812 ns  812 ns  812 ns  812 ns       64");
+      expect(lines[rowIndex(lines, "nut")]).toBe(
+        "nut  │ 812 ns │ 812 ns │ 812 ns │ 812 ns │      64",
+      );
     });
   });
 
   describe("when a failed row holds a section's longest id", () => {
-    it("pads every row of the section to that id", () => {
+    it("boxes the section with every row padded to that id", () => {
       const results = [
         measured("apple", "node", flatStats(812)),
         measured("elderberry", "node", { ...flatStats(4656), max: 2_340_000, sampleCount: 1200 }),
@@ -179,12 +184,14 @@ describe("formatTable", () => {
       const lines = tableLines(results);
 
       expect(lines).toStrictEqual([
-        expect.any(String),
-        expect.any(String),
-        "  apple         812 ns   812 ns   812 ns   812 ns       64",
-        "  elderberry   4.66 µs  4.66 µs  4.66 µs  2.34 ms     1200",
-        expect.stringMatching(/^ {2}watermelons {2}\S.* plum exploded$/u),
-        expect.stringMatching(/^ {2}fig {10}\S.* kiwi$/u),
+        "node 24.1.0",
+        rule("┬", [12, 9, 9, 9, 9, 8]),
+        "case        │  median │    mean │     min │     max │ samples",
+        rule("┼", [12, 9, 9, 9, 9, 8]),
+        "apple       │  812 ns │  812 ns │  812 ns │  812 ns │      64",
+        "elderberry  │ 4.66 µs │ 4.66 µs │ 4.66 µs │ 2.34 ms │    1200",
+        expect.stringMatching(/^watermelons │ \S.* plum exploded$/u),
+        expect.stringMatching(/^fig {9}│ \S.* kiwi$/u),
         "",
         expect.any(String),
         "",
@@ -205,8 +212,12 @@ describe("formatTable", () => {
         "node 24.1.0",
         expect.any(String),
         expect.any(String),
+        expect.any(String),
+        expect.any(String),
         "",
         "bun 1.3.2",
+        expect.any(String),
+        expect.any(String),
         expect.any(String),
         expect.any(String),
         "",
@@ -224,7 +235,7 @@ describe("formatTable", () => {
       const lines = tableLines(results);
 
       expect(lines[rowIndex(lines, "banana")]).toBe(
-        "  banana  812 ns  812 ns  812 ns  812 ns       64",
+        "banana │ 812 ns │ 812 ns │ 812 ns │ 812 ns │      64",
       );
     });
 
@@ -265,8 +276,8 @@ describe("formatTable", () => {
       const lines = tableLines(results);
 
       const row = rowIndex(lines, "apple");
-      const indent = " ".repeat(lines[row]?.indexOf("plum exploded") ?? 0);
-      expect(lines[row]).toMatch(/plum exploded$/u);
+      const indent = " ".repeat(lines[row]?.indexOf("failed") ?? 0);
+      expect(lines[row]).toMatch(/^apple │ failed\b.*plum exploded$/u);
       expect(lines[row + 1]).toBe(`${indent}at the stone`);
       expect(lines[row + 2]).toBe(`${indent}  and the pit`);
     });
@@ -279,8 +290,19 @@ describe("formatTable", () => {
         const lines = tableLines(results);
 
         const row = rowIndex(lines, "apple");
-        const indent = " ".repeat(lines[row]?.indexOf("plum exploded") ?? 0);
+        const indent = " ".repeat(lines[row]?.indexOf("failed") ?? 0);
         expect(lines[row + 1]).toMatch(new RegExp(`^${indent}\\S.* melon split$`, "u"));
+      });
+
+      it("continues each further line of the teardown's message beneath its first", () => {
+        const teardownError = { message: "melon split\ninto halves", stack: "at teardown" };
+        const results = [failed("apple", "fn", "plum exploded", teardownError)];
+
+        const lines = tableLines(results);
+
+        const labelled = rowIndex(lines, "apple") + 1;
+        const indent = " ".repeat(lines[labelled]?.indexOf("melon split") ?? 0);
+        expect(lines[labelled + 1]).toBe(`${indent}into halves`);
       });
     });
   });

@@ -3,7 +3,7 @@ import { stripVTControlCharacters } from "node:util";
 import { describe, expect, it } from "vitest";
 
 import type { ChildPhase } from "../src/child.js";
-import type { StrictOmit } from "../src/command.js";
+import type { StrictOmit } from "../src/command-line.js";
 import type {
   FailedResult,
   MeasuredProcess,

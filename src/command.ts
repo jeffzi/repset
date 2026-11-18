@@ -2,8 +2,9 @@
  * The `repset` command: reads the command line, runs, lists or runs once the selected cases, and
  * prints what a person or a tool reads, returning the exit code.
  */
+import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { constants } from "node:os";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { Writable } from "node:stream";
 import { styleText } from "node:util";
 
@@ -18,8 +19,7 @@ import {
   parseCommand,
 } from "./command-line.js";
 import { ConfigError, failedWith, resolveOptions } from "./options.js";
-import { reportText, reportWrites, writeReport } from "./report-output.js";
-import type { Result } from "./report.js";
+import type { Report, Result } from "./report.js";
 import {
   type ChildFunctionOverrides,
   type ChildFunctions,
@@ -27,15 +27,13 @@ import {
   type OnceInput,
   packageVersion,
   run,
+  type RunInput,
   runOnce,
   selectCases,
   shownPath,
 } from "./run.js";
 import { failureLines, formatTable, metricLine, paint } from "./table.js";
 import { thrownMessage } from "./utils.js";
-
-/** Like `Omit`, but `K` must be a key of `T`, so a misspelled or removed key fails to compile. */
-export type StrictOmit<T, K extends keyof T> = Omit<T, K>;
 
 /** Where the command prints: `process.stdout` and `process.stderr` fit. */
 export interface Output {
@@ -284,6 +282,85 @@ function childInput(
 }
 
 // ---------------------------------------------------------------------------
+// Report file
+// ---------------------------------------------------------------------------
+
+/** The report as a file or stdout holds it: JSON indented by two spaces, and a newline. */
+function reportText(report: Report): string {
+  return `${JSON.stringify(report, null, 2)}\n`;
+}
+
+/**
+ * Writes `report` to `path` through a temporary file in the same directory renamed over it, so
+ * the file always holds a whole report, creating the directory first when it is missing.
+ *
+ * @param path - The report file, as an absolute path.
+ * @param report - The report to write.
+ * @throws {Error} The error creating the directory or writing or renaming the file; the temporary
+ *   file is removed first.
+ */
+function writeReport(path: string, report: Report): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const temporary = `${path}.${String(process.pid)}.tmp`;
+  try {
+    writeFileSync(temporary, reportText(report));
+    renameSync(temporary, path);
+  } catch (error) {
+    rmSync(temporary, { force: true });
+    throw error;
+  }
+}
+
+/**
+ * Writes `report` to `path` as {@link writeReport} does, turning any failure into the error the
+ * command prints.
+ *
+ * @param path - The report file, as an absolute path.
+ * @param shown - The report file as error messages show it.
+ * @param report - The report to write.
+ * @throws {ConfigError} When creating the directory or writing or renaming the file fails, its
+ *   message naming `shown` and the failure.
+ */
+function writeReportOrFail(path: string, shown: string, report: Report): void {
+  try {
+    writeReport(path, report);
+  } catch (error) {
+    throw failedWith(`cannot write the report to ${shown}`, error);
+  }
+}
+
+/**
+ * The callbacks that write the report while the run goes on, when `--out` names a file.
+ *
+ * @param path - The report file, as an absolute path.
+ * @param shown - The report file as error messages show it.
+ * @returns `onSelected`, which writes the report's head and throws when that write fails, and
+ *   `onResult`, which rewrites the report with each new result once `onSelected` ran and ignores
+ *   a failed write: the caller writes the report once more when the run ends, which repairs the
+ *   file or reports the failure.
+ * @throws {ConfigError} From `onSelected`, when writing the report's head fails.
+ */
+function reportWrites(path: string, shown: string): Pick<RunInput, "onSelected" | "onResult"> {
+  let current: Report | undefined;
+  return {
+    onSelected: (head) => {
+      current = head;
+      writeReportOrFail(path, shown, head);
+    },
+    onResult: (result) => {
+      if (current === undefined) return;
+      current = { ...current, results: [...current.results, result] };
+      try {
+        writeReport(path, current);
+      } catch {
+        // The run goes on: the write when the run ends either repairs the file or reports the
+        // failure, so a failure here has nothing left to tell.
+      }
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Actions
 // ---------------------------------------------------------------------------
 
@@ -324,10 +401,9 @@ async function measure(command: Command, context: Context): Promise<number> {
   let written = true;
   if (file !== undefined) {
     try {
-      writeReport(file.path, report);
+      writeReportOrFail(file.path, file.name, report);
     } catch (error) {
-      const { message } = failedWith(`cannot write the report to ${file.name}`, error);
-      stderr.write(errorLine(message, context.colors.stderr));
+      stderr.write(errorLine(thrownMessage(error), context.colors.stderr));
       written = false;
     }
   }

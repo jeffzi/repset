@@ -2,11 +2,14 @@
 import { createHelpConfig } from "@jeffzi/epaulettes";
 import { Command as Parser } from "commander";
 
-import type { Colors, Output, StrictOmit } from "./command.js";
+import type { Colors, Output } from "./command.js";
 import { RUNTIMES, type Runtime } from "./measure/runtime.js";
 import { ConfigError, isRuntime, type OptionsInput, QUOTED_RUNTIMES } from "./options.js";
 import { paint } from "./table.js";
 import { describe } from "./utils.js";
+
+/** Like `Omit`, but `K` must be a key of `T`, so a misspelled or removed key fails to compile. */
+export type StrictOmit<T, K extends keyof T> = Omit<T, K>;
 
 /** Flags that cannot be given together, by name without the leading dashes. */
 const EXCLUSIVE: readonly (readonly [string, string])[] = [

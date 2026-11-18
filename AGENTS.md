@@ -95,8 +95,9 @@ page, so code that needs a Node built-in goes to its home under rule 2's later t
    A shared module that passes the admission test folds into the generic-helpers module. Any other
    shared module whose importers satisfy the second test in rule 2 folds into that home. A module
    nothing in the project imports (a package entry, a script under `scripts/`) stands.
-4. **Only size blocks a fold**: the target would exceed the cap, summing the code lines of every
-   file that goes into it.
+4. **Only size and the name block a fold**: the target would exceed the cap, summing the code lines
+   of every file that goes into it, or the target's name would no longer say what everything in it
+   does (rule 5).
 
    None of these block a fold: "it is a distinct concern", "it is pure logic", "it is easier to test
    alone", "it is one of several alike", "reusable later", "keeps the importer small", "matches the

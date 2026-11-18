@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 
 import type { SamplingReport } from "../src/child.js";
 import { childRuntimeFlags, findRuntime } from "../src/children.js";
-import { CALLS_PER_SAMPLE } from "../src/command.js";
+import { CALLS_PER_SAMPLE } from "../src/command-line.js";
 import { RUNTIMES, type Runtime } from "../src/measure/runtime.js";
 import { DEFAULT_TIMEOUT } from "../src/options.js";
 import type { Report } from "../src/report.js";

@@ -7,6 +7,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Add color to the table, error lines and `--once` results on a terminal, decided per stream.
+- Add `--no-color` to turn color off on every stream.
+- Add a live progress line on a terminal stderr, counting the children of each phase, with a line
+  per finished case of a measuring run.
+- Add examples and a link to the README to `--help`, and suggest the closest flag after an unknown
+  one.
+- Add the version, the platform and a link to a prefilled GitHub issue to the output of a crash.
+
+### Changed
+
+- Draw the table with column rules and separators, its rows flush with the runtime heading.
+- Take the last value of a flag given twice instead of rejecting it.
+- Print the version, not the help, when `--version` and `--help` are both given.
+
+### Fixed
+
+- Write the final report and exit 129 on `SIGHUP`, as on `SIGINT` and `SIGTERM`.
+
 ## [0.1.0] - 2026-11-17
 
 ### Added

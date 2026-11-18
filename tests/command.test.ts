@@ -5,14 +5,12 @@ import { stripVTControlCharacters } from "node:util";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { crashReport } from "../src/command.js";
 import type { Result } from "../src/report.js";
 import { formatTable, metricLine } from "../src/table.js";
 import {
   blockWrites,
   captured,
   command,
-  type CommandIo,
   type Ended,
   failsParse,
   linesOf,
@@ -20,7 +18,6 @@ import {
   naming,
   starter,
   startsNoCase,
-  styled,
   terminal,
   unblockWrites,
   VERSION,
@@ -29,6 +26,8 @@ import {
 import {
   failedOutcome,
   type FindRuntime,
+  ranOnce,
+  starter as fakeStarter,
   type StartChild,
   startsNoChild,
   stopped,
@@ -601,7 +600,9 @@ describe("main", () => {
     });
   });
 
-  describe("when a stream would show color", () => {
+  describe("on a terminal stderr", () => {
+    const TIMERS = ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] as const;
+
     beforeEach(() => {
       vi.stubEnv("NO_COLOR", undefined);
       vi.stubEnv("FORCE_COLOR", undefined);
@@ -609,148 +610,231 @@ describe("main", () => {
     });
 
     afterEach(() => {
+      vi.useRealTimers();
       vi.unstubAllEnvs();
     });
 
-    /** Runs two files with the report in `report.json`, returning what ended and the results. */
-    async function runTable(
-      args: readonly string[],
-      io: CommandIo,
-    ): Promise<Ended & { readonly results: readonly Result[] }> {
-      const dir = workspace();
-      const ended = await command(
-        dir,
-        ["sort.bench.ts", "parse.bench.ts", "--out", "report.json", ...args],
-        { startChild: failsParse, ...io },
-      );
-      return { ...ended, results: reportAt(join(dir, "report.json")).results };
+    /** A stream stand-in for a terminal `columns` wide, with nothing written yet. */
+    function terminalOf(
+      columns: number,
+    ): ReturnType<typeof terminal> & { readonly columns: number } {
+      return Object.assign(terminal(), { columns });
     }
 
-    it("prints the colored table on a terminal stdout", async () => {
-      const ended = await runTable([], { stdout: terminal() });
+    /** The rows a terminal shows for `text`: a carriage return rewrites its row from the start. */
+    function screen(text: string): string[] {
+      return text
+        .split("\n")
+        .map((row) => stripVTControlCharacters(row.slice(row.lastIndexOf("\r") + 1)));
+    }
 
-      expect({ styled: styled(ended.stdout), stdout: ended.stdout }).toStrictEqual({
-        styled: true,
-        stdout: formatTable(ended.results, { color: true }),
-      });
-    });
+    /** The row a terminal shows last for `text`: the live line while one is drawn. */
+    function lastRow(text: string): string {
+      return screen(text).at(-1) ?? "";
+    }
 
-    it("prints the plain table on a terminal stdout under --no-color", async () => {
-      const ended = await runTable(["--no-color"], { stdout: terminal() });
+    /** Wraps `start` to keep the rows `stderr` shows in `screens` as each child starts. */
+    function watching(
+      stderr: { readonly text: string },
+      screens: string[][],
+      start: StartChild,
+    ): StartChild {
+      return async (runtime, request, options) => {
+        screens.push(screen(stderr.text));
+        return start(runtime, request, options);
+      };
+    }
 
-      expect(ended.stdout).toBe(formatTable(ended.results));
-    });
+    /** A matcher for a row that contains `text`, ignoring the indicator frame before it. */
+    const live = (text: string): unknown => expect.stringContaining(text);
+    const listing = [[live("[1/2] listing sort.bench.ts")], [live("[2/2] listing parse.bench.ts")]];
+    const sortPassed = naming("sort/fast", "node", "4.66");
+    const parseFailed = naming("parse/fast", "node", "failed in fn");
 
     it.each([
-      { name: "NO_COLOR is set", variable: "NO_COLOR", value: "1" },
-      { name: "TERM is dumb", variable: "TERM", value: "dumb" },
-    ])("prints the plain table on a terminal stdout when $name", async ({ variable, value }) => {
-      vi.stubEnv(variable, value);
+      {
+        run: "a measuring run",
+        args: [],
+        screens: [
+          ...listing,
+          [live("[1/2] measuring sort/fast on node")],
+          [sortPassed, live("[2/2] measuring parse/fast on node")],
+        ],
+        final: [sortPassed, parseFailed, ""],
+      },
+      {
+        run: "a --once run",
+        args: ["--once"],
+        screens: [
+          ...listing,
+          [live("[1/2] running sort/fast on node")],
+          [live("[2/2] running parse/fast on node")],
+        ],
+        final: [""],
+      },
+    ])(
+      "shows one counted live line per child of $run, a line per finished measured case above it",
+      async ({ args, screens, final }) => {
+        const stderr = terminalOf(80);
+        const seen: string[][] = [];
 
-      const ended = await runTable([], { stdout: terminal() });
+        await command(workspace(), [...args, "sort.bench.ts", "parse.bench.ts"], {
+          stderr,
+          startChild: watching(stderr, seen, failsParse),
+        });
 
-      expect(ended.stdout).toBe(formatTable(ended.results));
+        expect({ seen, final: screen(stderr.text) }).toStrictEqual({ seen: screens, final });
+      },
+    );
+
+    it("redraws the live line with the next indicator frame as time passes", async () => {
+      vi.useFakeTimers({ toFake: [...TIMERS] });
+      const stderr = terminalOf(80);
+      const rows: string[] = [];
+      const waits = starter(async (request, runtime, options) => {
+        rows.push(lastRow(stderr.text));
+        await vi.advanceTimersToNextTimerAsync();
+        rows.push(lastRow(stderr.text));
+        return measuresAll(runtime, request, options);
+      });
+
+      await command(workspace(), ["sort.bench.ts"], { stderr, startChild: waits });
+
+      const line = live("[1/1] measuring sort/fast on node");
+      expect({ moved: rows[0] !== rows[1], rows }).toStrictEqual({
+        moved: true,
+        rows: [line, line],
+      });
     });
 
-    it("prints the plain table on a terminal stdout that reports one bit of color", async () => {
-      const stdout = Object.assign(terminal(), { getColorDepth: () => 1 });
+    it("cuts the live line to the terminal's width", async () => {
+      const stderr = terminalOf(20);
+      const seen: string[][] = [];
 
-      const ended = await runTable([], { stdout });
+      await command(workspace(), ["sort.bench.ts", "parse.bench.ts"], {
+        stderr,
+        startChild: watching(stderr, seen, measuresAll),
+      });
 
-      expect(ended.stdout).toBe(formatTable(ended.results));
+      const fits = seen.map((rows) => {
+        const row = rows.at(-1) ?? "";
+        return row.length > 0 && row.length < 20;
+      });
+      expect(fits).toStrictEqual([true, true, true, true]);
     });
 
-    it("prints the plain table on a stdout that is not a terminal while stderr is one", async () => {
-      const ended = await runTable([], { stdout: captured(), stderr: terminal() });
-
-      expect(ended.stdout).toBe(formatTable(ended.results));
-    });
-
-    it("colors the table on a terminal stderr but never the report on a terminal stdout under --out -", async () => {
-      const { stdout, stderr } = await command(
-        workspace(),
-        ["sort.bench.ts", "parse.bench.ts", "--out", "-"],
-        { startChild: failsParse, stdout: terminal(), stderr: terminal() },
+    it("cuts a live line holding wide characters to the terminal's columns", async () => {
+      const dir = workspace();
+      const file = "水果水果水果水果水果.bench.ts";
+      writeFileSync(join(dir, file), "");
+      const stderr = terminalOf(20);
+      const seen: string[][] = [];
+      const lists = fakeStarter(
+        () => ({ id: "fruit/fast", setupPerCall: false }),
+        () => ranOnce,
       );
 
-      const { results } = parseReport(stdout, "stdout");
-      expect({
-        stdoutStyled: styled(stdout),
-        stderrStyled: styled(stderr),
-        tableEnd: stderr.endsWith(formatTable(results, { color: true })),
-      }).toStrictEqual({ stdoutStyled: false, stderrStyled: true, tableEnd: true });
-    });
+      await command(dir, ["--list", file], { stderr, startChild: watching(stderr, seen, lists) });
 
-    it("colors the repset: prefix of an error line on a terminal stderr", async () => {
-      const { code, stderr } = await command(workspace(), ["--banana"], {
-        startChild: startsNoChild,
-        stderr: terminal(),
-      });
-
-      expect({
-        code,
-        styled: styled(stderr),
-        visible: stripVTControlCharacters(stderr),
-      }).toStrictEqual({ code: 2, styled: true, visible: expect.stringMatching(/^repset:/u) });
-    });
-
-    it("prints a plain repset: prefix when --no-color comes beside a wrong argument", async () => {
-      const { code, stderr } = await command(workspace(), ["--no-color", "--banana"], {
-        startChild: startsNoChild,
-        stderr: terminal(),
-      });
-
-      expect({ code, styled: styled(stderr), stderr }).toStrictEqual({
-        code: 2,
-        styled: false,
-        stderr: expect.stringMatching(/^repset:/u),
+      const row = seen[0]?.at(-1) ?? "";
+      // Each Han character is one UTF-16 unit drawn two columns wide.
+      const columns = row.length + (row.match(/\p{Script=Han}/gu)?.length ?? 0);
+      expect({ shown: row.includes("水"), fits: columns < 20 }).toStrictEqual({
+        shown: true,
+        fits: true,
       });
     });
 
-    it("colors the --once status words on a terminal stdout", async () => {
-      const { code, stdout } = await command(
-        workspace(),
-        ["--once", "sort.bench.ts", "parse.bench.ts"],
-        {
-          startChild: failsParse,
-          stdout: terminal(),
-        },
-      );
+    it("prints the lines a stderr that is not a terminal gets when TERM is dumb", async () => {
+      const dir = workspace();
+      const args = ["sort.bench.ts", "parse.bench.ts"];
+      const plain = await command(dir, args, { startChild: failsParse, stderr: captured() });
+      vi.stubEnv("TERM", "dumb");
 
-      expect({
-        code,
-        styled: styled(stdout),
-        lines: linesOf(stripVTControlCharacters(stdout)),
-      }).toStrictEqual({
-        code: 1,
-        styled: true,
+      const dumb = await command(dir, args, { startChild: failsParse, stderr: terminalOf(80) });
+
+      expect({ same: dumb.stderr === plain.stderr, lines: linesOf(dumb.stderr) }).toStrictEqual({
+        same: true,
         lines: [
-          naming("ok", "node", "sort/fast"),
-          naming("failed", "node", "parse/fast", "fn", "kiwi"),
+          "listing sort.bench.ts",
+          "listing parse.bench.ts",
+          "measuring sort/fast on node",
+          "measuring parse/fast on node",
         ],
       });
     });
-    it("aligns a colored multi-line --once failure as the plain one", async () => {
-      const failsOnTwoLines = starter((request, runtime, options) =>
-        request.id === "parse/fast"
-          ? failedOutcome("fn", "kiwi\nplum")
-          : measuresAll(runtime, request, options),
+
+    it("clears the live line before printing the table under --out -", async () => {
+      const stderr = terminalOf(80);
+
+      const { stdout } = await command(
+        workspace(),
+        ["sort.bench.ts", "parse.bench.ts", "--out", "-"],
+        { startChild: failsParse, stderr },
       );
-      const args = ["--once", "sort.bench.ts", "parse.bench.ts"];
-      const plain = await command(workspace(), [...args, "--no-color"], {
-        startChild: failsOnTwoLines,
-        stdout: terminal(),
+
+      const { results } = parseReport(stdout, "stdout");
+      expect(screen(stderr.text)).toStrictEqual([
+        sortPassed,
+        parseFailed,
+        ...screen(formatTable(results)),
+      ]);
+    });
+
+    it("clears the live line before printing a failed listing's error", async () => {
+      const stderr = terminalOf(80);
+      const failsListing: StartChild = async () => failedOutcome("load", "kiwi");
+
+      const { code } = await command(workspace(), ["sort.bench.ts"], {
+        startChild: failsListing,
+        stderr,
       });
 
-      const colored = await command(workspace(), args, {
-        startChild: failsOnTwoLines,
-        stdout: terminal(),
+      expect({ code, screen: screen(stderr.text) }).toStrictEqual({
+        code: 2,
+        screen: [expect.stringMatching(/^repset: .*sort\.bench\.ts.*load.*kiwi/u), ""],
+      });
+    });
+
+    it("stops and clears the live line before rejecting with an error that is not a ConfigError", async () => {
+      vi.useFakeTimers({ toFake: [...TIMERS] });
+      const stderr = terminalOf(80);
+      const error = new Error("kiwi");
+      let tickingAtCrash = false;
+      const crashes = starter(() => {
+        tickingAtCrash = vi.getTimerCount() > 0;
+        throw error;
       });
 
+      const ended = command(workspace(), ["sort.bench.ts"], { stderr, startChild: crashes });
+
+      await expect(ended).rejects.toBe(error);
       expect({
-        styled: styled(colored.stdout),
-        visible: stripVTControlCharacters(colored.stdout),
-      }).toStrictEqual({ styled: true, visible: plain.stdout });
+        tickingAtCrash,
+        timersLeft: vi.getTimerCount(),
+        last: lastRow(stderr.text),
+      }).toStrictEqual({ tickingAtCrash: true, timersLeft: 0, last: "" });
+    });
+
+    it("clears the live line on SIGINT, keeping the finished case's line, exiting 130", async () => {
+      const stderr = terminalOf(80);
+      const signals = new EventEmitter();
+      const stopsSecond = starter((request, runtime, options) => {
+        if (request.id === "sort/fast") return measuresAll(runtime, request, options);
+        signals.emit("SIGINT");
+        return stopped;
+      });
+
+      const { code } = await command(workspace(), ["sort.bench.ts", "parse.bench.ts"], {
+        signals,
+        stderr,
+        startChild: stopsSecond,
+      });
+
+      expect({ code, screen: screen(stderr.text) }).toStrictEqual({
+        code: 130,
+        screen: [sortPassed, ""],
+      });
     });
   });
 
@@ -822,82 +906,5 @@ describe("main", () => {
         last: naming("sort.bench.ts", "load", "kiwi"),
       });
     });
-  });
-});
-
-describe("crashReport", () => {
-  const ISSUE = "https://github.com/jeffzi/repset/issues/new?body=";
-  const OS = "darwin 25.6.0 arm64";
-  const RUNTIME = "node 26.1.0";
-
-  /** The last word of `text`, where the report puts its link. */
-  function linkOf(text: string): string {
-    return text.trimEnd().split(/\s/u).at(-1) ?? "";
-  }
-
-  /** The report's last line without its link: what a person reads beside it. */
-  function readLine(text: string): string {
-    const last = text.trimEnd().split("\n").at(-1) ?? "";
-    return last.slice(0, last.lastIndexOf(" "));
-  }
-
-  /** The issue body the link ending `text` carries, decoded strictly, or `undefined` for no link. */
-  function issueBody(text: string): string | undefined {
-    const link = linkOf(text);
-    if (!link.startsWith(ISSUE)) return undefined;
-    return decodeURIComponent(link.slice(ISSUE.length).replaceAll("+", " "));
-  }
-
-  it("prints the stack, then names the version and platform and links an issue prefilled with them and the message", () => {
-    const error = new Error("kiwi & banana? #1 100%");
-    const stack = error.stack ?? "";
-
-    const text = crashReport(error, { version: "1.2.3", os: OS, runtime: RUNTIME });
-
-    const body = issueBody(text) ?? "";
-    expect({
-      stackFirst: text.startsWith(stack),
-      line: ["1.2.3", OS, RUNTIME].map((word) => readLine(text).includes(word)),
-      body: [
-        body.includes("1.2.3"),
-        body.includes(OS),
-        body.includes(RUNTIME),
-        body.includes("kiwi & banana? #1 100%"),
-      ],
-    }).toStrictEqual({
-      stackFirst: true,
-      line: [true, true, true],
-      body: [true, true, true, true],
-    });
-  });
-
-  it("names the version as unknown when it could not be read", () => {
-    const error = new Error("kiwi");
-
-    const text = crashReport(error, { version: undefined, os: OS, runtime: RUNTIME });
-
-    expect({
-      line: readLine(text).includes("unknown"),
-      body: issueBody(text)?.includes("unknown"),
-    }).toStrictEqual({ line: true, body: true });
-  });
-
-  it("cuts a long message on a whole character so the link stays within 6000 characters and decodes", () => {
-    const message = Array.from({ length: 3000 }, (_, index) => `${index}🍌`).join("");
-
-    const text = crashReport(new Error(message), { version: "1.2.3", os: OS, runtime: RUNTIME });
-
-    const link = linkOf(text);
-    const body = issueBody(text) ?? "";
-    const kept = body.slice(
-      body.indexOf("```text\n") + "```text\n".length,
-      body.lastIndexOf("\n```"),
-    );
-    // One code point encodes to at most 12 characters, so a fuller cut would not have fit.
-    expect({
-      full: link.length > 6000 - 12 && link.length <= 6000,
-      wellFormed: body.isWellFormed(),
-      start: kept.startsWith("0🍌1🍌") && message.startsWith(kept),
-    }).toStrictEqual({ full: true, wellFormed: true, start: true });
   });
 });

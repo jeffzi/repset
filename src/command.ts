@@ -7,34 +7,26 @@ import { resolve } from "node:path";
 import { Writable } from "node:stream";
 import { styleText } from "node:util";
 
-import { createHelpConfig } from "@jeffzi/epaulettes";
-import { Command as Parser, CommanderError } from "commander";
+import { CommanderError } from "commander";
 
 import { findRuntime as realFindRuntime, startChild as realStartChild } from "./children.js";
-import { RUNTIMES, type Runtime } from "./measure/runtime.js";
-import {
-  ConfigError,
-  failedWith,
-  isRuntime,
-  type OptionsInput,
-  QUOTED_RUNTIMES,
-  resolveOptions,
-} from "./options.js";
+import { type Command, commandLine, OUT_STDOUT, parseCommand } from "./command-line.js";
+import { ConfigError, failedWith, resolveOptions } from "./options.js";
 import { reportText, reportWrites, writeReport } from "./report-output.js";
 import type { Result } from "./report.js";
 import {
   type ChildFunctionOverrides,
   type ChildFunctions,
   ListingError,
+  type OnceInput,
   packageVersion,
   run,
   runOnce,
   selectCases,
-  type SelectInput,
   shownPath,
 } from "./run.js";
-import { failureLines, formatTable, metricLine, paint } from "./table.js";
-import { describe, thrownMessage } from "./utils.js";
+import { failureLines, formatTable, formatTime, metricLine, paint } from "./table.js";
+import { thrownMessage } from "./utils.js";
 
 /** Like `Omit`, but `K` must be a key of `T`, so a misspelled or removed key fails to compile. */
 export type StrictOmit<T, K extends keyof T> = Omit<T, K>;
@@ -46,6 +38,8 @@ export interface Output {
   readonly isTTY?: boolean | undefined;
   /** The bits per color the terminal shows; read from the environment when absent. */
   getColorDepth?(): number;
+  /** The terminal's width in columns, which the live progress line is cut to; uncut when absent. */
+  readonly columns?: number | undefined;
 }
 
 /** The signals that interrupt a run. */
@@ -68,57 +62,14 @@ export interface CommandIo extends ChildFunctionOverrides {
   readonly signals?: SignalSource | undefined;
 }
 
-/** Flags that cannot be given together, by name without the leading dashes. */
-const EXCLUSIVE: readonly (readonly [string, string])[] = [
-  ["list", "once"],
-  ["list", "out"],
-  ["list", "metric-lines"],
-  ["once", "out"],
-  ["once", "metric-lines"],
-];
-
-/** Decimal digits with an optional fraction: `Number` alone reads `""` as 0 and accepts `1e3`. */
-const DECIMAL = /^\d+(?:\.\d+)?$/;
-
-/** The environment variable that fixes the calls per sample of every measuring child of a run. */
-export const CALLS_PER_SAMPLE = "REPSET_CALLS_PER_SAMPLE";
-
-/** The `--out` value that sends the report to stdout instead of a file. */
-const OUT_STDOUT = "-";
-
-/** The README's common commands; keep them in step with it. */
-const EXAMPLES: readonly (readonly [string, string])[] = [
-  ["repset benchmarks/sort.bench.ts", "Runs the benchmarks of that file only"],
-  ["repset --filter '^sort/'", "Runs the cases whose id matches the regular expression"],
-  ["repset --runtime node,bun", "Runs every case on Node, then on Bun"],
-  ["repset --out report.json", "Writes the JSON report to report.json"],
-  ["repset --once", "Runs every case once, without timing, to check it works"],
-];
-
-const README = "https://github.com/jeffzi/repset#readme";
-
 /** Where a crash's issue link opens a new issue, its body following. */
 const NEW_ISSUE = "https://github.com/jeffzi/repset/issues/new?body=";
 
 /** The longest crash issue link, short enough for browsers and GitHub to open. */
 const MAX_ISSUE_LINK = 6000;
 
-interface CommandInput extends StrictOmit<OptionsInput, "cwd"> {
-  readonly files: readonly string[] | undefined;
-}
-
-interface Command {
-  readonly mode: "run" | "list" | "once";
-  readonly input: CommandInput;
-  /** The `--out` value as written: a file relative to the working directory, or `-` for stdout. */
-  readonly out: string | undefined;
-  readonly metricLines: boolean;
-  /** The calls per sample `REPSET_CALLS_PER_SAMPLE` fixes for a run, or `undefined` when unset. */
-  readonly callsPerSample: number | undefined;
-}
-
 /** Whether each stream the command prints to shows color. */
-interface Colors {
+export interface Colors {
   readonly stdout: boolean;
   readonly stderr: boolean;
 }
@@ -130,10 +81,11 @@ interface Context extends ChildFunctions {
   readonly stderr: Output;
   readonly colors: Colors;
   readonly signal: AbortSignal;
+  readonly progress: Progress;
 }
 
 // ---------------------------------------------------------------------------
-// Command-line parsing
+// Color and errors
 // ---------------------------------------------------------------------------
 
 /** Whether `flag` is among the arguments before a `--` terminator. */
@@ -184,180 +136,145 @@ function errorLine(message: string, color: boolean): string {
   return `${paint("red", "repset:", color)} ${message}\n`;
 }
 
-/**
- * Reads the value of a number flag.
- *
- * @param flag - The flag's name, without the leading dashes, which the error names.
- * @param text - The flag's value, or `undefined` when the flag is absent.
- * @returns The number, or `undefined` when the flag is absent.
- * @throws {@link ConfigError} When `text` is not decimal digits with an optional fraction.
- */
-function decimal(flag: string, text: string | undefined): number | undefined {
-  if (text === undefined) return undefined;
-  if (!DECIMAL.test(text)) {
-    throw new ConfigError(`--${flag} must be a decimal number, got ${describe(text)}`);
-  }
-  return Number(text);
+// ---------------------------------------------------------------------------
+// Progress
+// ---------------------------------------------------------------------------
+
+/** The frames of the live line's indicator, one per tick. */
+const FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
+
+/** How long each indicator frame shows, in milliseconds. */
+const FRAME_MS = 80;
+
+/** Splits the live line into the characters a person sees, so a cut never splits one. */
+const GRAPHEMES = new Intl.Segmenter();
+
+/** The characters a terminal draws two columns wide: East Asian wide and full-width ones, and emoji. */
+const WIDE =
+  /\p{Extended_Pictographic}|[ᄀ-ᅟ⺀-〾ぁ-㏿㐀-䶿一-鿿ꀀ-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦\u{20000}-\u{3FFFF}]/u;
+
+/** The columns a terminal gives one grapheme: two for a wide one, one otherwise. */
+function columnsOf(grapheme: string): number {
+  return WIDE.test(grapheme) ? 2 : 1;
 }
 
-/**
- * The calls per sample the environment fixes.
- *
- * @param text - The value of `REPSET_CALLS_PER_SAMPLE`, or `undefined` when it is unset.
- * @returns The count, or `undefined` when the variable is unset, which leaves the count to each
- *   measuring child.
- * @throws {ConfigError} When the value, the empty string included, is not decimal digits naming a
- *   safe integer of 1 or more.
- */
-function fixedCallsPerSample(text: string | undefined): number | undefined {
-  if (text === undefined) return undefined;
-  const count = /^\d+$/.test(text) ? Number(text) : Number.NaN;
-  if (!Number.isSafeInteger(count) || count < 1) {
-    throw new ConfigError(
-      `${CALLS_PER_SAMPLE} must be a whole number of 1 or more, got ${describe(text)}`,
-    );
-  }
-  return count;
+/** Moves the cursor to the start of its row and erases the row. */
+const CLEAR_ROW = "\r\x1b[2K";
+
+/** What the command shows on stderr as each child starts. */
+interface Progress {
+  /** Whether a live line shows, redrawn in place, rather than one line per child. */
+  readonly live: boolean;
+  /** Starts counting the children of a phase that starts `total` of them. */
+  planned(total: number): void;
+  /** Shows that the phase's next child starts, doing what `text` says. */
+  starting(text: string): void;
+  /** Writes `text` to `output` above the live line, once a child started, so they never share a row. */
+  above(output: Output, text: string): void;
+  /** Stops the indicator and erases the live line; calling it again does nothing. */
+  stop(): void;
 }
 
-/**
- * Reads the runtimes of a `--runtime` list.
- *
- * @param text - The comma-separated list, or `undefined` when the flag is absent.
- * @returns The runtimes in the order given, or `undefined` when the flag is absent.
- * @throws {@link ConfigError} When an entry of the list is not a runtime.
- */
-function runtimeList(text: string | undefined): Runtime[] | undefined {
-  if (text === undefined) return undefined;
-  const names = text.split(",");
-  const runtimes = names.filter((name) => isRuntime(name));
-  if (runtimes.length !== names.length) {
-    throw new ConfigError(`--runtime must list ${QUOTED_RUNTIMES}, got ${describe(text)}`);
-  }
-  return runtimes;
-}
-
-/** The help's closing text: the examples, then where the README lives. */
-function helpEpilogue(color: boolean): string {
-  const width = Math.max(...EXAMPLES.map(([example]) => example.length));
-  const examples = EXAMPLES.map(([example, what]) => `  ${example.padEnd(width)}  ${what}`);
-  const heading = paint("bold", "Examples:", color);
-  return ["", heading, ...examples, "", `Documentation: ${README}`].join("\n");
-}
-
-/**
- * Builds the command-line parser. Its help and version go to `stdout`, styled when that stream
- * shows color. It prints no error and never exits the process: it throws instead.
- *
- * @param version - The version `--version` prints.
- * @param stdout - The stream the help and the version go to.
- * @param colors - Whether each stream shows color.
- * @returns The parser, with no arguments parsed yet.
- */
-function commandLine(version: string, stdout: Output, colors: Colors): Parser {
-  return new Parser("repset")
-    .description(
-      "Measures the benchmark cases in the given files, or in the files the config's include matches.",
-    )
-    .argument("[file...]")
-    .option("--filter <regex>", "Run only the cases whose id matches the expression")
-    .option(
-      "--runtime <list>",
-      `Comma-separated runtimes, run in the order given: ${RUNTIMES.join(", ")}`,
-    )
-    .option("--min-time <ms>", "Timing lasts at least this long")
-    .option("--min-samples <n>", "Timing takes at least this many samples")
-    .option("--timeout <ms>", "The longest one child may run")
-    .option("--node-import <module>", "A module Node children import first, such as tsx")
-    .option("--out <file>", "Write the report there; - writes it to stdout and the table to stderr")
-    .option("--metric-lines", "Print one METRIC line per result on stdout and the table to stderr")
-    .option("--list", "Print the selected case ids and exit")
-    .option("--once", "Run every selected case once per runtime, with no timing")
-    .option("--config <file>", "Read this config file instead of looking for one")
-    .option("--no-color", "Print no color, even on a terminal")
-    .helpOption("--help", "Print this help")
-    .version(version, "--version", "Print the version")
-    .addHelpText("after", helpEpilogue(colors.stdout))
-    .configureHelp(createHelpConfig())
-    .configureOutput({
-      writeOut: (text) => {
-        stdout.write(text);
-      },
-      // A usage error reaches stderr through the ConfigError the exit override throws.
-      outputError: () => undefined,
-      getOutHasColors: () => colors.stdout,
-    })
-    .exitOverride((error) => {
-      if (error.exitCode === 0) throw error;
-      throw new ConfigError(error.message.replace(/^error: /u, ""), { cause: error });
-    });
-}
-
-/**
- * Reads the command line and `REPSET_CALLS_PER_SAMPLE`.
- *
- * @param args - The command's arguments.
- * @param parser - The parser {@link commandLine} built.
- * @returns What the command line and the environment ask for.
- * @throws {CommanderError} With exit code 0 once `--help` or `--version` printed, before any other
- *   check.
- * @throws {ConfigError} When a flag is unknown, missing its value or holding a value that is not a
- *   decimal number where one is due, when two flags conflict, or when `REPSET_CALLS_PER_SAMPLE`
- *   holds a bad value.
- */
-function parseCommand(args: readonly string[], parser: Parser): Command {
-  parser.parse(args, { from: "user" });
-  const values = parser.opts<Record<string, unknown>>();
-  const text = (key: string): string | undefined => {
-    const value = values[key];
-    return typeof value === "string" ? value : undefined;
-  };
-  const given = new Set(
-    parser.options
-      .filter((option) => parser.getOptionValueSource(option.attributeName()) === "cli")
-      .map((option) => option.name()),
-  );
-  if (given.has("metric-lines") && text("out") === OUT_STDOUT) {
-    throw new ConfigError("--metric-lines cannot be used with --out -");
-  }
-  const conflict = EXCLUSIVE.find(([one, other]) => given.has(one) && given.has(other));
-  if (conflict !== undefined) {
-    throw new ConfigError(`--${conflict[0]} cannot be used with --${conflict[1]}`);
-  }
-  let mode: Command["mode"] = "run";
-  if (given.has("list")) mode = "list";
-  if (given.has("once")) mode = "once";
+/** Progress as one line per child, with no count, animation or cursor control. */
+function linePerChild(stderr: Output): Progress {
   return {
-    mode,
-    input: {
-      files: parser.args.length > 0 ? parser.args : undefined,
-      filter: text("filter"),
-      runtimes: runtimeList(text("runtime")),
-      minTime: decimal("min-time", text("minTime")),
-      minSamples: decimal("min-samples", text("minSamples")),
-      timeout: decimal("timeout", text("timeout")),
-      nodeImport: text("nodeImport"),
-      config: text("config"),
+    live: false,
+    planned: () => undefined,
+    starting: (text) => {
+      stderr.write(`${text}\n`);
     },
-    out: text("out"),
-    metricLines: given.has("metric-lines"),
-    callsPerSample: fixedCallsPerSample(process.env[CALLS_PER_SAMPLE]),
+    above: (output, text) => {
+      output.write(text);
+    },
+    stop: () => undefined,
   };
+}
+
+/**
+ * Progress as one live line on a terminal: `[i/n]`, then what the running child does, behind an
+ * animated indicator. The line is cut to the terminal's width, so erasing its row erases all of it.
+ * The indicator's timer is unreferenced: it never keeps the process alive.
+ *
+ * @param stderr - The terminal the line shows on.
+ * @param color - Whether `stderr` shows color, which colors the indicator.
+ * @returns The progress, showing nothing until the first child starts.
+ */
+function liveLine(stderr: Output, color: boolean): Progress {
+  let total = 0;
+  let started = 0;
+  let doing = "";
+  let frame = 0;
+  let timer: ReturnType<typeof setInterval> | undefined;
+  const draw = (): void => {
+    // The last column stays empty: a row filled to it wraps on some terminals.
+    let room = (stderr.columns ?? Number.POSITIVE_INFINITY) - 1;
+    const kept: string[] = [];
+    for (const { segment } of GRAPHEMES.segment(
+      `${FRAMES[frame]} [${started}/${total}] ${doing}`,
+    )) {
+      room -= columnsOf(segment);
+      if (room < 0) break;
+      kept.push(segment);
+    }
+    const [indicator = "", ...rest] = kept;
+    stderr.write(`${CLEAR_ROW}${paint("green", indicator, color)}${rest.join("")}`);
+  };
+  return {
+    live: true,
+    planned: (count) => {
+      total = count;
+      started = 0;
+    },
+    starting: (text) => {
+      started += 1;
+      doing = text;
+      timer ??= setInterval(() => {
+        frame = (frame + 1) % FRAMES.length;
+        draw();
+      }, FRAME_MS).unref();
+      draw();
+    },
+    above: (output, text) => {
+      stderr.write(CLEAR_ROW);
+      output.write(text);
+      draw();
+    },
+    stop: () => {
+      if (timer === undefined) return;
+      clearInterval(timer);
+      timer = undefined;
+      stderr.write(CLEAR_ROW);
+    },
+  };
+}
+
+/** A live line on a terminal stderr whose `TERM` is not `dumb`, one line per child elsewhere. */
+function progressOn(stderr: Output, color: boolean): Progress {
+  const live = stderr.isTTY === true && process.env["TERM"] !== "dumb";
+  return live ? liveLine(stderr, color) : linePerChild(stderr);
+}
+
+/** The line a finished case leaves above the live line: its median, or the phase it failed in. */
+function finishedLine(result: Result, color: boolean): string {
+  const ran = `${result.id} on ${result.runtime.name}`;
+  return result.status === "ok"
+    ? `${ran}  ${formatTime(result.median)}\n`
+    : `${ran}  ${paint("red", `failed in ${result.error.phase}`, color)}\n`;
 }
 
 // ---------------------------------------------------------------------------
 // Child functions
 // ---------------------------------------------------------------------------
 
-/** A child starter that prints a progress line on stderr before it starts each child. */
+/** A child starter that shows each child on the progress before it starts it. */
 function announcing(context: Context): typeof realStartChild {
-  const { cwd, stderr, startChild } = context;
+  const { cwd, progress, startChild } = context;
   return async (runtime, request, options) => {
     if (request.mode === "list") {
-      stderr.write(`listing ${shownPath(cwd, request.file)}\n`);
+      progress.starting(`listing ${shownPath(cwd, request.file)}`);
     } else {
       const verb = request.mode === "once" ? "running" : "measuring";
-      stderr.write(`${verb} ${request.id} on ${runtime.runtime}\n`);
+      progress.starting(`${verb} ${request.id} on ${runtime.runtime}`);
     }
     return startChild(runtime, request, options);
   };
@@ -366,12 +283,15 @@ function announcing(context: Context): typeof realStartChild {
 /** What a run, a once run and a selection take from the context alike. */
 function childInput(
   context: Context,
-): Pick<SelectInput, "cwd" | "signal" | "findRuntime" | "startChild"> {
+): Pick<OnceInput, "cwd" | "signal" | "findRuntime" | "startChild" | "onPlanned"> {
   return {
     cwd: context.cwd,
     signal: context.signal,
     findRuntime: context.findRuntime,
     startChild: announcing(context),
+    onPlanned: (_phase, total) => {
+      context.progress.planned(total);
+    },
   };
 }
 
@@ -392,7 +312,7 @@ function childInput(
  *   starting a child throws.
  */
 async function measure(command: Command, context: Context): Promise<number> {
-  const { stdout, stderr } = context;
+  const { stdout, stderr, progress } = context;
   const { out } = command;
   const toStdout = out === OUT_STDOUT;
   const file =
@@ -404,11 +324,13 @@ async function measure(command: Command, context: Context): Promise<number> {
     callsPerSample: command.callsPerSample,
     onSelected: writes?.onSelected,
     onResult: (result: Result) => {
+      if (progress.live) progress.above(stderr, finishedLine(result, context.colors.stderr));
       const line = command.metricLines ? metricLine(result) : undefined;
-      if (line !== undefined) stdout.write(`${line}\n`);
+      if (line !== undefined) progress.above(stdout, `${line}\n`);
       writes?.onResult?.(result);
     },
   });
+  progress.stop();
   const tableTo = toStdout || command.metricLines ? "stderr" : "stdout";
   context[tableTo].write(formatTable(report.results, { color: context.colors[tableTo] }));
   if (toStdout) stdout.write(reportText(report));
@@ -443,6 +365,7 @@ async function list(command: Command, context: Context): Promise<number> {
     files: command.input.files ?? [],
     ...childInput(context),
   });
+  context.progress.stop();
   if (selection.status === "selected") {
     context.stdout.write(selection.cases.map((selected) => `${selected.id}\n`).join(""));
   }
@@ -465,6 +388,7 @@ const ONCE_INDENT = "  ";
  */
 async function once(command: Command, context: Context): Promise<number> {
   const outcome = await runOnce({ ...command.input, ...childInput(context) });
+  context.progress.stop();
   const color = context.colors.stdout;
   for (const result of outcome.results) {
     const ran = `${result.id} on ${result.runtime}`;
@@ -570,6 +494,7 @@ export async function main(args: readonly string[], io: CommandIo = {}): Promise
   const stderr = io.stderr ?? process.stderr;
   // Judged before the command line is checked, so a usage error honors --no-color too.
   const colors = streamColors(args, stdout, stderr);
+  const progress = progressOn(stderr, colors.stderr);
   const controller = new AbortController();
   let received: Signal | undefined;
   const listeners = SIGNALS.map((signal) => {
@@ -594,12 +519,14 @@ export async function main(args: readonly string[], io: CommandIo = {}): Promise
       stderr,
       colors,
       signal: controller.signal,
+      progress,
       findRuntime: io.findRuntime ?? realFindRuntime,
       startChild: io.startChild ?? realStartChild,
     };
     const actions = { run: measure, list, once };
     return exitCode(await actions[command.mode](command, context));
   } catch (error) {
+    progress.stop();
     // Commander ends a run that printed the help or the version with an error of exit code 0.
     if (error instanceof CommanderError) return exitCode(0);
     if (!(error instanceof ConfigError)) throw error;

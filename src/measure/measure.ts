@@ -500,7 +500,7 @@ function measurePerCall<State>(
     timing.endMs = performance.now();
     return run;
   } catch (error) {
-    const phase = perCallPhase(error, inFlight.held, tearingDown);
+    const phase = perCallPhase(inFlight.held, tearingDown);
     // A state whose teardown threw is left alone rather than torn down a second time.
     const teardownError =
       holds(inFlight) && phase !== "teardown" ? tearDownCatching(teardown, inFlight.state) : null;
@@ -521,16 +521,14 @@ function holds<State>(inFlight: InFlight<State>): inFlight is { held: true; stat
 
 /**
  * Names the phase a per-call case failed in from the sampler's state when the error reached
- * `measure`.
+ * `measure`, for {@link failedIn} to fall back to: it maps the sampler's `CalibrationError` itself.
  *
- * @param error - The thrown value.
  * @param inFlight - Whether a state was built and not torn down.
  * @param tearingDown - Whether the case's teardown had started and not returned.
- * @returns `calibration` for the sampler's own refusal; otherwise `setup` with no state in flight,
- *   `teardown` while one was being torn down, and `fn` for the rest.
+ * @returns `setup` with no state in flight, `teardown` while one was being torn down, and `fn` for
+ *   the rest.
  */
-function perCallPhase(error: unknown, inFlight: boolean, tearingDown: boolean): Phase {
-  if (error instanceof CalibrationError) return "calibration";
+function perCallPhase(inFlight: boolean, tearingDown: boolean): Phase {
   if (!inFlight) return "setup";
   return tearingDown ? "teardown" : "fn";
 }

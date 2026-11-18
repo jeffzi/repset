@@ -196,7 +196,7 @@ function calibratedCount(count: number, spanMs: number, resolutionMs: number): n
  * @returns The next count.
  * @throws CalibrationError when the next count passes the cap, naming the count asked for and the cap.
  */
-export function cappedCount(count: number, spanMs: number, resolutionMs: number): number {
+function cappedCount(count: number, spanMs: number, resolutionMs: number): number {
   return withinCap(calibratedCount(count, spanMs, resolutionMs), resolutionMs);
 }
 

@@ -327,7 +327,7 @@ type Finished = Exclude<Outcome, { status: "stopped" }>;
 const NO_MEASUREMENT = childFailure("the child gave no measurement");
 
 /** The processes of a case whose child failed: one, holding `null` for what it did not reach. */
-const FAILED_PROCESSES: readonly FailedProcess[] = [
+const FAILED_PROCESSES: readonly [FailedProcess] = [
   {
     round: 1,
     orderInRound: 1,

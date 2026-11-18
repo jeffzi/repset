@@ -1,167 +1,40 @@
 import { EventEmitter } from "node:events";
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { main, type StrictOmit } from "../src/command.js";
+import { crashReport } from "../src/command.js";
 import type { Result } from "../src/report.js";
 import { formatTable, metricLine } from "../src/table.js";
 import {
+  blockWrites,
+  captured,
+  command,
+  type CommandIo,
+  type Ended,
+  failsParse,
+  linesOf,
+  measuresAll,
+  naming,
+  starter,
+  startsNoCase,
+  styled,
+  terminal,
+  unblockWrites,
+  VERSION,
+  workspace,
+} from "./command-harness.js";
+import {
   failedOutcome,
-  findAny,
-  measuredOutcome,
   type FindRuntime,
-  ranOnce,
-  starter as fakeStarter,
   type StartChild,
   startsNoChild,
   stopped,
 } from "./fake-children.js";
 import { parseReport, reportAt } from "./report-file.js";
 import { temporaryDir } from "./temporary-dir.js";
-
-type Io = NonNullable<Parameters<typeof main>[1]>;
-
-/** The benchmark files every workspace holds; the fake children never import them. */
-const FILES = ["sort.bench.ts", "parse.bench.ts"];
-
-/** The package's own version, which `--version` prints and the report records. */
-const VERSION = packageVersion();
-
-/** The version the package's `package.json` holds, failing the suite when it holds none. */
-function packageVersion(): string {
-  const pkg: unknown = JSON.parse(
-    readFileSync(new URL("../package.json", import.meta.url), "utf8"),
-  );
-  if (
-    typeof pkg === "object" &&
-    pkg !== null &&
-    "version" in pkg &&
-    typeof pkg.version === "string"
-  ) {
-    return pkg.version;
-  }
-  throw new Error("package.json holds no version");
-}
-
-/** The one case the fake listing child finds in `file`. */
-function caseOf(file: string): string {
-  return `${basename(file, ".bench.ts")}/fast`;
-}
-
-/** A child starter listing `<file stem>/fast` per file and answering the rest with `answer`. */
-function starter(answer: Parameters<typeof fakeStarter>[1]): StartChild {
-  return fakeStarter((file) => ({ id: caseOf(file), setupPerCall: false }), answer);
-}
-
-/** A child starter that measures every case and runs every once case. */
-const measuresAll = starter((request) =>
-  request.mode === "measure" ? measuredOutcome(4656) : ranOnce,
-);
-
-/** A child starter that fails `parse/fast` in phase `fn` with `kiwi` and runs every other case. */
-const failsParse = starter((request, runtime, options) =>
-  request.id === "parse/fast"
-    ? failedOutcome("fn", "kiwi")
-    : measuresAll(runtime, request, options),
-);
-
-/** A child starter that lists, then fails the command with a plain error if a case starts. */
-const startsNoCase = starter(() => {
-  throw new Error("a case started");
-});
-
-/** A stream stand-in that keeps what is written to it. */
-interface Captured {
-  text: string;
-  write: (text: string) => boolean;
-  readonly isTTY?: true;
-  readonly getColorDepth?: () => number;
-}
-
-/** A stream stand-in with nothing written yet. */
-function captured(): Captured {
-  const stream: Captured = {
-    text: "",
-    write: (text) => {
-      stream.text += text;
-      return true;
-    },
-  };
-  return stream;
-}
-
-/** A stream stand-in that claims to be a terminal, with nothing written yet. */
-function terminal(): Captured {
-  return Object.assign(captured(), { isTTY: true as const });
-}
-
-/** Whether `text` holds an escape code. */
-function styled(text: string): boolean {
-  return text !== stripVTControlCharacters(text);
-}
-
-/** A fresh working directory holding the empty benchmark files, removed when the test ends. */
-function workspace(): string {
-  const dir = temporaryDir("repset-command-");
-  for (const file of FILES) writeFileSync(join(dir, file), "");
-  return dir;
-}
-
-interface Ended {
-  readonly code: number;
-  readonly stdout: string;
-  readonly stderr: string;
-}
-
-type CommandIo = StrictOmit<Partial<Io>, "stdout" | "stderr"> & {
-  readonly stdout?: Captured;
-  readonly stderr?: Captured;
-};
-
-/** Runs the command in `cwd` with the fake lookup, a measuring starter and a silent signal source. */
-async function command(cwd: string, args: readonly string[], io: CommandIo = {}): Promise<Ended> {
-  const stdout = io.stdout ?? captured();
-  const stderr = io.stderr ?? captured();
-
-  const code = await main(args, {
-    cwd,
-    findRuntime: findAny,
-    startChild: measuresAll,
-    signals: new EventEmitter(),
-    ...io,
-    stdout,
-    stderr,
-  });
-
-  return { code, stdout: stdout.text, stderr: stderr.text };
-}
-
-/** Puts a non-empty directory at `path`, so renaming a file over it fails. */
-function blockWrites(path: string): void {
-  rmSync(path, { force: true });
-  mkdirSync(join(path, "keep"), { recursive: true });
-}
-
-/** Removes what {@link blockWrites} put at `path`. */
-function unblockWrites(path: string): void {
-  rmSync(path, { recursive: true, force: true });
-}
-
-/** Matches a line that holds each of `words` as a whole word, in any order. */
-function naming(...words: string[]): unknown {
-  const ahead = words
-    .map((word) => `(?=.*\\b${word.replaceAll(/[.*+?^${}()|[\]\\/]/g, "\\$&")}\\b)`)
-    .join("");
-  return expect.stringMatching(new RegExp(`^${ahead}`));
-}
-
-/** The lines of `text`, without the newline that ends the last one. */
-function linesOf(text: string): string[] {
-  return text.trimEnd().split("\n");
-}
 
 describe("main", () => {
   describe("when every flag is given", () => {
@@ -949,5 +822,82 @@ describe("main", () => {
         last: naming("sort.bench.ts", "load", "kiwi"),
       });
     });
+  });
+});
+
+describe("crashReport", () => {
+  const ISSUE = "https://github.com/jeffzi/repset/issues/new?body=";
+  const OS = "darwin 25.6.0 arm64";
+  const RUNTIME = "node 26.1.0";
+
+  /** The last word of `text`, where the report puts its link. */
+  function linkOf(text: string): string {
+    return text.trimEnd().split(/\s/u).at(-1) ?? "";
+  }
+
+  /** The report's last line without its link: what a person reads beside it. */
+  function readLine(text: string): string {
+    const last = text.trimEnd().split("\n").at(-1) ?? "";
+    return last.slice(0, last.lastIndexOf(" "));
+  }
+
+  /** The issue body the link ending `text` carries, decoded strictly, or `undefined` for no link. */
+  function issueBody(text: string): string | undefined {
+    const link = linkOf(text);
+    if (!link.startsWith(ISSUE)) return undefined;
+    return decodeURIComponent(link.slice(ISSUE.length).replaceAll("+", " "));
+  }
+
+  it("prints the stack, then names the version and platform and links an issue prefilled with them and the message", () => {
+    const error = new Error("kiwi & banana? #1 100%");
+    const stack = error.stack ?? "";
+
+    const text = crashReport(error, { version: "1.2.3", os: OS, runtime: RUNTIME });
+
+    const body = issueBody(text) ?? "";
+    expect({
+      stackFirst: text.startsWith(stack),
+      line: ["1.2.3", OS, RUNTIME].map((word) => readLine(text).includes(word)),
+      body: [
+        body.includes("1.2.3"),
+        body.includes(OS),
+        body.includes(RUNTIME),
+        body.includes("kiwi & banana? #1 100%"),
+      ],
+    }).toStrictEqual({
+      stackFirst: true,
+      line: [true, true, true],
+      body: [true, true, true, true],
+    });
+  });
+
+  it("names the version as unknown when it could not be read", () => {
+    const error = new Error("kiwi");
+
+    const text = crashReport(error, { version: undefined, os: OS, runtime: RUNTIME });
+
+    expect({
+      line: readLine(text).includes("unknown"),
+      body: issueBody(text)?.includes("unknown"),
+    }).toStrictEqual({ line: true, body: true });
+  });
+
+  it("cuts a long message on a whole character so the link stays within 6000 characters and decodes", () => {
+    const message = Array.from({ length: 3000 }, (_, index) => `${index}🍌`).join("");
+
+    const text = crashReport(new Error(message), { version: "1.2.3", os: OS, runtime: RUNTIME });
+
+    const link = linkOf(text);
+    const body = issueBody(text) ?? "";
+    const kept = body.slice(
+      body.indexOf("```text\n") + "```text\n".length,
+      body.lastIndexOf("\n```"),
+    );
+    // One code point encodes to at most 12 characters, so a fuller cut would not have fit.
+    expect({
+      full: link.length > 6000 - 12 && link.length <= 6000,
+      wellFormed: body.isWellFormed(),
+      start: kept.startsWith("0🍌1🍌") && message.startsWith(kept),
+    }).toStrictEqual({ full: true, wellFormed: true, start: true });
   });
 });

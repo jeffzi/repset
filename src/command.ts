@@ -2,9 +2,8 @@
  * The `repset` command: reads the command line, runs, lists or runs once the selected cases, and
  * prints what a person or a tool reads, returning the exit code.
  */
-import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { constants } from "node:os";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import { Writable } from "node:stream";
 import { styleText } from "node:util";
 
@@ -21,21 +20,21 @@ import {
   QUOTED_RUNTIMES,
   resolveOptions,
 } from "./options.js";
-import type { Report, Result } from "./report.js";
+import { reportText, reportWrites, writeReport } from "./report-output.js";
+import type { Result } from "./report.js";
 import {
   type ChildFunctionOverrides,
   type ChildFunctions,
   ListingError,
   packageVersion,
   run,
-  type RunInput,
   runOnce,
   selectCases,
   type SelectInput,
   shownPath,
 } from "./run.js";
 import { failureLines, formatTable, metricLine, paint } from "./table.js";
-import { describe } from "./utils.js";
+import { describe, thrownMessage } from "./utils.js";
 
 /** Like `Omit`, but `K` must be a key of `T`, so a misspelled or removed key fails to compile. */
 export type StrictOmit<T, K extends keyof T> = Omit<T, K>;
@@ -97,6 +96,12 @@ const EXAMPLES: readonly (readonly [string, string])[] = [
 ];
 
 const README = "https://github.com/jeffzi/repset#readme";
+
+/** Where a crash's issue link opens a new issue, its body following. */
+const NEW_ISSUE = "https://github.com/jeffzi/repset/issues/new?body=";
+
+/** The longest crash issue link, short enough for browsers and GitHub to open. */
+const MAX_ISSUE_LINK = 6000;
 
 interface CommandInput extends StrictOmit<OptionsInput, "cwd"> {
   readonly files: readonly string[] | undefined;
@@ -169,7 +174,7 @@ function showsColor(output: Output): boolean {
  * @param stderr - The stream the command's progress and errors go to.
  * @returns Whether each stream shows color.
  */
-function streamColors(args: readonly string[], stdout: Output, stderr: Output): Colors {
+export function streamColors(args: readonly string[], stdout: Output, stderr: Output): Colors {
   const noColor = flagged(args, "--no-color");
   return { stdout: !noColor && showsColor(stdout), stderr: !noColor && showsColor(stderr) };
 }
@@ -341,7 +346,7 @@ function parseCommand(args: readonly string[], parser: Parser): Command {
 }
 
 // ---------------------------------------------------------------------------
-// Child functions and report output
+// Child functions
 // ---------------------------------------------------------------------------
 
 /** A child starter that prints a progress line on stderr before it starts each child. */
@@ -367,57 +372,6 @@ function childInput(
     signal: context.signal,
     findRuntime: context.findRuntime,
     startChild: announcing(context),
-  };
-}
-
-/** The report as a file or stdout holds it: JSON indented by two spaces, and a newline. */
-function reportText(report: Report): string {
-  return `${JSON.stringify(report, null, 2)}\n`;
-}
-
-/**
- * Writes `report` to `path` through a temporary file in the same directory renamed over it, so
- * the file always holds a whole report, creating the directory first when it is missing.
- *
- * @param path - The report file, as an absolute path.
- * @param report - The report to write.
- * @throws {Error} The error creating the directory or writing or renaming the file; the temporary
- *   file is removed first.
- */
-function writeReport(path: string, report: Report): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const temporary = `${path}.${String(process.pid)}.tmp`;
-  try {
-    writeFileSync(temporary, reportText(report));
-    renameSync(temporary, path);
-  } catch (error) {
-    rmSync(temporary, { force: true });
-    throw error;
-  }
-}
-
-/** The callbacks that write the report while the run goes on, when `--out` names a file. */
-function reportWrites(path: string, shown: string): Pick<RunInput, "onSelected" | "onResult"> {
-  let current: Report | undefined;
-  return {
-    onSelected: (head) => {
-      current = head;
-      try {
-        writeReport(path, head);
-      } catch (error) {
-        throw failedWith(`cannot write the report to ${shown}`, error);
-      }
-    },
-    onResult: (result) => {
-      if (current === undefined) return;
-      current = { ...current, results: [...current.results, result] };
-      try {
-        writeReport(path, current);
-      } catch {
-        // The run goes on: the write when the run ends either repairs the file or reports the
-        // failure, so a failure here has nothing left to tell.
-      }
-    },
   };
 }
 
@@ -546,6 +500,55 @@ function printError(stderr: Output, error: ConfigError, color: boolean): void {
     }
   }
   stderr.write(errorLine(error.message, color));
+}
+
+/** What a crash report names beside the error. */
+interface CrashAbout {
+  /** The package's version, or `undefined` when reading it failed. */
+  readonly version: string | undefined;
+  readonly os: string;
+  readonly runtime: string;
+  /** Whether the stream the report goes to shows color; plain when absent. */
+  readonly color?: boolean | undefined;
+}
+
+/** The percent-encoded longest start of `text`, cut on a whole character, that fits in `room`. */
+function encodedStart(text: string, room: number): string {
+  let left = room;
+  let encoded = "";
+  // A whole code point at a time, each encoded alone, so the cut splits no surrogate pair and
+  // no percent-escape. toWellFormed: a lone surrogate would make encodeURIComponent throw.
+  for (const char of text.toWellFormed()) {
+    const escaped = encodeURIComponent(char);
+    if (escaped.length > left) break;
+    left -= escaped.length;
+    encoded += escaped;
+  }
+  return encoded;
+}
+
+/**
+ * Builds what `repset` prints when the command fails with an error that is not a
+ * {@link ConfigError}: the error's stack, then a line naming the version and the platform, ending
+ * with a link that opens a GitHub issue prefilled with them and the error's message. The message
+ * is cut to keep the link within {@link MAX_ISSUE_LINK} characters; the stack holds it whole.
+ *
+ * @param error - The thrown value.
+ * @param about - The version, the OS, the runtime and whether the output shows color.
+ * @returns The report's lines, each ending with a newline.
+ */
+export function crashReport(error: unknown, about: CrashAbout): string {
+  const version = about.version ?? "unknown";
+  const message = thrownMessage(error);
+  const stack = (error instanceof Error ? error.stack : undefined) ?? message;
+  const head = encodeURIComponent(
+    `- repset: ${version}\n- OS: ${about.os}\n- Runtime: ${about.runtime}\n\n\`\`\`text\n`,
+  );
+  const foot = encodeURIComponent("\n```\n");
+  const room = MAX_ISSUE_LINK - NEW_ISSUE.length - head.length - foot.length;
+  const link = `${NEW_ISSUE}${head}${encodedStart(message, room)}${foot}`;
+  const line = `version ${version} crashed on ${about.os} with ${about.runtime}; report it at ${link}`;
+  return `${stack.endsWith("\n") ? stack : `${stack}\n`}${errorLine(line, about.color === true)}`;
 }
 
 /**

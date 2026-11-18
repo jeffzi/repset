@@ -3,6 +3,8 @@
  *
  * Pure functions from the report's types to text; nothing here prints.
  */
+import { stripVTControlCharacters, styleText } from "node:util";
+
 import type { ChildError } from "./child.js";
 import type { FailedResult, MeasuredResult, Result } from "./report.js";
 
@@ -22,6 +24,26 @@ const HEADER = ["case", "median", "mean", "min", "max", "samples"] as const;
 
 const FOOTER =
   "Each case was measured once, in its own process. A verdict between revisions takes a comparison tool.";
+
+export type Style = "bold" | "dim" | "red" | "green";
+
+/**
+ * Styles `text` when `color` holds. The caller has judged the stream, so the escape codes come
+ * whatever stream `styleText` would judge by default.
+ *
+ * @param style - The style to apply.
+ * @param text - The text to style.
+ * @param color - Whether the stream the text goes to shows color.
+ * @returns `text` wrapped in the style's escape codes when `color` holds, `text` otherwise.
+ */
+export function paint(style: Style, text: string, color: boolean): string {
+  return color ? styleText(style, text, { validateStream: false }) : text;
+}
+
+/** The columns `text` takes on a terminal, escape codes excluded. */
+function visibleWidth(text: string): number {
+  return stripVTControlCharacters(text).length;
+}
 
 /** Prints `value` with three significant digits, never in exponent form. */
 function significant(value: number): string {
@@ -84,7 +106,7 @@ function alignRows(rows: readonly (readonly string[])[], idWidth: number): strin
  */
 function leadLines(lead: string, message: string): string[] {
   const [first = "", ...rest] = message.split("\n");
-  const continuation = " ".repeat(lead.length);
+  const continuation = " ".repeat(visibleWidth(lead));
   return [`${lead}${first}`, ...rest.map((line) => `${continuation}${line}`)];
 }
 
@@ -116,16 +138,24 @@ export function failureLines(
  *
  * @param result - The failed result.
  * @param idWidth - The width the case id is padded to.
+ * @param color - Whether to show its failure in red.
  * @returns Its row, then each further line of its message beneath it, then the labelled lines of
  *   its cleanup teardown's failure when that teardown threw too.
  */
-function failedLines(result: FailedResult, idWidth: number): string[] {
-  const lead = `${result.id.padEnd(idWidth)}${COLUMN_GAP}failed in ${result.error.phase}: `;
-  return failureLines(lead, result.error, " ".repeat(lead.length));
+function failedLines(result: FailedResult, idWidth: number, color: boolean): string[] {
+  const failure = paint("red", `failed in ${result.error.phase}`, color);
+  const lead = `${result.id.padEnd(idWidth)}${COLUMN_GAP}${failure}: `;
+  return failureLines(lead, result.error, " ".repeat(visibleWidth(lead)));
 }
 
-/** The lines of one runtime's section: its heading, the column header, then a row per case. */
-function sectionLines(results: readonly Result[]): string[] {
+/**
+ * Lays out one runtime's section.
+ *
+ * @param results - The section's results, in run order.
+ * @param color - Whether to show the heading bold, the column header dim and each failure in red.
+ * @returns Its heading, the column header, then a row per case.
+ */
+function sectionLines(results: readonly Result[], color: boolean): string[] {
   const measuredRows = results.flatMap((result) =>
     result.status === "ok" ? [measuredCells(result)] : [],
   );
@@ -133,23 +163,33 @@ function sectionLines(results: readonly Result[]): string[] {
   const [header = "", ...rows] = alignRows([HEADER, ...measuredRows], idWidth);
   const alignedRows = rows.values();
   const caseLines = results.flatMap((result) =>
-    result.status === "ok" ? [alignedRows.next().value ?? ""] : failedLines(result, idWidth),
+    result.status === "ok" ? [alignedRows.next().value ?? ""] : failedLines(result, idWidth, color),
   );
   const first = results[0];
   const heading = first === undefined ? "" : `${first.runtime.name} ${first.runtime.version}`;
-  return [heading, ...[header, ...caseLines].map((line) => `${ROW_INDENT}${line}`)];
+  return [
+    paint("bold", heading, color),
+    ...[paint("dim", header, color), ...caseLines].map((line) => `${ROW_INDENT}${line}`),
+  ];
 }
 
 /**
  * Formats the table of a run's results, one section per runtime in run order.
  *
  * @param results - The results that finished, in run order.
+ * @param options - Whether the stream the table goes to shows color; plain when absent.
  * @returns The table, ending in a newline, or the empty string when there is no result.
  */
-export function formatTable(results: readonly Result[]): string {
+export function formatTable(
+  results: readonly Result[],
+  options: { readonly color?: boolean } = {},
+): string {
   if (results.length === 0) return "";
+  const color = options.color === true;
   const byRuntime = Map.groupBy(results, (result) => result.runtime.name);
-  const sections = [...byRuntime.values()].map((section) => sectionLines(section).join("\n"));
+  const sections = [...byRuntime.values()].map((section) =>
+    sectionLines(section, color).join("\n"),
+  );
   return `${[...sections, FOOTER].join("\n\n")}\n`;
 }
 

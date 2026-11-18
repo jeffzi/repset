@@ -1,3 +1,5 @@
+import { stripVTControlCharacters } from "node:util";
+
 import { describe, expect, it } from "vitest";
 
 import type { ChildPhase } from "../src/child.js";
@@ -280,6 +282,24 @@ describe("formatTable", () => {
         const indent = " ".repeat(lines[row]?.indexOf("plum exploded") ?? 0);
         expect(lines[row + 1]).toMatch(new RegExp(`^${indent}\\S.* melon split$`, "u"));
       });
+    });
+  });
+
+  describe("when colored", () => {
+    it("styles the table while its visible text stays the plain table, columns aligned", () => {
+      const results = [
+        measured("elderberry", "node", { ...flatStats(4656), max: 2_340_000, sampleCount: 1200 }),
+        failed("fig", "teardown", "kiwi\nplum", { message: "melon split", stack: "at teardown" }),
+        measured("banana", "bun", flatStats(812)),
+      ];
+      const plain = formatTable(results);
+
+      const colored = formatTable(results, { color: true });
+
+      expect({
+        styled: colored !== plain,
+        visible: stripVTControlCharacters(colored),
+      }).toStrictEqual({ styled: true, visible: plain });
     });
   });
 });

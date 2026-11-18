@@ -5,7 +5,8 @@
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { constants } from "node:os";
 import { dirname, resolve } from "node:path";
-import { parseArgs } from "node:util";
+import { Writable } from "node:stream";
+import { parseArgs, styleText } from "node:util";
 
 import { findRuntime as realFindRuntime, startChild as realStartChild } from "./children.js";
 import { RUNTIMES, type Runtime } from "./measure/runtime.js";
@@ -30,7 +31,7 @@ import {
   type SelectInput,
   shownPath,
 } from "./run.js";
-import { failureLines, formatTable, metricLine } from "./table.js";
+import { failureLines, formatTable, metricLine, paint } from "./table.js";
 import { describe, thrownMessage } from "./utils.js";
 
 /** Like `Omit`, but `K` must be a key of `T`, so a misspelled or removed key fails to compile. */
@@ -39,6 +40,10 @@ export type StrictOmit<T, K extends keyof T> = Omit<T, K>;
 /** Where the command prints: `process.stdout` and `process.stderr` fit. */
 export interface Output {
   write(text: string): unknown;
+  /** Whether the stream is a terminal, which shows color unless the environment turns it off. */
+  readonly isTTY?: boolean | undefined;
+  /** The bits per color the terminal shows; read from the environment when absent. */
+  getColorDepth?(): number;
 }
 
 /** The signals that interrupt a run. */
@@ -73,6 +78,7 @@ const FLAGS = {
   list: { type: "boolean" },
   once: { type: "boolean" },
   config: { type: "string" },
+  "no-color": { type: "boolean" },
   help: { type: "boolean" },
   version: { type: "boolean" },
 } as const;
@@ -112,6 +118,7 @@ Options:
   --list                  Print the selected case ids and exit
   --once                  Run every selected case once per runtime, with no timing
   --config <file>         Read this config file instead of looking for one
+  --no-color              Print no color, even on a terminal
   --help                  Print this help
   --version               Print the version
 `;
@@ -130,11 +137,18 @@ interface Command {
   readonly callsPerSample: number | undefined;
 }
 
+/** Whether each stream the command prints to shows color. */
+interface Colors {
+  readonly stdout: boolean;
+  readonly stderr: boolean;
+}
+
 /** The command's streams, working directory, stop signal and child functions, defaults applied. */
 interface Context extends ChildFunctions {
   readonly cwd: string;
   readonly stdout: Output;
   readonly stderr: Output;
+  readonly colors: Colors;
   readonly signal: AbortSignal;
 }
 
@@ -146,6 +160,48 @@ interface Context extends ChildFunctions {
 function flagged(args: readonly string[], flag: string): boolean {
   const end = args.indexOf("--");
   return (end === -1 ? args : args.slice(0, end)).includes(flag);
+}
+
+/** The color depth of a terminal that reports none: one bit under `NO_COLOR` or a dumb `TERM`. */
+function environmentColorDepth(): number {
+  const noColor = process.env["NO_COLOR"];
+  const colorOff = (noColor !== undefined && noColor !== "") || process.env["TERM"] === "dumb";
+  return colorOff ? 1 : 4;
+}
+
+/**
+ * Whether `output` shows color by `styleText`'s rules: `FORCE_COLOR` decides when set, otherwise a
+ * terminal of more than one bit per color does. `styleText` judges only a real stream, so it judges
+ * one that reports what `output` does.
+ *
+ * @param output - The stream the command prints to.
+ * @returns Whether text styled for `output` keeps its escape codes.
+ */
+function showsColor(output: Output): boolean {
+  const stream = Object.assign(new Writable(), {
+    isTTY: output.isTTY === true,
+    getColorDepth: (): number => output.getColorDepth?.() ?? environmentColorDepth(),
+  });
+  return styleText("red", "x", { stream }) !== "x";
+}
+
+/**
+ * Judges each stream on its own: it shows color when it would by `styleText`'s rules and
+ * `--no-color` is not among the arguments before a `--` terminator.
+ *
+ * @param args - The command's arguments.
+ * @param stdout - The stream the command's output goes to.
+ * @param stderr - The stream the command's progress and errors go to.
+ * @returns Whether each stream shows color.
+ */
+function streamColors(args: readonly string[], stdout: Output, stderr: Output): Colors {
+  const noColor = flagged(args, "--no-color");
+  return { stdout: !noColor && showsColor(stdout), stderr: !noColor && showsColor(stderr) };
+}
+
+/** An error line: `message` behind a `repset:` prefix, red when `color` holds. */
+function errorLine(message: string, color: boolean): string {
+  return `${paint("red", "repset:", color)} ${message}\n`;
 }
 
 /**
@@ -367,17 +423,16 @@ async function measure(command: Command, context: Context): Promise<number> {
       writes?.onResult?.(result);
     },
   });
-  const tableOut = toStdout || command.metricLines ? stderr : stdout;
-  tableOut.write(formatTable(report.results));
+  const tableTo = toStdout || command.metricLines ? "stderr" : "stdout";
+  context[tableTo].write(formatTable(report.results, { color: context.colors[tableTo] }));
   if (toStdout) stdout.write(reportText(report));
   let written = true;
   if (file !== undefined) {
     try {
       writeReport(file.path, report);
     } catch (error) {
-      stderr.write(
-        `repset: ${failedWith(`cannot write the report to ${file.name}`, error).message}\n`,
-      );
+      const { message } = failedWith(`cannot write the report to ${file.name}`, error);
+      stderr.write(errorLine(message, context.colors.stderr));
       written = false;
     }
   }
@@ -424,13 +479,14 @@ const ONCE_INDENT = "  ";
  */
 async function once(command: Command, context: Context): Promise<number> {
   const outcome = await runOnce({ ...command.input, ...childInput(context) });
+  const color = context.colors.stdout;
   for (const result of outcome.results) {
     const ran = `${result.id} on ${result.runtime}`;
     if (result.status === "ok") {
-      context.stdout.write(`ok ${ran}\n`);
+      context.stdout.write(`${paint("green", "ok", color)} ${ran}\n`);
       continue;
     }
-    const lead = `failed ${ran}: phase ${result.error.phase}: `;
+    const lead = `${paint("red", "failed", color)} ${ran}: phase ${result.error.phase}: `;
     context.stdout.write(
       failureLines(lead, result.error, ONCE_INDENT)
         .map((line) => `${line}\n`)
@@ -444,14 +500,20 @@ async function once(command: Command, context: Context): Promise<number> {
 // Entry point
 // ---------------------------------------------------------------------------
 
-/** Prints a `ConfigError`; a failed listing's stack and output tail come before its message. */
-function printError(stderr: Output, error: ConfigError): void {
+/**
+ * Prints a `ConfigError`; a failed listing's stack and output tail come before its message.
+ *
+ * @param stderr - The stream the error goes to.
+ * @param error - The error to print.
+ * @param color - Whether `stderr` shows color.
+ */
+function printError(stderr: Output, error: ConfigError, color: boolean): void {
   if (error instanceof ListingError) {
     for (const text of [error.failureStack ?? "", error.output]) {
       if (text !== "") stderr.write(text.endsWith("\n") ? text : `${text}\n`);
     }
   }
-  stderr.write(`repset: ${error.message}\n`);
+  stderr.write(errorLine(error.message, color));
 }
 
 /**
@@ -471,6 +533,8 @@ function printError(stderr: Output, error: ConfigError): void {
 export async function main(args: readonly string[], io: CommandIo = {}): Promise<number> {
   const stdout = io.stdout ?? process.stdout;
   const stderr = io.stderr ?? process.stderr;
+  // Judged before the command line is checked, so a usage error honors --no-color too.
+  const colors = streamColors(args, stdout, stderr);
   if (flagged(args, "--help")) {
     stdout.write(USAGE);
     return 0;
@@ -500,6 +564,7 @@ export async function main(args: readonly string[], io: CommandIo = {}): Promise
       cwd: io.cwd ?? process.cwd(),
       stdout,
       stderr,
+      colors,
       signal: controller.signal,
       findRuntime: io.findRuntime ?? realFindRuntime,
       startChild: io.startChild ?? realStartChild,
@@ -508,7 +573,7 @@ export async function main(args: readonly string[], io: CommandIo = {}): Promise
     return exitCode(await actions[command.mode](command, context));
   } catch (error) {
     if (!(error instanceof ConfigError)) throw error;
-    printError(stderr, error);
+    printError(stderr, error, colors.stderr);
     return exitCode(2);
   } finally {
     for (const [signal, listener] of listeners) signals.off(signal, listener);

@@ -84,6 +84,21 @@ async function runOnceHere(input: Partial<OnceInput> = {}): ReturnType<typeof ru
   });
 }
 
+/** Wraps `start` to log each child's mode in `events` as it starts. */
+function logsStarts(events: string[], start: StartChild): StartChild {
+  return async (runtime, request, options) => {
+    events.push(request.mode);
+    return start(runtime, request, options);
+  };
+}
+
+/** A plan callback that logs each phase and its child count in `events` as `planned <phase> <n>`. */
+function logsPlans(events: string[]): NonNullable<OnceInput["onPlanned"]> {
+  return (phase, total) => {
+    events.push(`planned ${phase} ${String(total)}`);
+  };
+}
+
 /** Freezes `Date` at `STARTED_AT`, leaving every timer real. */
 function freezeClock(): void {
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -368,6 +383,30 @@ describe("run", () => {
     });
   });
 
+  describe("onPlanned", () => {
+    it("receives each phase's child count before that phase's first child starts", async () => {
+      const events: string[] = [];
+
+      await runHere({
+        files: ["zeta.bench.ts", "a.bench.ts"],
+        runtimes: ["node", "bun"],
+        startChild: logsStarts(events, measuresAll),
+        onPlanned: logsPlans(events),
+      });
+
+      expect(events).toStrictEqual([
+        "planned list 2",
+        "list",
+        "list",
+        "planned measure 4",
+        "measure",
+        "measure",
+        "measure",
+        "measure",
+      ]);
+    });
+  });
+
   describe("the package's version", () => {
     describe("when package.json cannot be read", () => {
       it("throws the read error as it is, before any child starts", async () => {
@@ -476,6 +515,33 @@ describe("runOnce", () => {
         },
         { id: "a.bench.ts", runtime: "node", status: "ok" },
       ],
+    });
+  });
+
+  describe("onPlanned", () => {
+    it("receives each phase's child count before that phase's first child starts", async () => {
+      const events: string[] = [];
+
+      await runOnceHere({
+        files: ["zeta.bench.ts", "a.bench.ts"],
+        runtimes: ["node", "bun"],
+        startChild: logsStarts(
+          events,
+          starter(() => ranOnce),
+        ),
+        onPlanned: logsPlans(events),
+      });
+
+      expect(events).toStrictEqual([
+        "planned list 2",
+        "list",
+        "list",
+        "planned once 4",
+        "once",
+        "once",
+        "once",
+        "once",
+      ]);
     });
   });
 });

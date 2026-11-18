@@ -103,6 +103,28 @@ function idsOf(selection: Selection): string[] {
 }
 
 describe("selectCases", () => {
+  describe("when a plan callback is given", () => {
+    it("receives the number of files to list before the first listing child starts", async () => {
+      const events: string[] = [];
+
+      await selectCases({
+        options: optionsWith(),
+        files: ["zeta.bench.ts", "a.bench.ts", "alpha.bench.mts"],
+        cwd: FIXTURES,
+        findRuntime: findAny,
+        startChild: async (runtime, request, options) => {
+          events.push(request.mode);
+          return onePerFile(runtime, request, options);
+        },
+        onPlanned: (phase, total) => {
+          events.push(`planned ${phase} ${total}`);
+        },
+      });
+
+      expect(events).toStrictEqual(["planned list 3", "list", "list", "list"]);
+    });
+  });
+
   describe("when no positional file is given", () => {
     it("matches the include globs against includeBase, ** and brace sets included, sorted by path", async () => {
       const selection = await select({ cwd: TESTS });

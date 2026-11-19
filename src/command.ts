@@ -20,6 +20,7 @@ import {
   REPOSITORY,
 } from "./command-line.js";
 import { ConfigError, failedWith, resolveOptions } from "./options.js";
+import { progressOn, type Progress } from "./progress.js";
 import type { Report, Result } from "./report.js";
 import {
   type ChildFunctionOverrides,
@@ -38,7 +39,16 @@ import { thrownMessage } from "./utils.js";
 
 /** Where the command prints: `process.stdout` and `process.stderr` fit. */
 export interface Output {
-  write(text: string): unknown;
+  /**
+   * Writes `text`; a write that fails reports its error to `done`, and a stream may report it
+   * again afterwards as an `error` event.
+   *
+   * @param text - The text to write.
+   * @param done - Called once the write is done, with the error when it failed.
+   * @returns Whatever the stream returns, such as Node's `false` when it wants a pause; the
+   *   command ignores it.
+   */
+  write(text: string, done?: (error?: Error | null) => void): unknown;
   /** Whether the stream is a terminal, which shows color unless the environment turns it off. */
   readonly isTTY?: boolean | undefined;
   /** The bits per color the terminal shows; read from the environment when absent. */
@@ -58,11 +68,32 @@ export interface SignalSource {
   off(signal: Signal, listener: () => void): unknown;
 }
 
+/** The stream the command's output goes to: `process.stdout` fits. */
+export interface Stdout extends Output {
+  /**
+   * Listens for the error a failed write reports after it returns, such as `EPIPE` once the
+   * reader went away.
+   *
+   * @param event - The `error` event.
+   * @param listener - Called with the error.
+   * @returns Whatever the stream returns; the command ignores it.
+   */
+  on(event: "error", listener: (error: Error) => void): unknown;
+  /**
+   * Stops listening for the error a failed write reports.
+   *
+   * @param event - The `error` event.
+   * @param listener - The listener {@link Stdout.on} added.
+   * @returns Whatever the stream returns; the command ignores it.
+   */
+  off(event: "error", listener: (error: Error) => void): unknown;
+}
+
 /** What the command reads from and prints to, and the functions it starts children with. */
 export interface CommandIo extends ChildFunctionOverrides {
   /** The directory positional files, `--out` and `--config` are relative to; `process.cwd()` by default. */
   readonly cwd?: string | undefined;
-  readonly stdout?: Output | undefined;
+  readonly stdout?: Stdout | undefined;
   readonly stderr?: Output | undefined;
   readonly signals?: SignalSource | undefined;
 }
@@ -133,115 +164,6 @@ export function streamColors(args: readonly string[], stdout: Output, stderr: Ou
 /** An error line: `message` behind a `repset:` prefix, red when `color` holds. */
 function errorLine(message: string, color: boolean): string {
   return `${paint("red", "repset:", color)} ${message}\n`;
-}
-
-// ---------------------------------------------------------------------------
-// Progress
-// ---------------------------------------------------------------------------
-
-/** The frames of the live line's indicator, one per tick. */
-const FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
-
-/** How long each indicator frame shows, in milliseconds. */
-const FRAME_MS = 80;
-
-/** Splits the live line into the characters a person sees, so a cut never splits one. */
-const GRAPHEMES = new Intl.Segmenter();
-
-/** The characters a terminal draws two columns wide: East Asian wide and full-width ones, and emoji. */
-const WIDE =
-  /\p{Extended_Pictographic}|[ᄀ-ᅟ⺀-〾ぁ-㏿㐀-䶿一-鿿ꀀ-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦\u{20000}-\u{3FFFF}]/u;
-
-/** Moves the cursor to the start of its row and erases the row. */
-const CLEAR_ROW = "\r\x1b[2K";
-
-/** What the command shows on stderr as each child starts. */
-interface Progress {
-  /** Starts counting the children of a phase that starts `total` of them. */
-  planned(total: number): void;
-  /** Shows that the phase's next child starts, doing what `text` says. */
-  starting(text: string): void;
-  /** Writes `text` to `output` above the live line, once a child started, so they never share a row. */
-  above(output: Output, text: string): void;
-  /** Stops the indicator and erases the live line; calling it again does nothing. */
-  stop(): void;
-}
-
-/** Progress as one line per child, with no count, animation or cursor control. */
-function linePerChild(stderr: Output): Progress {
-  return {
-    planned: () => undefined,
-    starting: (text) => {
-      stderr.write(`${text}\n`);
-    },
-    above: (output, text) => {
-      output.write(text);
-    },
-    stop: () => undefined,
-  };
-}
-
-/**
- * Progress as one live line on a terminal: `[i/n]`, then what the running child does, behind an
- * animated indicator. The line is cut to the terminal's width, so erasing its row erases all of it.
- * The indicator's timer is unreferenced: it never keeps the process alive.
- *
- * @param stderr - The terminal the line shows on.
- * @param color - Whether `stderr` shows color, which colors the indicator.
- * @returns The progress, showing nothing until the first child starts.
- */
-function liveLine(stderr: Output, color: boolean): Progress {
-  let total = 0;
-  let started = 0;
-  let doing = "";
-  let frame = 0;
-  let timer: ReturnType<typeof setInterval> | undefined;
-  const draw = (): void => {
-    // The last column stays empty: a row filled to it wraps on some terminals.
-    let room = (stderr.columns ?? Number.POSITIVE_INFINITY) - 1;
-    const kept: string[] = [];
-    for (const { segment } of GRAPHEMES.segment(
-      `${FRAMES[frame]} [${started}/${total}] ${doing}`,
-    )) {
-      room -= WIDE.test(segment) ? 2 : 1;
-      if (room < 0) break;
-      kept.push(segment);
-    }
-    const [indicator = "", ...rest] = kept;
-    stderr.write(`${CLEAR_ROW}${paint("green", indicator, color)}${rest.join("")}`);
-  };
-  return {
-    planned: (count) => {
-      total = count;
-      started = 0;
-    },
-    starting: (text) => {
-      started += 1;
-      doing = text;
-      timer ??= setInterval(() => {
-        frame = (frame + 1) % FRAMES.length;
-        draw();
-      }, FRAME_MS).unref();
-      draw();
-    },
-    above: (output, text) => {
-      stderr.write(CLEAR_ROW);
-      output.write(text);
-      draw();
-    },
-    stop: () => {
-      if (timer === undefined) return;
-      clearInterval(timer);
-      timer = undefined;
-      stderr.write(CLEAR_ROW);
-    },
-  };
-}
-
-/** A live line on a terminal stderr whose `TERM` is not `dumb`, one line per child elsewhere. */
-function progressOn(stderr: Output, color: boolean): Progress {
-  const live = stderr.isTTY === true && process.env["TERM"] !== "dumb";
-  return live ? liveLine(stderr, color) : linePerChild(stderr);
 }
 
 // ---------------------------------------------------------------------------
@@ -534,64 +456,171 @@ export function crashReport(error: unknown, about: CrashAbout): string {
   return `${stack.endsWith("\n") ? stack : `${stack}\n`}${errorLine(line, about.color === true)}`;
 }
 
+/** Stdout as the command writes to it, and what it learned of stdout's failure. */
+interface GuardedStdout {
+  /** Writes to stdout until a write fails, then drops every write. */
+  readonly output: Output;
+  /** Resolves once every write made so far is done. */
+  settled(): Promise<void>;
+  /** The first error a write to stdout failed with, or `undefined` when none failed. */
+  failure(): Error | undefined;
+  /** Stops listening for stdout's errors, unless one arrived. */
+  release(): void;
+}
+
+/**
+ * Watches `stdout` for a failed write, which Node reports after the write returns: to the
+ * write's callback, then as an `error` event.
+ *
+ * @param stdout - The stream the command's output goes to.
+ * @param onFailure - Called once, with the first error a write failed with.
+ * @returns The output to write to in place of `stdout`, and what it learned of stdout's failure.
+ */
+function guardStdout(stdout: Stdout, onFailure: (error: Error) => void): GuardedStdout {
+  let failure: Error | undefined;
+  let pending = Promise.resolve();
+  const fail = (error: Error): void => {
+    if (failure !== undefined) return;
+    failure = error;
+    onFailure(error);
+  };
+  stdout.on("error", fail);
+  return {
+    output: {
+      write: (text) => {
+        if (failure !== undefined) return false;
+        pending = new Promise((done) => {
+          stdout.write(text, (error) => {
+            if (error !== undefined && error !== null) fail(error);
+            done();
+          });
+        });
+        return true;
+      },
+    },
+    settled: async () => pending,
+    failure: () => failure,
+    release: () => {
+      // A failed stream emits its error after the write's callback ran, so the listener stays to
+      // take it: an error event with no listener crashes the process.
+      if (failure === undefined) stdout.off("error", fail);
+    },
+  };
+}
+
+/** What stopped the command first: a signal, or a write to stdout that failed. */
+type Stop = { readonly signal: Signal } | { readonly error: Error };
+
+/** Whether `error` says the reader of the stream went away. */
+function closedPipe(error: Error): boolean {
+  return "code" in error && error.code === "EPIPE";
+}
+
+/**
+ * The code the command exits with, as a shell reports a process that `stop` ended.
+ *
+ * @param stop - What stopped the command first, or `undefined` when nothing did.
+ * @param code - The code the command would exit with had nothing stopped it.
+ * @returns `code` when nothing stopped the command, 128 plus the number of the signal that did,
+ *   128 plus `SIGPIPE`'s number when stdout's reader went away, and 1 when a write to stdout
+ *   failed otherwise.
+ */
+function stoppedCode(stop: Stop | undefined, code: number): number {
+  if (stop === undefined) return code;
+  if ("signal" in stop) return 128 + constants.signals[stop.signal];
+  return closedPipe(stop.error) ? 128 + constants.signals.SIGPIPE : 1;
+}
+
+/**
+ * Reads the command line and runs what it asks for.
+ *
+ * @param args - The command's arguments, without the runtime and the script.
+ * @param context - The streams, the working directory, the stop signal and the child functions.
+ * @returns The action's code, 0 when `--help` or `--version` printed, and 2 when the command
+ *   line, the config or the selection is wrong, which it prints.
+ * @throws {Error} An error that is not a {@link ConfigError}, such as one reading the package's
+ *   `package.json`.
+ */
+async function perform(args: readonly string[], context: Context): Promise<number> {
+  try {
+    const parser = commandLine(await packageVersion(), context.stdout, context.colors);
+    const command = parseCommand(args, parser);
+    const actions = { run: measure, list, once };
+    return await actions[command.mode](command, context);
+  } catch (error) {
+    context.progress.stop();
+    // Commander ends a run that printed the help or the version with an error of exit code 0.
+    if (error instanceof CommanderError) return 0;
+    if (!(error instanceof ConfigError)) throw error;
+    printError(context.stderr, error, context.colors.stderr);
+    return 2;
+  }
+}
+
 /**
  * Runs the `repset` command. It sets no `process.exitCode` and never exits the process, so the
  * caller decides when to end it and stdout drains first.
  *
+ * A signal or a failed write to stdout stops the run: the running child is killed, no other case
+ * starts, nothing more goes to stdout, and the report file still gets the finished results.
+ *
  * @param args - The command's arguments, without the runtime and the script.
  * @param io - The working directory, the streams, the signal source and the child functions; the
  *   process's own by default.
- * @returns 0 when every selected case ran or `--help` or `--version` printed, 1 when one failed
- *   or the last report write failed, 2 when the command line, the config or the selection is
- *   wrong, and 130, 143 or 129 when `SIGINT`, `SIGTERM` or `SIGHUP` interrupted it, even when a
- *   wrong selection or config follows the interrupt.
+ * @returns 0 when every selected case ran or `--help` or `--version` printed, 1 when one failed,
+ *   the last report write failed or a write to stdout failed with an error other than `EPIPE`, 2
+ *   when the command line, the config or the selection is wrong, 130, 143 or 129 when `SIGINT`,
+ *   `SIGTERM` or `SIGHUP` interrupted it, and 141 when stdout's reader went away. The first of a
+ *   signal and a failed write to stdout sets the code, even when a wrong selection or config
+ *   follows it.
  * @throws {Error} An error that is not a {@link ConfigError}, such as one reading the package's
  *   `package.json`.
  */
 export async function main(args: readonly string[], io: CommandIo = {}): Promise<number> {
-  const stdout = io.stdout ?? process.stdout;
   const stderr = io.stderr ?? process.stderr;
+  const rawStdout = io.stdout ?? process.stdout;
   // Judged before the command line is checked, so a usage error honors --no-color too.
-  const colors = streamColors(args, stdout, stderr);
+  const colors = streamColors(args, rawStdout, stderr);
   const progress = progressOn(stderr, colors.stderr);
   const controller = new AbortController();
-  let received: Signal | undefined;
+  let stop: Stop | undefined;
+  const stopWith = (cause: Stop): void => {
+    stop ??= cause;
+    controller.abort();
+  };
   const listeners = SIGNALS.map((signal) => {
     const listener = (): void => {
-      received ??= signal;
-      controller.abort();
+      stopWith({ signal });
     };
     return [signal, listener] as const;
   });
   const signals = io.signals ?? process;
   for (const [signal, listener] of listeners) signals.on(signal, listener);
-  // An interrupted run exits 128 plus the signal's number, as a shell reports it, whatever the
-  // command would have exited with: a ConfigError the interrupt provoked included.
-  const exitCode = (code: number): number =>
-    received === undefined ? code : 128 + constants.signals[received];
+  const stdout = guardStdout(rawStdout, (error) => {
+    stopWith({ error });
+  });
+  let code: number;
   try {
-    const parser = commandLine(await packageVersion(), stdout, colors);
-    const command = parseCommand(args, parser);
-    const context: Context = {
+    code = await perform(args, {
       cwd: io.cwd ?? process.cwd(),
-      stdout,
+      stdout: stdout.output,
       stderr,
       colors,
       signal: controller.signal,
       progress,
       findRuntime: io.findRuntime ?? realFindRuntime,
       startChild: io.startChild ?? realStartChild,
-    };
-    const actions = { run: measure, list, once };
-    return exitCode(await actions[command.mode](command, context));
-  } catch (error) {
-    progress.stop();
-    // Commander ends a run that printed the help or the version with an error of exit code 0.
-    if (error instanceof CommanderError) return exitCode(0);
-    if (!(error instanceof ConfigError)) throw error;
-    printError(stderr, error, colors.stderr);
-    return exitCode(2);
+    });
   } finally {
     for (const [signal, listener] of listeners) signals.off(signal, listener);
+    // Even on a crash: a write still in flight may yet fail, and its error needs the listener.
+    await stdout.settled();
+    stdout.release();
   }
+  const failure = stdout.failure();
+  if (failure !== undefined && !closedPipe(failure)) {
+    const named = "code" in failure ? String(failure.code) : failure.message;
+    stderr.write(errorLine(`cannot write to stdout: ${named}`, colors.stderr));
+  }
+  return stoppedCode(stop, code);
 }

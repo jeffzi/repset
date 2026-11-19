@@ -10,6 +10,8 @@ import { formatTable, metricLine } from "../src/table.js";
 import {
   blockWrites,
   captured,
+  closed,
+  closedHeld,
   command,
   type Ended,
   failsParse,
@@ -32,6 +34,19 @@ import {
   stopped,
 } from "./fake-children.js";
 import { parseReport, reportAt } from "./report-file.js";
+
+/** The metric lines `results` print, each ending with a newline. */
+function metricText(results: readonly Result[]): string {
+  return results
+    .map((result) => metricLine(result))
+    .filter((line) => line !== undefined)
+    .map((line) => `${line}\n`)
+    .join("");
+}
+
+/** A child starter that ends as stopped once the run is aborted, and measures every case before. */
+const measuresUnlessAborted: StartChild = async (runtime, request, options) =>
+  options.signal?.aborted === true ? stopped : measuresAll(runtime, request, options);
 
 describe("main", () => {
   describe("when every flag is given", () => {
@@ -402,12 +417,14 @@ describe("main", () => {
         { stdout, startChild: watchesStdout },
       );
       const { results } = reportAt(join(dir, "report.json"));
-      const metricText = results
-        .map((result) => metricLine(result))
-        .filter((line) => line !== undefined)
-        .map((line) => `${line}\n`)
-        .join("");
-      return { code, stdout: stdout.text, stderr, printedAtStart, results, metricText };
+      return {
+        code,
+        stdout: stdout.text,
+        stderr,
+        printedAtStart,
+        results,
+        metricText: metricText(results),
+      };
     }
 
     it("prints each measured result's metric line on stdout", async () => {
@@ -724,6 +741,178 @@ describe("main", () => {
         code: 130,
         last: naming("sort.bench.ts", "load", "kiwi"),
       });
+    });
+  });
+
+  describe("when a write to stdout fails", () => {
+    it.each([
+      { code: "EPIPE", exit: 141, said: [] },
+      { code: "EIO", exit: 1, said: [expect.stringMatching(/^repset: .*\bEIO\b/u)] },
+    ])(
+      "on $code kills the running case, starts no other, keeps the report file and exits $exit",
+      async ({ code, exit, said }) => {
+        const dir = workspace();
+        writeFileSync(join(dir, "pear.bench.ts"), "");
+        const stdout = captured();
+        const started: string[] = [];
+        const failsStdoutInParse = starter((request, runtime, options) => {
+          started.push(request.id);
+          if (request.id === "parse/fast") stdout.fail(code);
+          return measuresUnlessAborted(runtime, request, options);
+        });
+
+        const ended = await command(
+          dir,
+          [
+            "sort.bench.ts",
+            "parse.bench.ts",
+            "pear.bench.ts",
+            "--metric-lines",
+            "--out",
+            "report.json",
+          ],
+          { stdout, startChild: failsStdoutInParse },
+        );
+
+        const report = reportAt(join(dir, "report.json"));
+        expect({
+          code: ended.code,
+          started,
+          ran: report.results.map((result) => result.id),
+          interrupted: report.interrupted,
+          stdout: ended.stdout,
+          said: linesOf(ended.stderr).filter((line) => line.includes(code)),
+        }).toStrictEqual({
+          code: exit,
+          started: ["sort/fast", "parse/fast"],
+          ran: ["sort/fast"],
+          interrupted: true,
+          stdout: metricText(report.results),
+          said,
+        });
+      },
+    );
+
+    it("exits 141 with interrupted false when the closed stdout only met the table, the last write", async () => {
+      const dir = workspace();
+
+      const { code } = await command(
+        dir,
+        ["sort.bench.ts", "parse.bench.ts", "--out", "report.json"],
+        { stdout: closed("EPIPE") },
+      );
+
+      const report = reportAt(join(dir, "report.json"));
+      expect({
+        code,
+        interrupted: report.interrupted,
+        ran: report.results.length,
+      }).toStrictEqual({ code: 141, interrupted: false, ran: 2 });
+    });
+
+    it.each([
+      { mode: "the table", args: [] },
+      { mode: "--out -", args: ["--out", "-"] },
+      { mode: "--metric-lines", args: ["--metric-lines"] },
+      { mode: "--list", args: ["--list"] },
+      { mode: "--once", args: ["--once"] },
+    ])(
+      "exits 141 printing nothing more, and nothing about it, when stdout closes under $mode",
+      async ({ args }) => {
+        const stdout = captured();
+        const closesStdout: StartChild = async (runtime, request, options) => {
+          stdout.fail("EPIPE");
+          return measuresUnlessAborted(runtime, request, options);
+        };
+
+        const { code, stderr } = await command(
+          workspace(),
+          [...args, "sort.bench.ts", "parse.bench.ts"],
+          { stdout, startChild: closesStdout },
+        );
+
+        expect({ code, stdout: stdout.text, mentioned: stderr.includes("EPIPE") }).toStrictEqual({
+          code: 141,
+          stdout: "",
+          mentioned: false,
+        });
+      },
+    );
+
+    it.each([
+      { first: "SIGTERM", second: "EPIPE", exit: 143 },
+      { first: "EPIPE", second: "SIGINT", exit: 141 },
+      { first: "SIGHUP", second: "EIO", exit: 129 },
+    ])("exits $exit when $first comes before $second", async ({ first, second, exit }) => {
+      const signals = new EventEmitter();
+      const stdout = captured();
+      const deliver = (event: string): void => {
+        if (event.startsWith("SIG")) signals.emit(event);
+        else stdout.fail(event);
+      };
+      const stopsTwice = starter(() => {
+        deliver(first);
+        deliver(second);
+        return stopped;
+      });
+
+      const { code } = await command(workspace(), ["sort.bench.ts", "parse.bench.ts"], {
+        signals,
+        stdout,
+        startChild: stopsTwice,
+      });
+
+      expect(code).toBe(exit);
+    });
+
+    it("names the error's message on stderr when it carries no code", async () => {
+      const stdout = captured();
+      const failsStdout = starter((request, runtime, options) => {
+        stdout.fail(new Error("banana"));
+        return measuresUnlessAborted(runtime, request, options);
+      });
+
+      const { code, stderr } = await command(workspace(), ["sort.bench.ts"], {
+        stdout,
+        startChild: failsStdout,
+      });
+
+      expect({
+        code,
+        said: linesOf(stderr).filter((line) => line.includes("banana")),
+      }).toStrictEqual({
+        code: 1,
+        said: [expect.stringMatching(/^repset: .*\bbanana\b/u)],
+      });
+    });
+
+    it("keeps listening for stdout's error once a write failed, so its late error event does not crash", async () => {
+      const stdout = closedHeld("EPIPE");
+
+      await command(workspace(), ["sort.bench.ts"], { stdout });
+
+      expect(() => {
+        stdout.emitHeld();
+      }).not.toThrow();
+    });
+
+    it("waits for stdout's writes before it rethrows a crash, so a write failing after it does not crash", async () => {
+      const stdout = closedHeld("EPIPE");
+      const error = new Error("kiwi");
+      const throwsOnParse = starter((request, runtime, options) => {
+        if (request.id === "parse/fast") throw error;
+        return measuresAll(runtime, request, options);
+      });
+
+      const ended = command(workspace(), ["--metric-lines", "sort.bench.ts", "parse.bench.ts"], {
+        stdout,
+        startChild: throwsOnParse,
+      });
+
+      await expect(ended).rejects.toBe(error);
+      expect(() => {
+        stdout.emitHeld();
+      }).not.toThrow();
     });
   });
 });

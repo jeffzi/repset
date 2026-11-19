@@ -49,24 +49,81 @@ export const startsNoCase = starter(() => {
   throw new Error("a case started");
 });
 
-/** A stream stand-in that keeps what is written to it. */
-interface Captured {
+/** Called once a write is done: with the error when it failed, with `null` when it succeeded. */
+type WriteDone = (error: Error | null) => void;
+
+/**
+ * A stream stand-in that keeps what is written to it, even once its writes fail. A failed write
+ * reports its error as Node does, after the write returns: to the write's callback, then once, as
+ * an `error` event.
+ */
+interface Captured extends EventEmitter {
   text: string;
-  write: (text: string) => boolean;
+  write: (text: string, done?: WriteDone) => boolean;
+  /** Fails every later write with `cause`, or an error carrying it as its code, and emits it now. */
+  fail: (cause: string | Error) => void;
+  /** Emits the error a held stand-in's failed writes reported, as Node does once the write returned. */
+  emitHeld: () => void;
   readonly isTTY?: true;
   readonly getColorDepth?: () => number;
 }
 
+/** The error a stream write failing with `code` reports. */
+function writeError(code: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(`write ${code}`), { code, syscall: "write" });
+}
+
+/**
+ * A stream stand-in whose writes fail with `failure` until told otherwise; when `held`, a failed
+ * write's `error` event waits for `emitHeld`.
+ */
+function standIn(failure: Error | undefined, held = false): Captured {
+  let error = failure;
+  let reported = false;
+  const emit = (): void => {
+    if (error === undefined || reported) return;
+    reported = true;
+    stream.emit("error", error);
+  };
+  const report = (): void => {
+    if (!held) emit();
+  };
+  const stream: Captured = Object.assign(new EventEmitter(), {
+    text: "",
+    write: (text: string, done?: WriteDone): boolean => {
+      stream.text += text;
+      const failed = error;
+      process.nextTick(() => {
+        done?.(failed ?? null);
+        report();
+      });
+      return failed === undefined;
+    },
+    fail: (cause: string | Error): void => {
+      error = typeof cause === "string" ? writeError(cause) : cause;
+      report();
+    },
+    emitHeld: emit,
+  });
+  return stream;
+}
+
 /** A stream stand-in with nothing written yet. */
 export function captured(): Captured {
-  const stream: Captured = {
-    text: "",
-    write: (text) => {
-      stream.text += text;
-      return true;
-    },
-  };
-  return stream;
+  return standIn(undefined);
+}
+
+/** A stream stand-in whose reader went away before the run: every write fails with `code`. */
+export function closed(code: string): Captured {
+  return standIn(writeError(code));
+}
+
+/**
+ * A stream stand-in whose reader went away before the run, whose failed writes report `code` to
+ * their callbacks and hold their `error` event until `emitHeld`.
+ */
+export function closedHeld(code: string): Captured {
+  return standIn(writeError(code), true);
 }
 
 /** A stream stand-in that claims to be a terminal, with nothing written yet. */

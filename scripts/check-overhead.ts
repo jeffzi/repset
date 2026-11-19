@@ -142,39 +142,6 @@ function isReport(value: unknown): value is Report {
 }
 
 /**
- * Builds the repset command line for one reading of `scenario`.
- *
- * @param scenario - The scenario to read.
- * @param outPath - Where the command writes its report.
- * @param env - The environment to start from.
- * @returns The arguments to run under the driver's own Node, and the command's environment:
- *   `REPSET_CALLS_PER_SAMPLE=1` for a one-call scenario, and the variable removed for a calibrated
- *   one.
- */
-function repsetCommand(
-  scenario: Scenario,
-  outPath: string,
-  env: NodeJS.ProcessEnv,
-): { readonly args: readonly string[]; readonly env: NodeJS.ProcessEnv } {
-  const { [CALLS_PER_SAMPLE]: _inherited, ...rest } = env;
-  return {
-    args: [
-      CLI,
-      BENCH_FILE,
-      "--runtime",
-      scenario.runtime,
-      "--filter",
-      `^overhead/${scenario.body}$`,
-      "--node-import",
-      "tsx",
-      "--out",
-      outPath,
-    ],
-    env: scenario.countMode === "one-call" ? { ...rest, [CALLS_PER_SAMPLE]: "1" } : rest,
-  };
-}
-
-/**
  * Checks a process's count against its scenario: fixed at 1 for a one-call scenario, calibrated
  * otherwise.
  *
@@ -305,14 +272,37 @@ function throwSpawnError(scenario: Scenario, error: Error | undefined): void {
   }
 }
 
+/**
+ * Runs the repset command once on `scenario` under the driver's own Node, with
+ * `REPSET_CALLS_PER_SAMPLE=1` for a one-call scenario and the variable removed for a calibrated one,
+ * and reads its report from a temporary directory it removes afterwards.
+ *
+ * @param scenario - The scenario to read.
+ * @returns The reading of the scenario's one result.
+ * @throws Error naming the scenario when the command cannot start or its run cannot be trusted
+ *   (see {@link repsetReading}).
+ * @throws The filesystem error from creating or removing the temporary directory.
+ */
 function readRepset(scenario: Scenario): RepsetReading {
   const dir = mkdtempSync(join(tmpdir(), "check-overhead-"));
   try {
     const outPath = join(dir, "report.json");
-    const command = repsetCommand(scenario, outPath, process.env);
-    const run = spawnSync(process.execPath, command.args, {
+    const { [CALLS_PER_SAMPLE]: _inherited, ...env } = process.env;
+    const args = [
+      CLI,
+      BENCH_FILE,
+      "--runtime",
+      scenario.runtime,
+      "--filter",
+      `^overhead/${scenario.body}$`,
+      "--node-import",
+      "tsx",
+      "--out",
+      outPath,
+    ];
+    const run = spawnSync(process.execPath, args, {
       cwd: ROOT,
-      env: command.env,
+      env: scenario.countMode === "one-call" ? { ...env, [CALLS_PER_SAMPLE]: "1" } : env,
       stdio: ["ignore", "ignore", "inherit"],
     });
     throwSpawnError(scenario, run.error);
@@ -370,14 +360,6 @@ function readBaseline(
   });
   throwSpawnError(scenario, run.error);
   return checkedBaselineMedian(scenario, run, run.stdout);
-}
-
-/** The readers that run `dist/cli.js` and the baseline child on `executables`. */
-function realReaders(executables: Executables): Readers {
-  return {
-    repset: readRepset,
-    baseline: (scenario, counts) => readBaseline(executables, scenario, counts),
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -574,5 +556,9 @@ export function runCheck(readers: Readers, print: (text: string) => void = conso
 }
 
 if (import.meta.main) {
-  process.exitCode = runCheck(realReaders(await findExecutables()));
+  const executables = await findExecutables();
+  process.exitCode = runCheck({
+    repset: readRepset,
+    baseline: (scenario, counts) => readBaseline(executables, scenario, counts),
+  });
 }

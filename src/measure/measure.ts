@@ -10,7 +10,7 @@
  * under Bun.
  */
 
-import { performanceNow, thrownMessage, timerResolutionMs } from "../utils.js";
+import { isInstance, thrownMessage, timerResolutionMs, valueAt } from "../utils.js";
 import { type GcDuringTiming, observeCollections, type TimingWindow } from "./collections.js";
 import { runningRuntime } from "./runtime.js";
 import {
@@ -130,8 +130,8 @@ export class MeasureError extends Error {
   readonly teardownError: MeasureError | null;
 
   /**
-   * Builds the error, its message the cause's own when the cause is an `Error`, its string form
-   * otherwise, or a placeholder for a value that has none.
+   * Builds the error, its message the string form of the cause's own when the cause is an `Error`,
+   * the cause's string form otherwise, or a placeholder for a value that has none.
    *
    * @param phase - Where the case failed.
    * @param cause - The value that was thrown, or the `Error` built for a failure of `measure`'s own;
@@ -151,6 +151,17 @@ interface BodySampling extends Sampling, TimedMinimums {}
 // ---------------------------------------------------------------------------
 // Measurement
 // ---------------------------------------------------------------------------
+
+/**
+ * The default clock.
+ *
+ * Called on `performance`, since an unbound `now` throws on Node.
+ *
+ * @returns The current high-resolution time, in milliseconds.
+ */
+function performanceNow(): number {
+  return performance.now();
+}
 
 /**
  * Measures a benchmark: the body, then an empty body in the benchmark's own lifecycle.
@@ -311,13 +322,13 @@ function failedIn(
   error: unknown,
   teardownError: MeasureError | null = null,
 ): MeasureError {
-  if (error instanceof MeasureError) {
+  if (isInstance(error, MeasureError)) {
     return teardownError === null
       ? error
       : new MeasureError(error.phase, error.cause, teardownError);
   }
   return new MeasureError(
-    error instanceof CalibrationError ? "calibration" : phase,
+    isInstance(error, CalibrationError) ? "calibration" : phase,
     error,
     teardownError,
   );
@@ -500,7 +511,7 @@ function measurePerCall<State>(
     timing.endMs = performance.now();
     return run;
   } catch (error) {
-    const phase = perCallPhase(error, inFlight.held, tearingDown);
+    const phase = perCallPhase(inFlight.held, tearingDown);
     // A state whose teardown threw is left alone rather than torn down a second time.
     const teardownError =
       holds(inFlight) && phase !== "teardown" ? tearDownCatching(teardown, inFlight.state) : null;
@@ -521,16 +532,14 @@ function holds<State>(inFlight: InFlight<State>): inFlight is { held: true; stat
 
 /**
  * Names the phase a per-call case failed in from the sampler's state when the error reached
- * `measure`.
+ * `measure`, for {@link failedIn} to fall back to: it maps the sampler's `CalibrationError` itself.
  *
- * @param error - The thrown value.
  * @param inFlight - Whether a state was built and not torn down.
  * @param tearingDown - Whether the case's teardown had started and not returned.
- * @returns `calibration` for the sampler's own refusal; otherwise `setup` with no state in flight,
- *   `teardown` while one was being torn down, and `fn` for the rest.
+ * @returns `setup` with no state in flight, `teardown` while one was being torn down, and `fn` for
+ *   the rest.
  */
-function perCallPhase(error: unknown, inFlight: boolean, tearingDown: boolean): Phase {
-  if (error instanceof CalibrationError) return "calibration";
+function perCallPhase(inFlight: boolean, tearingDown: boolean): Phase {
   if (!inFlight) return "setup";
   return tearingDown ? "teardown" : "fn";
 }
@@ -727,22 +736,6 @@ function sampleEmpty(options: EmptyOptions): EmptyResult {
 // ---------------------------------------------------------------------------
 
 /**
- * Reads one rank of the ascending per-call times.
- *
- * @param sorted - The per-call times, ascending.
- * @param rank - The zero-based rank to read.
- * @returns The time at that rank.
- * @throws RangeError when no time is stored at that rank, as when no span was stored at all.
- */
-function timeAt(sorted: ArrayLike<number>, rank: number): number {
-  const time = sorted[rank];
-  if (time === undefined) {
-    throw new RangeError(`no stored span at rank ${rank}: ${sorted.length} spans stored`);
-  }
-  return time;
-}
-
-/**
  * Reads quantile `q` of the ascending per-call times, linearly interpolated between the two
  * nearest ranks.
  *
@@ -754,8 +747,8 @@ function timeAt(sorted: ArrayLike<number>, rank: number): number {
 export function quantile(sorted: ArrayLike<number>, q: number): number {
   const position = (sorted.length - 1) * q;
   const lowerRank = Math.floor(position);
-  const lowTime = timeAt(sorted, lowerRank);
-  const highTime = timeAt(sorted, Math.ceil(position));
+  const lowTime = valueAt(sorted, lowerRank);
+  const highTime = valueAt(sorted, Math.ceil(position));
   return lowTime + (highTime - lowTime) * (position - lowerRank);
 }
 

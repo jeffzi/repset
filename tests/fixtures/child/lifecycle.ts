@@ -1,4 +1,5 @@
 import { bench } from "../../../src/child.js";
+import { trappedProxy, unreadableStackError } from "../../thrown-values.js";
 
 const CALLS = Symbol.for("repset.child-calls");
 
@@ -67,5 +68,20 @@ bench("fn-and-teardown-throw", {
   },
   teardown: () => {
     throw new Error("melon");
+  },
+});
+
+bench("fn-throws-unreadable-stack", {
+  setup: () => 0,
+  fn: () => {
+    throw unreadableStackError();
+  },
+});
+
+bench("fn-throws-trapped-proxy", {
+  setup: () => 0,
+  fn: () => {
+    // oxlint-disable-next-line typescript/only-throw-error -- a thrown value whose instanceof check throws is the input under test
+    throw trappedProxy();
   },
 });

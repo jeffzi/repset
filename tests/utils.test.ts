@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { describe as describeValue, thrownMessage, timerResolutionMs } from "../src/utils.js";
+import {
+  describe as describeValue,
+  isRecord,
+  thrownMessage,
+  timerResolutionMs,
+  valueAt,
+} from "../src/utils.js";
 
 const RESOLUTION = 0.125;
 
@@ -40,7 +46,7 @@ function scriptedClock(
 }
 
 describe("timerResolutionMs", () => {
-  describe("when most transitions span several multiples of the resolution and a run of them spans one", () => {
+  describe("when a run of single-resolution transitions falls inside the measured second pass, between coarser ones", () => {
     it("returns the single resolution", () => {
       const now = scriptedClock(
         (transition) =>
@@ -58,6 +64,16 @@ describe("timerResolutionMs", () => {
 });
 
 describe("the describe function", () => {
+  it.each([
+    { value: null, text: "null" },
+    { value: [1], text: "an array" },
+    { value: 5n, text: "5n" },
+  ])("names the value as $text", ({ value, text }) => {
+    const described = describeValue(value);
+
+    expect(described).toBe(text);
+  });
+
   describe("when given a function", () => {
     it("does not print its source", () => {
       const value = (): number => 1;
@@ -66,6 +82,18 @@ describe("the describe function", () => {
 
       expect(described).not.toContain(String(value));
     });
+  });
+});
+
+describe("isRecord", () => {
+  it.each([
+    { value: null, why: "null", expected: false },
+    { value: [1], why: "an array", expected: false },
+    { value: { apple: 1 }, why: "a plain object", expected: true },
+  ])("answers $expected for $why", ({ value, expected }) => {
+    const answer = isRecord(value);
+
+    expect(answer).toBe(expected);
   });
 });
 
@@ -92,5 +120,36 @@ describe("thrownMessage", () => {
 
       expect(message).not.toThrow();
     });
+  });
+
+  describe("when the value is an Error whose message is not a string", () => {
+    it.each([
+      { why: "a number", message: 42, expected: "42" },
+      {
+        why: "a value with no string form",
+        message: Object.create(null),
+        expected: "a value with no string form",
+      },
+    ])("returns the string form of a message that is $why", ({ message, expected }) => {
+      const error = Object.defineProperty(new Error("cherry"), "message", { value: message });
+
+      const read = thrownMessage(error);
+
+      expect(read).toBe(expected);
+    });
+  });
+});
+
+describe("valueAt", () => {
+  it("returns the value at an index that holds one", () => {
+    const value = valueAt([10, 20], 1);
+
+    expect(value).toBe(20);
+  });
+
+  it("throws a RangeError at an index past the values", () => {
+    const read = (): number => valueAt([10, 20], 2);
+
+    expect(read).toThrow(RangeError);
   });
 });

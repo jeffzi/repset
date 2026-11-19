@@ -9,31 +9,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Add color to the table, error lines, `--once` results and `--help` on a terminal, decided per
-  stream.
-- Add `--no-color` to turn color off on every stream.
-- Add a live progress line on a terminal stderr, counting the children of each phase.
-- Add examples and a link to the README to `--help`, and suggest the closest flag after an unknown
-  one.
+- Add `--no-color` to print without color on a terminal.
+- Show live progress on stderr when it is a terminal.
+- Add examples and a link to the README to `--help`.
+- Suggest the closest flag after an unknown one.
 - Add the version, the platform and a link to a prefilled GitHub issue to the output of a crash.
 
 ### Changed
 
-- Draw the table with column rules and separators, its rows flush with the runtime heading.
-- Take the last value of a flag given twice instead of rejecting it.
-- Print the version, not the help, when `--version` and `--help` are both given.
-- Fail a value flag given last with no value before printing `--help`.
-- Take a value that starts with `-` as a flag's value: `--filter --list` filters on `--list`.
-- Reword the messages of command-line errors.
+- Read flags as most command-line tools do: a repeated flag takes its last value, a flag's value may
+  start with `-`, and `--version` wins over `--help`.
 
 ### Fixed
 
 - Write the final report and exit 129 on `SIGHUP`, as on `SIGINT` and `SIGTERM`.
 - Name a bigint with its `n` suffix in error messages, so it no longer reads as a number.
-- Stop the run and exit 141 when stdout's reader goes away, such as `repset | head`, instead of
-  crashing with a stack, still writing the report file `--out` names.
-- Fail a benchmark that throws an unusual value, such as an error whose stack cannot be read, in its
-  own phase instead of as "it wrote no result".
+- Stop the run and exit 141 instead of crashing when stdout's reader closes early.
+- Report a benchmark that throws an unusual value, such as an error whose stack cannot be read, as
+  failing with that value's message.
 
 ## [0.1.0] - 2026-11-17
 

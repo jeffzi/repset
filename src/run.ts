@@ -1,267 +1,23 @@
 /**
- * A run: selecting the cases (finding the benchmark files, looking up the runtimes, and listing
- * each file's cases in a child), then starting one child per case and runtime to measure the case
- * or run it once.
+ * A run: one child per selected case and runtime, measuring the case or running it once; and the
+ * exact signed-rank statistics that judge a contest's pairs.
  */
-import { globSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { cpus as realCpus } from "node:os";
-import { basename, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { ChildError, ChildRequest } from "./child.js";
-import {
-  findRuntime as realFindRuntime,
-  type FoundRuntime,
-  type Outcome,
-  startChild as realStartChild,
-  type StartOptions,
-} from "./children.js";
+import { type FoundRuntime, type Outcome, startChild as realStartChild } from "./children.js";
 import type { Runtime } from "./measure/runtime.js";
-import {
-  ConfigError,
-  isFile,
-  type OptionsInput,
-  resolveOptions,
-  type ResolvedOptions,
-} from "./options.js";
+import { type OptionsInput, resolveOptions, type ResolvedOptions } from "./options.js";
 import type { FailedProcess, Machine, Report, ReportOptions, Result } from "./report.js";
-import { property } from "./utils.js";
-
-// ---------------------------------------------------------------------------
-// Case selection
-// ---------------------------------------------------------------------------
-
-export interface SelectedCase {
-  readonly id: string;
-  /** The benchmark file that registers the case, as an absolute path. */
-  readonly path: string;
-  /** The file as the report writes it: relative to the working directory, with `/` separators. */
-  readonly file: string;
-  readonly setupPerCall: boolean;
-}
-
-/** The runtimes and cases a run measures, or a stop that came during runtime discovery or listing. */
-export type Selection =
-  | {
-      readonly status: "selected";
-      readonly runtimes: readonly FoundRuntime[];
-      readonly cases: readonly SelectedCase[];
-    }
-  | { readonly status: "stopped" };
-
-export interface ChildFunctions {
-  readonly findRuntime: typeof realFindRuntime;
-  readonly startChild: typeof realStartChild;
-}
-
-/** {@link ChildFunctions} a caller may replace; each one it leaves out is the real function. */
-export type ChildFunctionOverrides = {
-  readonly [Name in keyof ChildFunctions]?: ChildFunctions[Name] | undefined;
-};
-
-export interface SelectInput extends ChildFunctionOverrides {
-  readonly options: ResolvedOptions;
-  /** The positional files, relative to `cwd`; when there are some, they replace `include`. */
-  readonly files: readonly string[];
-  readonly cwd: string;
-  /** Ends the selection as stopped when it fires during runtime discovery or listing. */
-  readonly signal?: AbortSignal | undefined;
-  /**
-   * Receives the number of benchmark files to list once every runtime is found, before the first
-   * listing child starts.
-   */
-  readonly onPlanned?: ((total: number) => void) | undefined;
-}
-
-/** A benchmark file whose listing child failed, with what the child left to print before it. */
-export class ListingError extends ConfigError {
-  override readonly name = "ListingError";
-  readonly failureStack: string | null;
-  /** The last 16 KiB of the listing child's stdout and stderr. */
-  readonly output: string;
-
-  /**
-   * @param file - The benchmark file, as the report writes it.
-   * @param error - The listing child's failure.
-   * @param output - The listing child's output tail.
-   */
-  constructor(file: string, error: ChildError, output: string) {
-    super(`cannot list the cases of ${file}: phase ${error.phase}: ${error.message}`);
-    this.failureStack = error.stack;
-    this.output = output;
-  }
-}
-
-/**
- * Finds the files a glob pattern matches, never descending into `node_modules`.
- *
- * @param pattern - The glob pattern.
- * @param base - The directory the pattern is relative to.
- * @returns The files, as absolute paths sorted by path.
- * @throws {@link ConfigError} When a match exists but cannot be read.
- */
-function globFiles(pattern: string, base: string): string[] {
-  const matches = globSync(pattern, {
-    cwd: base,
-    exclude: (path) => basename(path) === "node_modules",
-  })
-    .map((match) => resolve(base, match))
-    .filter((path) => isFile(path));
-  // By the slash-separated path, by code unit, so the order is the same on every OS.
-  return matches.toSorted((a, b) => {
-    const [left, right] = [a.replaceAll(sep, "/"), b.replaceAll(sep, "/")];
-    return left < right ? -1 : Number(left > right);
-  });
-}
-
-/**
- * Finds a positional argument's files.
- *
- * @param argument - The argument: a file, or else a glob.
- * @param cwd - The directory the argument is relative to.
- * @returns The file the argument names, or else the files it matches as a glob.
- * @throws {@link ConfigError} When the argument names no file and matches none as a glob, or a
- *   path it names or matches cannot be read.
- */
-function argumentFiles(argument: string, cwd: string): string[] {
-  const named = resolve(cwd, argument);
-  if (isFile(named)) return [named];
-  const matched = globFiles(argument, cwd);
-  if (matched.length === 0) throw new ConfigError(`no benchmark file matches ${argument}`);
-  return matched;
-}
-
-/**
- * Finds the benchmark files of a selection.
- *
- * @param options - The resolved options, whose `include` patterns apply when `files` is empty.
- * @param files - The positional arguments, relative to `cwd`.
- * @param cwd - The directory the arguments are relative to.
- * @returns The files in the order their patterns are written, each one once.
- * @throws {@link ConfigError} When an argument matches no file, no `include` pattern matches one,
- *   or a path cannot be read.
- */
-function benchmarkFiles(options: ResolvedOptions, files: readonly string[], cwd: string): string[] {
-  const perPattern =
-    files.length > 0
-      ? files.map((argument) => argumentFiles(argument, cwd))
-      : options.include.map((pattern) => globFiles(pattern, options.includeBase));
-  const found = [...new Set(perPattern.flat())];
-  if (found.length === 0) {
-    throw new ConfigError(`no benchmark file matches include ${options.include.join(", ")}`);
-  }
-  return found;
-}
-
-/**
- * Rejects a listing in which two cases share an id, whether they register it from one file or
- * several.
- *
- * @param cases - The listed cases.
- * @throws {@link ConfigError} Naming the first id two cases share and the files that register it.
- */
-function checkUniqueIds(cases: readonly SelectedCase[]): void {
-  const seen = new Set<string>();
-  const repeated = cases.find(({ id }) => {
-    if (seen.has(id)) return true;
-    seen.add(id);
-    return false;
-  });
-  if (repeated === undefined) return;
-  const files = new Set(cases.filter(({ id }) => id === repeated.id).map(({ file }) => file));
-  throw new ConfigError(
-    `more than one case has the id ${repeated.id}, in ${[...files].join(", ")}`,
-  );
-}
-
-/**
- * Collects what starts a child from the resolved options; `nodeImport` is `undefined` when the
- * options have none.
- *
- * @param options - The resolved options.
- * @param signal - The caller's stop signal.
- * @returns The options' timeout and resolved `nodeImport`, and the signal.
- */
-function startOptions(options: ResolvedOptions, signal: AbortSignal | undefined): StartOptions {
-  return { timeout: options.timeout, nodeImport: options.nodeImport?.resolved, signal };
-}
-
-/** `path` relative to `cwd` with `/` separators, as the report and the progress lines show it. */
-export function shownPath(cwd: string, path: string): string {
-  return relative(cwd, path).replaceAll(sep, "/");
-}
-
-/**
- * Lists the cases of `files`, one listing child per file on `runtime`, in file order.
- *
- * @param files - The benchmark files, as absolute paths.
- * @param runtime - The runtime the listing children run on.
- * @param input - The options, the working directory, the stop signal, the plan callback and the
- *   child starter.
- * @returns The cases in file order, or `undefined` when the stop signal fired.
- * @throws {@link ListingError} When a listing child fails.
- * @throws {@link Error} What `onPlanned` or starting a listing child throws.
- */
-async function listFiles(
-  files: readonly string[],
-  runtime: FoundRuntime,
-  input: SelectInput,
-): Promise<SelectedCase[] | undefined> {
-  const { options, cwd, signal, startChild = realStartChild } = input;
-  const childOptions = startOptions(options, signal);
-  input.onPlanned?.(files.length);
-  const cases: SelectedCase[] = [];
-  for (const path of files) {
-    if (signal?.aborted === true) return undefined;
-    const file = shownPath(cwd, path);
-    const outcome = await startChild(runtime, { mode: "list", file: path }, childOptions);
-    if (outcome.status === "stopped") return undefined;
-    if (outcome.status === "failed") throw new ListingError(file, outcome.error, outcome.output);
-    for (const { id, setupPerCall } of outcome.result.cases) {
-      cases.push({ id, path, file, setupPerCall });
-    }
-  }
-  return cases;
-}
-
-/**
- * Selects the cases a run measures. Every runtime is looked up before any listing child starts.
- *
- * @param input - The options, the positional files, the working directory, the stop signal, the
- *   plan callback, and the functions that look a runtime up and start a child, the real ones by
- *   default.
- * @returns The runtimes with their versions and the selected cases, or a stop when the signal fired
- *   during runtime discovery or listing.
- * @throws {@link ConfigError} When an argument matches no file, a runtime cannot be found, a
- *   listing child fails (a {@link ListingError}), two cases share an id, or no case is selected.
- * @throws {@link Error} What `onPlanned` or starting a listing child throws, and the plain `Error`
- *   that finding the runtime this process runs on throws when `process.versions` holds no version
- *   for it.
- */
-export async function selectCases(input: SelectInput): Promise<Selection> {
-  const { options, files, cwd, signal, findRuntime = realFindRuntime } = input;
-  const found = benchmarkFiles(options, files, cwd);
-  const lookup = { timeout: options.timeout, signal };
-  const looked = await Promise.all(
-    options.runtimes.map(async (runtime) => findRuntime(runtime, lookup)),
-  );
-  const runtimes = looked.filter((runtime) => runtime !== undefined);
-  if (runtimes.length < looked.length) return { status: "stopped" };
-  const [first] = runtimes;
-  if (first === undefined) throw new ConfigError("runtimes must name at least one runtime");
-
-  const listed = await listFiles(found, first, input);
-  if (listed === undefined) return { status: "stopped" };
-  if (listed.length === 0) throw new ConfigError("no benchmark file registers a case");
-  checkUniqueIds(listed);
-
-  const { filter } = options;
-  const cases =
-    filter === undefined ? listed : listed.filter((selected) => filter.test(selected.id));
-  if (cases.length === 0) throw new ConfigError(`no case id matches the filter ${String(filter)}`);
-  return { status: "selected", runtimes, cases };
-}
+import {
+  type ChildFunctionOverrides,
+  type SelectedCase,
+  selectCases,
+  startOptions,
+} from "./select.js";
+import { property, valueAt } from "./utils.js";
 
 // ---------------------------------------------------------------------------
 // Run inputs and results
@@ -363,7 +119,7 @@ export async function packageVersion(path: string = PACKAGE_JSON): Promise<strin
  *   start once the selection passed, before the first child of a case starts.
  * @returns The resolved options, and whether the stop signal ended the run before every child ran:
  *   during listing, before the next child, or by stopping the running one.
- * @throws {@link ConfigError} When the options are invalid or the selection fails, before any child
+ * @throws `ConfigError` When the options are invalid or the selection fails, before any child
  *   but the listing children starts.
  * @throws {@link Error} What the plan callback, `passed` or `finished` throws, or what starting a
  *   child throws.
@@ -487,7 +243,7 @@ function reportOptions(input: OnceInput, options: ResolvedOptions): ReportOption
  * @throws {@link Error} The error reading the package's `package.json`, before any child starts;
  *   what `onSelected` or `onPlanned` throws, before the first child of its phase starts; what
  *   `onResult` throws, once a child has finished; or what starting a child throws.
- * @throws {@link ConfigError} When the options are invalid or the selection fails, before any
+ * @throws `ConfigError` When the options are invalid or the selection fails, before any
  *   measuring child starts.
  */
 export async function run(input: RunInput): Promise<Report> {
@@ -537,7 +293,7 @@ export async function run(input: RunInput): Promise<Report> {
  *   and the functions that look a runtime up and start a child, the real ones by default.
  * @returns Per case and runtime, that it ran or how it failed, with `interrupted` set when the stop
  *   signal ended it.
- * @throws {@link ConfigError} When the options are invalid or the selection fails, before any once
+ * @throws `ConfigError` When the options are invalid or the selection fails, before any once
  *   child starts.
  * @throws {@link Error} What `onPlanned` throws, before the first child of its phase starts, or
  *   what starting a child throws.
@@ -559,4 +315,160 @@ export async function runOnce(input: OnceInput): Promise<OnceRun> {
     (_options, total) => input.onPlanned?.(total),
   );
   return { interrupted, results };
+}
+
+// ---------------------------------------------------------------------------
+// Signed-rank statistics
+// ---------------------------------------------------------------------------
+
+/** Past this many weights, a null count could exceed 2^53 and stop being exact in a double. */
+const EXACT_COUNTS = 53;
+
+/**
+ * The null distribution of the sum of the positive weights when each weight's sign is a fair coin
+ * flip. Up to 53 weights `mass` holds integer counts of sign assignments over a `total` of 2^n,
+ * exact in a double; past that it holds probabilities over a `total` of 1.
+ *
+ * @param weights - Nonnegative integer weights.
+ * @returns `mass[t]` over `total` is the probability that the positive weights sum to `t`.
+ */
+function nullDistribution(weights: readonly number[]): { mass: number[]; total: number } {
+  const exact = weights.length <= EXACT_COUNTS;
+  let mass = [1];
+  for (const weight of weights) {
+    const share = mass.map((count) => (exact ? count : count / 2));
+    const next = [...share, ...Array.from({ length: weight }, () => 0)];
+    for (const [sum, count] of share.entries())
+      next[sum + weight] = valueAt(next, sum + weight) + count;
+    mass = next;
+  }
+  return { mass, total: exact ? 2 ** weights.length : 1 };
+}
+
+/**
+ * Ranks magnitudes from 1, equal magnitudes sharing their average rank, then doubles every rank so
+ * an average of two ranks stays an integer.
+ *
+ * @param magnitudes - The magnitudes to rank.
+ * @returns Each magnitude's doubled rank, in the input's order.
+ */
+function doubledRanks(magnitudes: readonly number[]): number[] {
+  const order = [...magnitudes.keys()].toSorted(
+    (left, right) => valueAt(magnitudes, left) - valueAt(magnitudes, right),
+  );
+  const ranks = magnitudes.map(() => 0);
+  let start = 0;
+  while (start < order.length) {
+    const magnitude = valueAt(magnitudes, valueAt(order, start));
+    let end = start;
+    while (end + 1 < order.length && valueAt(magnitudes, valueAt(order, end + 1)) === magnitude) {
+      end += 1;
+    }
+    for (let position = start; position <= end; position += 1) {
+      ranks[valueAt(order, position)] = start + end + 2;
+    }
+    start = end + 1;
+  }
+  return ranks;
+}
+
+/**
+ * The two-sided exact signed-rank p value. Zero differences are dropped, and equal magnitudes
+ * share their average rank; the null distribution is the exact one of those ranks.
+ *
+ * @param differences - The paired differences.
+ * @returns The p value, 1 when no difference is nonzero.
+ */
+export function signedRankP(differences: readonly number[]): number {
+  const nonzero = differences.filter((difference) => difference !== 0);
+  if (nonzero.length === 0) return 1;
+  const ranks = doubledRanks(nonzero.map((difference) => Math.abs(difference)));
+  const observed = ranks.reduce(
+    (sum, rank, index) => (valueAt(nonzero, index) > 0 ? sum + rank : sum),
+    0,
+  );
+  const { mass, total } = nullDistribution(ranks);
+  let lower = 0;
+  let upper = 0;
+  for (const [sum, count] of mass.entries()) {
+    if (sum <= observed) lower += count;
+    if (sum >= observed) upper += count;
+  }
+  return Math.min(1, (2 * Math.min(lower, upper)) / total);
+}
+
+/** The Walsh averages `(d_i + d_j) / 2`, `i ≤ j`, of `differences`, ascending. */
+function walshAverages(differences: readonly number[]): number[] {
+  const averages: number[] = [];
+  for (const [index, left] of differences.entries()) {
+    for (const right of differences.slice(index)) averages.push((left + right) / 2);
+  }
+  return averages.toSorted((left, right) => left - right);
+}
+
+/**
+ * The Hodges–Lehmann estimate: the median of the Walsh averages of every difference, zeros
+ * included.
+ *
+ * @param differences - The paired differences.
+ * @returns The estimate.
+ * @throws RangeError When `differences` is empty.
+ */
+export function hodgesLehmann(differences: readonly number[]): number {
+  const averages = walshAverages(differences);
+  const middle = averages.length - 1;
+  return (valueAt(averages, Math.floor(middle / 2)) + valueAt(averages, Math.ceil(middle / 2))) / 2;
+}
+
+/**
+ * The exact confidence interval of the Hodges–Lehmann estimate: the Walsh averages of rank `C` and
+ * `M + 1 − C` among the `M` of every difference, zeros included, where `C` is the largest count
+ * with `2 · P(T ≤ C − 1) ≤ 1 − level` under the untied null of the signed-rank statistic `T` for
+ * that many differences. Tied magnitudes keep the untied null.
+ *
+ * @param differences - The paired differences.
+ * @param level - The confidence level, as 0.95 for 95%.
+ * @returns The interval's low and high ends.
+ * @throws RangeError When no Walsh average reaches `level`: too few differences for it.
+ */
+export function signedRankInterval(
+  differences: readonly number[],
+  level: number,
+): readonly [number, number] {
+  const { mass, total } = nullDistribution(Array.from(differences, (_, index) => index + 1));
+  let critical = 0;
+  let cumulative = 0;
+  for (const count of mass) {
+    cumulative += count;
+    if ((2 * cumulative) / total > 1 - level) break;
+    critical += 1;
+  }
+  if (critical === 0) {
+    throw new RangeError(
+      `no interval reaches level ${level} with ${differences.length} differences`,
+    );
+  }
+  const averages = walshAverages(differences);
+  return [valueAt(averages, critical - 1), valueAt(averages, averages.length - critical)];
+}
+
+/**
+ * Holm's adjusted p values: over the raw p values in ascending order, each one times the count of
+ * p values from it to the largest, raised to the largest adjusted value before it and capped at 1.
+ *
+ * @param pValues - The raw p values of one family.
+ * @returns The adjusted p values, in the input's order.
+ */
+export function holm(pValues: readonly number[]): number[] {
+  const ordered = [...pValues.keys()].toSorted(
+    (left, right) => valueAt(pValues, left) - valueAt(pValues, right),
+  );
+  const adjusted = pValues.map(() => 1);
+  let running = 0;
+  for (const [step, index] of ordered.entries()) {
+    const scaled = Math.min(1, (pValues.length - step) * valueAt(pValues, index));
+    running = Math.max(running, scaled);
+    adjusted[index] = running;
+  }
+  return adjusted;
 }

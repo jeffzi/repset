@@ -21,18 +21,14 @@ import {
 import { ConfigError, failedWith, resolveOptions } from "./options.js";
 import { progressOn, type Progress } from "./progress.js";
 import type { Report } from "./report.js";
+import { type OnceInput, packageVersion, run, type RunInput, runOnce } from "./run.js";
 import {
   type ChildFunctionOverrides,
   type ChildFunctions,
   ListingError,
-  type OnceInput,
-  packageVersion,
-  run,
-  type RunInput,
-  runOnce,
   selectCases,
   shownPath,
-} from "./run.js";
+} from "./select.js";
 import { failureLines, formatTable, paint } from "./table.js";
 import { thrownMessage } from "./utils.js";
 

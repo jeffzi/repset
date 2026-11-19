@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import type { FoundRuntime, LookupOptions } from "../src/children.js";
 import { ConfigError, type ResolvedOptions } from "../src/options.js";
-import { selectCases, type SelectedCase, type Selection } from "../src/run.js";
+import { selectCases, type SelectedCase, type Selection } from "../src/select.js";
 import { expectConfigError } from "./config-error.js";
 import {
   failedOutcome,

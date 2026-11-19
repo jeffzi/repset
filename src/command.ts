@@ -47,7 +47,10 @@ export interface Output {
   write(text: string, done?: (error?: Error | null) => void): unknown;
   /** Whether the stream is a terminal, which shows color unless the environment turns it off. */
   readonly isTTY?: boolean | undefined;
-  /** The bits per color the terminal shows; read from the environment when absent. */
+  /**
+   * The bits per color the terminal shows, which Node's and Bun's terminals lower to one bit under
+   * `NO_COLOR` or a dumb `TERM`; a terminal without it shows color.
+   */
   getColorDepth?(): number;
   /** The terminal's width in columns, which the live progress line is cut to; uncut when absent. */
   readonly columns?: number | undefined;
@@ -134,26 +137,22 @@ interface Context extends ChildFunctions {
 // Color and errors
 // ---------------------------------------------------------------------------
 
-/** The color depth of a terminal that reports none: one bit under `NO_COLOR` or a dumb `TERM`. */
-function environmentColorDepth(): number {
-  const noColor = process.env["NO_COLOR"];
-  const colorOff = (noColor !== undefined && noColor !== "") || process.env["TERM"] === "dumb";
-  return colorOff ? 1 : 4;
-}
-
 /**
  * Whether `output` shows color by `styleText`'s rules: `FORCE_COLOR` decides when set, otherwise a
- * terminal of more than one bit per color does. `styleText` judges only a real stream, so it judges
- * one that reports what `output` does.
+ * terminal of more than one bit per color does, its color depth already applying `NO_COLOR` and a
+ * dumb `TERM`. `styleText` judges only a real stream, so it judges one that reports what `output`
+ * does.
  *
  * @param output - The stream the command prints to.
  * @returns Whether text styled for `output` keeps its escape codes.
  */
 function showsColor(output: Output): boolean {
-  const stream = Object.assign(new Writable(), {
-    isTTY: output.isTTY === true,
-    getColorDepth: (): number => output.getColorDepth?.() ?? environmentColorDepth(),
-  });
+  const getColorDepth = output.getColorDepth?.bind(output);
+  const stream = Object.assign(
+    new Writable(),
+    { isTTY: output.isTTY === true },
+    getColorDepth === undefined ? {} : { getColorDepth },
+  );
   return styleText("red", "x", { stream }) !== "x";
 }
 

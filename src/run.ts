@@ -2,6 +2,7 @@
  * A run: the results of each case's children, the judged entry of each contest, and the report
  * that holds them.
  */
+import { randomInt } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { cpus as realCpus } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -22,14 +23,7 @@ import type {
   Result,
   ResultBase,
 } from "./report.js";
-import {
-  ALPHA,
-  drawRandomSeed,
-  type OnceInput,
-  pairsOf,
-  type StartHandlers,
-  startEach,
-} from "./schedule.js";
+import { ALPHA, type OnceInput, pairsOf, type StartHandlers, startEach } from "./schedule.js";
 import type { SelectedCase } from "./select.js";
 import { hodgesLehmann, holm, signedRankInterval, signedRankP } from "./signed-rank.js";
 import { property, quantile, valueAt } from "./utils.js";
@@ -424,6 +418,11 @@ function reportOptions(
     nodeImport: options.nodeImport?.written ?? null,
     rawSamples: false,
   };
+}
+
+/** A random 32-bit seed for the round orders. */
+function drawRandomSeed(): number {
+  return randomInt(2 ** 32);
 }
 
 /**

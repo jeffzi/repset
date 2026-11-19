@@ -140,9 +140,7 @@ function alignRow(
   align: readonly Align[],
 ): string {
   return row
-    .map((cell, column) => {
-      return padTo(cell, widths[column] ?? 0, align[column] ?? "right");
-    })
+    .map((cell, column) => padTo(cell, widths[column] ?? 0, align[column] ?? "right"))
     .join(COLUMN_SEPARATOR);
 }
 

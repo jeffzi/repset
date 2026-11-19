@@ -2,8 +2,6 @@
  * Starting a run's children: the selection, then one child per case and runtime, and a contest's
  * contenders in rounds of one child each, in a seeded random order per round.
  */
-import { randomInt } from "node:crypto";
-
 import type { ChildRequest } from "./child.js";
 import {
   type FoundRuntime,
@@ -70,11 +68,6 @@ interface GroupStart<R extends ChildRequest> {
   readonly childOptions: StartOptions;
   /** Draws the numbers that order each round of a contest. */
   readonly random: () => number;
-}
-
-/** A random 32-bit seed for the round orders. */
-export function drawRandomSeed(): number {
-  return randomInt(2 ** 32);
 }
 
 /** Mulberry32: numbers uniform in [0, 1), the same sequence for the same 32-bit `seed`. */

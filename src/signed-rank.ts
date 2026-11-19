@@ -1,29 +1,25 @@
 /** The exact signed-rank test, its Hodges–Lehmann estimate and interval, and Holm's correction. */
 import { valueAt } from "./utils.js";
 
-/** Past this many weights, a null count could exceed 2^53 and stop being exact in a double. */
-const EXACT_COUNTS = 53;
-
 /**
  * The null distribution of the sum of the positive weights when each weight's sign is a fair coin
- * flip.
+ * flip. Each weight halves the probabilities so far, and halving a double is exact, so the
+ * probabilities are the exact counts of sign assignments over 2^n for as many weights as a double
+ * holds those counts exactly, and the sum cannot overflow at any count.
  *
  * @param weights - Nonnegative integer weights.
- * @returns `mass[t]` over `total` is the probability that the positive weights sum to `t`. Up to
- *   {@link EXACT_COUNTS} weights, `mass` holds integer counts of sign assignments over a `total` of
- *   2^n, exact in a double; past that it holds probabilities over a `total` of 1.
+ * @returns `mass[t]`, the probability that the positive weights sum to `t`.
  */
-function nullDistribution(weights: readonly number[]): { mass: number[]; total: number } {
-  const exact = weights.length <= EXACT_COUNTS;
+function nullDistribution(weights: readonly number[]): number[] {
   let mass = [1];
   for (const weight of weights) {
-    const share = mass.map((count) => (exact ? count : count / 2));
+    const share = mass.map((probability) => probability / 2);
     const next = [...share, ...Array.from({ length: weight }, () => 0)];
-    for (const [sum, count] of share.entries())
-      next[sum + weight] = valueAt(next, sum + weight) + count;
+    for (const [sum, probability] of share.entries())
+      next[sum + weight] = valueAt(next, sum + weight) + probability;
     mass = next;
   }
-  return { mass, total: exact ? 2 ** weights.length : 1 };
+  return mass;
 }
 
 /**
@@ -68,14 +64,13 @@ export function signedRankP(differences: readonly number[]): number {
     (sum, rank, index) => (valueAt(nonzero, index) > 0 ? sum + rank : sum),
     0,
   );
-  const { mass, total } = nullDistribution(ranks);
   let lower = 0;
   let upper = 0;
-  for (const [sum, count] of mass.entries()) {
-    if (sum <= observed) lower += count;
-    if (sum >= observed) upper += count;
+  for (const [sum, probability] of nullDistribution(ranks).entries()) {
+    if (sum <= observed) lower += probability;
+    if (sum >= observed) upper += probability;
   }
-  return Math.min(1, (2 * Math.min(lower, upper)) / total);
+  return Math.min(1, 2 * Math.min(lower, upper));
 }
 
 /** The Walsh averages `(d_i + d_j) / 2`, `i ≤ j`, of `differences`, ascending. */
@@ -116,12 +111,11 @@ export function signedRankInterval(
   differences: readonly number[],
   level: number,
 ): readonly [number, number] {
-  const { mass, total } = nullDistribution(Array.from(differences, (_, index) => index + 1));
   let critical = 0;
   let cumulative = 0;
-  for (const count of mass) {
-    cumulative += count;
-    if ((2 * cumulative) / total > 1 - level) break;
+  for (const probability of nullDistribution(Array.from(differences, (_, index) => index + 1))) {
+    cumulative += probability;
+    if (2 * cumulative > 1 - level) break;
     critical += 1;
   }
   if (critical === 0) {

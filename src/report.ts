@@ -61,8 +61,6 @@ export interface FailedProcess {
 
 /** What every result holds, whether its case was measured or failed. */
 export interface ResultBase extends Pick<ListedCase, "id" | "name" | "contender" | "setupPerCall"> {
-  /** The contender's key in a contest, or `null` for a plain benchmark. */
-  readonly contender: string | null;
   readonly params: Readonly<Record<string, never>>;
   /** The benchmark file, relative to the working directory, with `/` separators. */
   readonly file: string;

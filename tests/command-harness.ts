@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { mkdirSync, rmSync } from "node:fs";
 import { basename, join } from "node:path";
+import { WriteStream } from "node:tty";
 import { stripVTControlCharacters } from "node:util";
 
 import { expect, vi } from "vitest";
@@ -122,9 +123,12 @@ export function closedHeld(code: string): Captured {
   return standIn(writeError(code), true);
 }
 
-/** A stream stand-in that claims to be a terminal, with nothing written yet. */
+/** A stream stand-in that claims to be a terminal, reporting its color depth as a real one does. */
 export function terminal(): Captured {
-  return Object.assign(captured(), { isTTY: true as const });
+  return Object.assign(captured(), {
+    isTTY: true as const,
+    getColorDepth: (): number => WriteStream.prototype.getColorDepth.call(undefined, process.env),
+  });
 }
 
 /** Clears the variables a shell may set that change the command's runs or color. */

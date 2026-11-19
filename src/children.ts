@@ -474,14 +474,13 @@ function outcomeOf<M extends Mode>(
   return noResult(`${howItEnded("the child", ending)}: ${read}`, output);
 }
 
-/** A failure in phase `child`, which has no stack. */
-export function childFailure(message: string): ChildError {
-  return { phase: "child", message, stack: null, teardownError: null };
-}
-
-/** An outcome that failed in phase `child`, with the child's output tail. */
+/** An outcome that failed in phase `child`, which has no stack, with the child's output tail. */
 function noResult(message: string, output: string): ChildFailed {
-  return { status: "failed", error: childFailure(message), output };
+  return {
+    status: "failed",
+    error: { phase: "child", message, stack: null, teardownError: null },
+    output,
+  };
 }
 
 /**

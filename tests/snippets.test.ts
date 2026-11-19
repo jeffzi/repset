@@ -17,7 +17,7 @@ describe("the README's snippet files", () => {
   describe.each(runtimesHere())("on $runtime", ({ runtime, here }) => {
     describe.runIf(here)("when each runs alone", () => {
       it.each(SNIPPET_FILES)(
-        "runs %s once, registering a case and every case ok",
+        "runs %s once with every case ok",
         { timeout: SPAWN_TIMEOUT_MS },
         async (snippet) => {
           const { code, stderr } = await spawnCommand(SNIPPETS, [
@@ -29,7 +29,8 @@ describe("the README's snippet files", () => {
             snippet,
           ]);
 
-          expect({ code, stderr }).toStrictEqual({ code: 0, stderr: expect.any(String) });
+          // oxlint-disable-next-line vitest/valid-expect -- Vitest takes a failure message as expect's second argument
+          expect(code, stderr).toBe(0);
         },
       );
     });

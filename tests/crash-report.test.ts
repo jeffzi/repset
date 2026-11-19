@@ -25,14 +25,17 @@ describe("crashReport", () => {
 
   describe("when the version was read", () => {
     const error = new Error("kiwi & banana? #1 100%");
-
-    const text = crashReport(error, { version: "1.2.3", os: OS, runtime: RUNTIME });
+    const platform = { version: "1.2.3", os: OS, runtime: RUNTIME };
 
     it("prints the stack first", () => {
+      const text = crashReport(error, platform);
+
       expect(text.startsWith(error.stack ?? "")).toBe(true);
     });
 
     it("names the version and platform on its last line", () => {
+      const text = crashReport(error, platform);
+
       expect(["1.2.3", OS, RUNTIME].map((word) => readLine(text).includes(word))).toStrictEqual([
         true,
         true,
@@ -41,6 +44,8 @@ describe("crashReport", () => {
     });
 
     it("links an issue prefilled with the version, platform and message", () => {
+      const text = crashReport(error, platform);
+
       const body = issueBody(text) ?? "";
 
       expect(

@@ -32,7 +32,7 @@ function benchFile(name: string): string {
   return fileURLToPath(new URL(`fixtures/child/${name}`, import.meta.url));
 }
 
-/** How long after a lookup starts its stop signal fires. */
+/** How long after a lookup or a child starts its stop signal fires. */
 const STOP_AFTER_MS = 300;
 
 /** The `timeout` of a child that must be killed; the hanging fixtures end by themselves after 5 s. */
@@ -442,7 +442,10 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
 
       expect(outcome).toMatchObject({
         ...NO_RESULT,
-        error: { ...NO_RESULT.error, message: expect.stringMatching(/\b1000\b/) },
+        error: {
+          ...NO_RESULT.error,
+          message: expect.stringMatching(new RegExp(`\\b${String(SHORT_TIMEOUT_MS)}\\b`, "u")),
+        },
       });
     });
 
@@ -461,14 +464,14 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
       const controller = new AbortController();
       setTimeout(() => {
         controller.abort();
-      }, 300);
+      }, STOP_AFTER_MS);
 
       const [outcome, elapsed] = await timed(async () =>
         startFixture("hang.ts", ONCE, { signal: controller.signal }),
       );
 
       expect(outcome).toStrictEqual({ status: "stopped", output: "" });
-      expect(elapsed).toBeLessThan(300 + RETURN_MARGIN_MS);
+      expect(elapsed).toBeLessThan(STOP_AFTER_MS + RETURN_MARGIN_MS);
     });
 
     it("ends as stopped before its timeout when the signal fired before the start", async () => {

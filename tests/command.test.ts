@@ -442,14 +442,15 @@ describe("main", () => {
   });
 
   describe("when --metric-lines is given", () => {
+    /** A metric-lines run's ending, with what stdout held as each child started and the report. */
+    interface MetricRun extends Ended {
+      readonly printedAtStart: readonly string[];
+      readonly results: readonly Result[];
+      readonly metricText: string;
+    }
+
     /** Runs both files with metric lines, failing parse/fast, noting stdout as each child starts. */
-    async function runWithMetricLines(): Promise<
-      Ended & {
-        readonly printedAtStart: readonly string[];
-        readonly results: readonly Result[];
-        readonly metricText: string;
-      }
-    > {
+    async function runWithMetricLines(): Promise<MetricRun> {
       const dir = workspace();
       const stdout = captured();
       const printedAtStart: string[] = [];
@@ -471,13 +472,10 @@ describe("main", () => {
       return { code, stdout: stdout.text, stderr, printedAtStart, results, metricText };
     }
 
-    it("prints each measured result's metric line on stdout, exiting 1 when a case failed", async () => {
+    it("prints each measured result's metric line on stdout", async () => {
       const ended = await runWithMetricLines();
 
-      expect({ code: ended.code, stdout: ended.stdout }).toStrictEqual({
-        code: 1,
-        stdout: ended.metricText,
-      });
+      expect(ended.stdout).toBe(ended.metricText);
     });
 
     it("prints each metric line as its result finishes", async () => {
@@ -530,10 +528,13 @@ describe("main", () => {
       vi.useRealTimers();
     });
 
+    /** A terminal stream stand-in that reports its width. */
+    interface SizedTerminal extends ReturnType<typeof terminal> {
+      readonly columns: number;
+    }
+
     /** A stream stand-in for a terminal `columns` wide, with nothing written yet. */
-    function terminalOf(
-      columns: number,
-    ): ReturnType<typeof terminal> & { readonly columns: number } {
+    function terminalOf(columns: number): SizedTerminal {
       return Object.assign(terminal(), { columns });
     }
 

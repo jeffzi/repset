@@ -128,7 +128,7 @@ describe("selectCases", () => {
   });
 
   describe("when no positional file is given", () => {
-    it("matches the include globs against includeBase, ** and brace sets included, sorted by path", async () => {
+    it("matches the include globs against includeBase, skipping node_modules, sorted by slash-separated path", async () => {
       const selection = await select({ cwd: TESTS });
 
       expect(pathsOf(selection)).toStrictEqual([
@@ -245,7 +245,7 @@ describe("selectCases", () => {
   });
 
   describe("with a filter", () => {
-    it("keeps only the cases whose id it matches anywhere, in their order", async () => {
+    it("keeps every case whose id it matches anywhere, in listing order", async () => {
       const startChild = listing({ "zeta.bench.ts": ["apple pie", "banana", "pineapple"] });
 
       const selection = await select({

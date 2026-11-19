@@ -40,7 +40,7 @@ function scriptedClock(
 }
 
 describe("timerResolutionMs", () => {
-  describe("when most transitions span several multiples of the resolution and a run of them spans one", () => {
+  describe("when a run of single-resolution transitions falls inside the measured second pass, between coarser ones", () => {
     it("returns the single resolution", () => {
       const now = scriptedClock(
         (transition) =>

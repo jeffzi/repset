@@ -99,10 +99,10 @@ export interface Ended {
   readonly stderr: string;
 }
 
-export type CommandIo = StrictOmit<Partial<Io>, "stdout" | "stderr"> & {
+export interface CommandIo extends StrictOmit<Partial<Io>, "stdout" | "stderr"> {
   readonly stdout?: Captured;
   readonly stderr?: Captured;
-};
+}
 
 /** Runs the command in `cwd` with the fake lookup, a measuring starter and a silent signal source. */
 export async function command(

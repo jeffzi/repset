@@ -149,11 +149,11 @@ describe("formatTable", () => {
     });
   });
 
-  describe("when formatting a time", () => {
+  describe("when a time reaches the top of its unit", () => {
     it.each([
-      { ns: 999.7, text: "1.00 µs" },
-      { ns: 1_234_500_000_000, text: "1230 s" },
-    ])("prints $ns ns as $text", ({ ns, text }) => {
+      { ns: 999.7, text: "1.00 µs", why: "rounds up to the next unit" },
+      { ns: 1_234_500_000_000, text: "1230 s", why: "stays in seconds without exponent form" },
+    ])("prints $ns ns as $text: $why", ({ ns, text }) => {
       const row = rowTexts([measured("apple", "node", flatStats(ns))], "apple");
 
       expect(row[1]).toBe(text);
@@ -310,7 +310,7 @@ describe("formatTable", () => {
   describe("when colored", () => {
     const results = [
       measured("elderberry", "node", { ...flatStats(4656), max: 2_340_000, sampleCount: 1200 }),
-      failed("fig", "teardown", "kiwi\nplum", { message: "melon split", stack: "at teardown" }),
+      failed("fig", "fn", "kiwi\nplum", { message: "melon split", stack: "at teardown" }),
       measured("banana", "bun", flatStats(812)),
     ];
 

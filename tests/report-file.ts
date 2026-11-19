@@ -9,16 +9,14 @@ function isObject(value: unknown): value is object {
 
 /** Whether `value` is a schema-1 report document, checked on the keys the tests read. */
 function isReport(value: unknown): value is Report {
+  if (!isObject(value)) return false;
+  const field = (key: string): unknown => Reflect.get(value, key);
   return (
-    isObject(value) &&
-    "schema" in value &&
-    value.schema === 1 &&
-    "options" in value &&
-    isObject(value.options) &&
-    "results" in value &&
-    Array.isArray(value.results) &&
-    "interrupted" in value &&
-    typeof value.interrupted === "boolean"
+    field("schema") === 1 &&
+    isObject(field("options")) &&
+    Array.isArray(field("results")) &&
+    Array.isArray(field("contests")) &&
+    typeof field("interrupted") === "boolean"
   );
 }
 

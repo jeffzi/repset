@@ -35,10 +35,9 @@ function killLeft(child: ChildProcess): void {
   }
 }
 
-/** How a started command ended: its exit code, `null` when a signal ended it, and what it printed. */
-export interface Ended {
+/** How a started command ended: its exit code, `null` when a signal ended it, and its stderr. */
+interface Ended {
   readonly code: number | null;
-  readonly stdout: string;
   readonly stderr: string;
 }
 
@@ -74,12 +73,10 @@ export async function spawnCommand(
     killLeft(child);
     await closed;
   });
-  let stdout = "";
   let stderr = "";
   let stopSent = false;
-  child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
-    stdout += chunk;
-  });
+  // Drained so a command that prints much never blocks on a full pipe.
+  child.stdout.resume();
   child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
     stderr += chunk;
     onStderr(stderr, (signal) => {
@@ -88,5 +85,5 @@ export async function spawnCommand(
     });
   });
   const [code]: unknown[] = await closed;
-  return { code: typeof code === "number" ? code : null, stdout, stderr };
+  return { code: typeof code === "number" ? code : null, stderr };
 }

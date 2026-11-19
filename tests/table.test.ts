@@ -584,7 +584,26 @@ describe("formatTable", () => {
 
         expect(text).toMatch(/\b2\b/u);
         expect(text).not.toMatch(/\b3\b/u);
-        expect(text).toMatch(/\b9\b/u);
+      });
+    });
+
+    describe("when the judged contests ran one round count and a contest not judged ran another", () => {
+      it("states the judged contests' round count alone in the footer", () => {
+        const results = [
+          ...judgedResults("concat", ["join", "loop"]),
+          ...judgedResults("parse", ["regex", "split"]),
+          contenderResult("sort", "quick", 100),
+          contenderResult("sort", "merge", 200),
+        ];
+        const contests = [
+          judgedContest("concat", 9, ["join", "loop"]),
+          judgedContest("parse", 9, ["regex", "split"]),
+          contest("sort", 4, [contender("sort/quick", 100), contender("sort/merge", 200)], []),
+        ];
+
+        const text = footer(results, contests);
+
+        expect(text.match(/[\d–]+ rounds?\b/gu)).toStrictEqual(["9 rounds"]);
       });
     });
 

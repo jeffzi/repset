@@ -242,35 +242,33 @@ describe("findRuntime", { timeout: SPAWN_TIMEOUT_MS }, () => {
       await expect(found).rejects.not.toThrow(/--version/);
     });
 
-    it("throws a ConfigError naming the runtime when PATH is unset", async () => {
-      vi.stubEnv("PATH", undefined);
-
-      const found = findRuntime("bun", LOOKUP);
-
-      await expectConfigError(found, [/\bbun\b/]);
-    });
-
-    describe("when PATH holds only an empty entry", () => {
+    describe("when PATH names no directory", () => {
       const startDir = process.cwd();
 
       afterEach(() => {
         process.chdir(startDir);
       });
 
-      it("throws a ConfigError naming the runtime instead of searching the working directory", async () => {
-        const dir = temporaryDir("repset-cwd-");
-        copyFileSync(process.execPath, join(dir, `bun${extname(process.execPath)}`));
-        process.chdir(dir);
-        vi.stubEnv("PATH", "");
-        // A copy found in the working directory would then fail its probe instead of resolving.
-        vi.stubEnv("NODE_OPTIONS", "--banana");
+      it.each([
+        { why: "empty", path: "" },
+        { why: "unset", path: undefined },
+      ])(
+        "throws a ConfigError naming the runtime instead of searching the working directory when PATH is $why",
+        async ({ path }) => {
+          const dir = temporaryDir("repset-cwd-");
+          copyFileSync(process.execPath, join(dir, `bun${extname(process.execPath)}`));
+          process.chdir(dir);
+          vi.stubEnv("PATH", path);
+          // A copy found in the working directory would then fail its probe instead of resolving.
+          vi.stubEnv("NODE_OPTIONS", "--banana");
 
-        const found = findRuntime("bun", LOOKUP);
+          const found = findRuntime("bun", LOOKUP);
 
-        await expectConfigError(found, [/\bbun\b/]);
-        // Every error of a probe that ran names its `--version`; one found on no PATH entry does not.
-        await expect(found).rejects.not.toThrow(/--version/);
-      });
+          await expectConfigError(found, [/\bbun\b/]);
+          // Every error of a probe that ran names its `--version`; one found on no PATH entry does not.
+          await expect(found).rejects.not.toThrow(/--version/);
+        },
+      );
     });
   });
 });

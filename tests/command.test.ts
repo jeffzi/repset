@@ -21,6 +21,7 @@ import {
   starter,
   startsNoCase,
   stubColorTerminalEnv,
+  clearShellEnv,
   terminal,
   unblockWrites,
   workspace,
@@ -45,8 +46,7 @@ const measuresUnlessAborted: StartChild = async (runtime, request, options) =>
 
 describe("main", () => {
   beforeEach(() => {
-    vi.stubEnv("FORCE_COLOR", undefined);
-    vi.stubEnv("REPSET_CALLS_PER_SAMPLE", undefined);
+    clearShellEnv();
   });
 
   describe("when files and every run option are given", () => {
@@ -121,16 +121,16 @@ describe("main", () => {
       },
     );
 
-    it("prints a Commander error behind the repset: prefix alone", async () => {
+    it("prints a Commander error naming the option without Commander's own error: prefix", async () => {
       const { code, stderr } = await command(workspace(), ["--banana"], {
         startChild: startsNoChild,
       });
 
-      expect({
-        code,
-        prefix: stderr.startsWith("repset: "),
-        commander: stderr.includes("error: "),
-      }).toStrictEqual({ code: 2, prefix: true, commander: false });
+      expect({ code, stderr, commander: stderr.includes("error: ") }).toStrictEqual({
+        code: 2,
+        stderr: naming("banana"),
+        commander: false,
+      });
     });
   });
 
@@ -676,7 +676,7 @@ describe("main", () => {
   describe("when a write to stdout fails", () => {
     it.each([
       { code: "EPIPE", exit: 141, said: [] },
-      { code: "EIO", exit: 1, said: [expect.stringMatching(/^repset: .*\bEIO\b/u)] },
+      { code: "EIO", exit: 1, said: [naming("EIO")] },
     ])(
       "on $code kills the running case, starts no other, keeps the report file and exits $exit",
       async ({ code, exit, said }) => {
@@ -767,7 +767,7 @@ describe("main", () => {
         said: linesOf(stderr).filter((line) => line.includes("banana")),
       }).toStrictEqual({
         code: 1,
-        said: [expect.stringMatching(/^repset: .*\bbanana\b/u)],
+        said: [naming("banana")],
       });
     });
 

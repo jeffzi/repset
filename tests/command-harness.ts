@@ -127,6 +127,12 @@ export function terminal(): Captured {
   return Object.assign(captured(), { isTTY: true as const });
 }
 
+/** Clears the variables a shell may set that change the command's runs or color. */
+export function clearShellEnv(): void {
+  vi.stubEnv("FORCE_COLOR", undefined);
+  vi.stubEnv("REPSET_CALLS_PER_SAMPLE", undefined);
+}
+
 /** Clears the color variables and claims a 256-color terminal, so a terminal stream shows color. */
 export function stubColorTerminalEnv(): void {
   vi.stubEnv("NO_COLOR", undefined);

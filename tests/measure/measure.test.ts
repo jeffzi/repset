@@ -625,6 +625,16 @@ describe("measure", () => {
       },
     );
 
+    it("keeps the cleanup's teardown failure in phase teardown on a per-call run whose body fails with a MeasureError", async () => {
+      const fake = bench("perCall", { returns: () => PENDING_THENABLE, fails: { teardown: 0 } });
+
+      const error = await failure(run(fake));
+
+      expect(error.phase).toBe("fn");
+      expect(error.teardownError?.phase).toBe("teardown");
+      expect(error.teardownError?.cause).toBe(fake.teardownError);
+    });
+
     it("keeps a cleanup teardown that throws null on the body's error, null as cause", async () => {
       const fake = bench("perCall", {
         bodyMs: 200,

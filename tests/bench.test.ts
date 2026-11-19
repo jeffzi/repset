@@ -106,17 +106,12 @@ describe("bench", () => {
 
     it("registers what their absence registers for fields set to undefined", () => {
       const fn = (): number => 1;
+      bench("absent", { fn });
 
-      bench("object", { setup: undefined, fn, teardown: undefined, setupPerCall: undefined });
+      bench("undefined", { setup: undefined, fn, teardown: undefined, setupPerCall: undefined });
 
-      expect(registeredCases()).toStrictEqual([
-        {
-          id: "object",
-          name: "object",
-          contender: null,
-          case: { kind: "sharedState", setup: expect.any(Function), fn },
-        },
-      ]);
+      const [absent, given] = registeredCases();
+      expect(given?.case).toStrictEqual(absent?.case);
     });
   });
 

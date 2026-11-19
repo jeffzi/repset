@@ -5,10 +5,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { formatTable } from "../src/table.js";
 import {
   captured,
+  clearShellEnv,
   command,
   type CommandIo,
   failsParse,
   measuresAll,
+  naming,
   runToStdout,
   runWithReport,
   starter,
@@ -22,6 +24,7 @@ import { failedOutcome, startsNoChild } from "./fake-children.js";
 describe("main", () => {
   describe("when a stream would show color", () => {
     beforeEach(() => {
+      clearShellEnv();
       stubColorTerminalEnv();
     });
 
@@ -106,7 +109,7 @@ describe("main", () => {
       }).toStrictEqual({ results: 2, tableEnd: true });
     });
 
-    it("prints a plain repset: prefix when --no-color comes beside a wrong argument", async () => {
+    it("prints a plain error line when --no-color comes beside a wrong argument", async () => {
       const { code, stderr } = await command(workspace(), ["--no-color", "--banana"], {
         startChild: startsNoChild,
         stderr: terminal(),
@@ -115,7 +118,7 @@ describe("main", () => {
       expect({ code, styled: styled(stderr), stderr }).toStrictEqual({
         code: 2,
         styled: false,
-        stderr: expect.stringMatching(/^repset:/u),
+        stderr: naming("banana"),
       });
     });
 

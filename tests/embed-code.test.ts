@@ -129,7 +129,7 @@ describe("embedCode", () => {
   });
 
   describe("when a later markdown file fails", () => {
-    it("writes no file", async () => {
+    it("rejects naming that file and leaves the earlier file unchanged", async () => {
       const valid = `${codeBlock("./x.ts", "stale")}\n`;
       const dir = createProject({
         "x.ts": "export const x = 1;\n",
@@ -137,8 +137,9 @@ describe("embedCode", () => {
         "b.md": `${codeBlock("https://example.invalid/x.ts", "stale")}\n`,
       });
 
-      await embedCode([join(dir, "a.md"), join(dir, "b.md")]).catch(() => undefined);
+      const run = embedCode([join(dir, "a.md"), join(dir, "b.md")]);
 
+      await expect(run).rejects.toThrow(join(dir, "b.md"));
       expect(read(dir, "a.md")).toBe(valid);
     });
   });

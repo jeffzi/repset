@@ -81,18 +81,18 @@ describe("main", () => {
       expect(ended.stdout).toBe(formatTable(ended.results));
     });
 
-    it("colors the table on a terminal stderr under --out -", async () => {
+    it("colors the table on a terminal stderr under --out -, whatever stdout is", async () => {
       const { stdout, stderr } = await command(
         workspace(),
         ["sort.bench.ts", "parse.bench.ts", "--out", "-"],
-        { startChild: failsParse, stdout: terminal(), stderr: terminal() },
+        { startChild: failsParse, stdout: captured(), stderr: terminal() },
       );
 
       const { results } = parseReport(stdout, "stdout");
       expect({
-        stderrStyled: styled(stderr),
+        results: results.length,
         tableEnd: stderr.endsWith(formatTable(results, { color: true })),
-      }).toStrictEqual({ stderrStyled: true, tableEnd: true });
+      }).toStrictEqual({ results: 2, tableEnd: true });
     });
 
     it("colors the repset: prefix of an error line on a terminal stderr", async () => {

@@ -1,4 +1,4 @@
-import { bench } from "../../../src/child.js";
+import { bench } from "../../../src/bench.js";
 
 const VALUES = [3, 1, 2];
 

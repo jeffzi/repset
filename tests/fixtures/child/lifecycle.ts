@@ -1,4 +1,4 @@
-import { bench } from "../../../src/child.js";
+import { bench } from "../../../src/bench.js";
 import { trappedProxy, unreadableStackError } from "../../thrown-values.js";
 
 const CALLS = Symbol.for("repset.child-calls");

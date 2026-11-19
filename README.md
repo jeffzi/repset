@@ -134,6 +134,21 @@ Node. A config file changes which files and runtimes it uses (see
 npx repset
 ```
 
+repset prints a table with one section per runtime. Each row gives a case's median, mean, minimum
+and maximum time per call, each with its own unit, and the number of samples:
+
+```text
+node 26.13.1
+──────────────┬─────────┬─────────┬─────────┬─────────┬────────
+case          │  median │    mean │     min │     max │ samples
+──────────────┼─────────┼─────────┼─────────┼─────────┼────────
+sort/copy     │ 75.6 µs │ 76.9 µs │ 72.8 µs │  162 µs │   12985
+search/binary │ 10.5 ns │ 10.8 ns │ 10.3 ns │ 73.2 ns │  114940
+sort/in-place │ 77.7 µs │ 79.6 µs │ 74.5 µs │  171 µs │    9304
+
+Each case was measured once, in its own process. A verdict between revisions takes a comparison tool.
+```
+
 Common options:
 
 | Command                               | What it does                                            |

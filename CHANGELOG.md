@@ -11,16 +11,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Add `--no-color` to print without color on a terminal.
 - Show live progress on stderr when it is a terminal.
-- Show each option's default, examples and a link to the README in `--help`.
+- Show defaults and usage examples in `--help`.
 - Add `-o` for `--output` and `-h` for `--help`.
 - Suggest the closest flag after an unknown one.
-- Add the version, the platform and a link to a prefilled GitHub issue to the output of a crash.
+- Print a link to a prefilled GitHub issue when repset crashes.
 
 ### Changed
 
 - Rename `--out` to `--output`.
-- Read flags as most command-line tools do: a repeated flag takes its last value, a flag's value may
-  start with `-`, and `--version` wins over `--help`.
+- Read repeated flags, values that start with `-`, and `--version` beside `--help` as most
+  command-line tools do.
 
 ### Removed
 

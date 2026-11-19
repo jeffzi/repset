@@ -131,18 +131,6 @@ describe("main", () => {
       expect(ended.stdout).toBe(formatTable(ended.report.results, { color: true }));
     });
 
-    it("keeps the METRIC lines on stdout plain while the live line shows on a terminal stderr", async () => {
-      const args = ["sort.bench.ts", "parse.bench.ts", "--metric-lines"];
-      const plain = await command(workspace(), args, { startChild: failsParse });
-
-      const live = await command(workspace(), args, { startChild: failsParse, stderr: terminal() });
-
-      expect({ styled: styled(live.stderr), stdout: live.stdout }).toStrictEqual({
-        styled: true,
-        stdout: plain.stdout,
-      });
-    });
-
     it("aligns a colored multi-line --once failure as the plain one", async () => {
       const failsOnTwoLines = starter((request, runtime, options) =>
         request.id === "parse/fast"

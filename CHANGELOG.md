@@ -7,6 +7,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-19
+
 ### Added
 
 - Add `--no-color` to print without color on a terminal.
@@ -42,5 +44,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Add the `repset` command, which measures each benchmark case in its own process on Node and Bun.
 - Add `defineConfig` to type a repset config file.
 
-[Unreleased]: https://github.com/jeffzi/repset/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/jeffzi/repset/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/jeffzi/repset/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jeffzi/repset/releases/tag/v0.1.0

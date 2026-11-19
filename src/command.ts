@@ -21,7 +21,8 @@ import {
 import { ConfigError, failedWith, resolveOptions } from "./options.js";
 import { progressOn, type Progress } from "./progress.js";
 import type { Report } from "./report.js";
-import { type OnceInput, packageVersion, run, type RunInput, runOnce } from "./run.js";
+import { packageVersion, run, type RunInput, runOnce } from "./run.js";
+import type { OnceInput } from "./schedule.js";
 import {
   type ChildFunctionOverrides,
   type ChildFunctions,
@@ -248,9 +249,9 @@ function writeReportOrFail(path: string, shown: string, report: Report): void {
  * @param path - The report file, as an absolute path.
  * @param shown - The report file as error messages show it.
  * @returns `onSelected`, which writes the report's head and throws when that write fails, and
- *   `onResult`, which rewrites the report with each new result once `onSelected` ran and ignores
- *   a failed write: the caller writes the report once more when the run ends, which repairs the
- *   file or reports the failure.
+ *   `onResult`, which rewrites the report with each new result and the contest entries finished so
+ *   far once `onSelected` ran and ignores a failed write: the caller writes the report once more
+ *   when the run ends, which repairs the file or reports the failure.
  * @throws {ConfigError} From `onSelected`, when writing the report's head fails.
  */
 function reportWrites(path: string, shown: string): Pick<RunInput, "onSelected" | "onResult"> {
@@ -260,9 +261,9 @@ function reportWrites(path: string, shown: string): Pick<RunInput, "onSelected" 
       current = head;
       writeReportOrFail(path, shown, head);
     },
-    onResult: (result) => {
+    onResult: (result, contests) => {
       if (current === undefined) return;
-      current = { ...current, results: [...current.results, result] };
+      current = { ...current, results: [...current.results, result], contests };
       try {
         writeReport(path, current);
       } catch {

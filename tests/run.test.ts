@@ -607,7 +607,11 @@ describe("run", () => {
       });
 
       it("are drawn uniformly from the permutations of the contenders", async () => {
-        const { started } = await runCases([JOIN, LOOP, PLUS], { rounds: 6000 });
+        const started: string[] = [];
+        for (let seed = 1; seed <= 1000; seed += 1) {
+          const seeded = await runCases([JOIN, LOOP, PLUS], { rounds: 6, drawSeed: () => seed });
+          started.push(...seeded.started);
+        }
 
         const counts = Object.values(
           Object.groupBy(chunks(started, 3), (order) => order.join(" ")),

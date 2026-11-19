@@ -42,6 +42,11 @@ import { reportAt } from "./report-file.js";
 const measuresUnlessAborted: StartChild = async (runtime, request, options) =>
   options.signal?.aborted === true ? stopped : measuresAll(runtime, request, options);
 
+/** The contender `key` of the contest `concat`. */
+function contender(key: string): CaseToList {
+  return { id: `concat/${key}`, setupPerCall: false, name: "concat", contender: key };
+}
+
 describe("main", () => {
   describe("when every flag is given", () => {
     it("hands the positional files, --runtime, --filter, --min-time, --min-samples, --timeout, --node-import and --output to the run", async () => {
@@ -313,6 +318,52 @@ describe("main", () => {
       });
     });
 
+    it("holds a contest's entry once its last result is written", async () => {
+      const dir = workspace();
+      const report = join(dir, "report.json");
+      const written: number[][] = [];
+      const readsReport = listingStarter(
+        [contender("join"), contender("loop"), { id: "apple", setupPerCall: false }],
+        () => {
+          const { results, contests } = reportAt(report);
+          written.push([results.length, contests.length]);
+          return measuredOutcome(4656);
+        },
+      );
+
+      await command(dir, ["sort.bench.ts", "--rounds", "2", "--output", "report.json"], {
+        startChild: readsReport,
+      });
+
+      expect(written).toStrictEqual([
+        [0, 0],
+        [0, 0],
+        [0, 0],
+        [0, 0],
+        [2, 1],
+      ]);
+    });
+
+    it("holds the entry of a contest whose every contender failed before the next case starts", async () => {
+      const dir = workspace();
+      const report = join(dir, "report.json");
+      let writtenAtApple: string[] = [];
+      const readsReport = listingStarter(
+        [contender("join"), contender("loop"), { id: "apple", setupPerCall: false }],
+        (request) => {
+          if (request.id !== "apple") return failedOutcome("fn", "kiwi");
+          writtenAtApple = reportAt(report).contests.map((entry) => entry.name);
+          return measuredOutcome(4656);
+        },
+      );
+
+      await command(dir, ["sort.bench.ts", "--rounds", "2", "--output", "report.json"], {
+        startChild: readsReport,
+      });
+
+      expect(writtenAtApple).toStrictEqual(["concat"]);
+    });
+
     it("exits 2 with no case run, leaving no temporary file, when the first write fails", async () => {
       const dir = workspace();
       blockWrites(join(dir, "out/report.json"));
@@ -500,12 +551,6 @@ describe("main", () => {
     it("lowers the live line's total by the rounds a failed contender will not run, keeping its started count", async () => {
       const stderr = terminalOf(80);
       const seen: string[][] = [];
-      const contender = (key: string): CaseToList => ({
-        id: `concat/${key}`,
-        setupPerCall: false,
-        name: "concat",
-        contender: key,
-      });
       let loopCalls = 0;
       const failsLoopInRoundTwo = listingStarter(
         [contender("join"), contender("loop"), contender("plus")],

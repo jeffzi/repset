@@ -94,6 +94,46 @@ export interface FailedResult extends ResultBase {
 /** One case's result on one runtime. */
 export type Result = MeasuredResult | FailedResult;
 
+/**
+ * A contender of a judged contest, or of one that cannot be judged with `ratio` and `rank` `null`;
+ * a failed contender has a `null` median too.
+ */
+export interface ContestContender {
+  readonly id: string;
+  readonly median: number | null;
+  /** Its pair's ratio with the fastest contender, 1 for the fastest itself. */
+  readonly ratio: number | null;
+  /** 1 plus the number of contenders proven faster. */
+  readonly rank: number | null;
+}
+
+/** The verdict on two contenders of a contest, `a` the earlier in the contest's contenders. */
+export interface ContestPair {
+  readonly a: string;
+  readonly b: string;
+  /** The exp of the Hodges–Lehmann estimate of the per-round `ln(median_b / median_a)`. */
+  readonly ratio: number;
+  /** The exact signed-rank interval of `ratio` at the level `1 − 0.05 / pairs`. */
+  readonly interval: readonly [number, number];
+  /** The exact two-sided signed-rank p value over the rounds. */
+  readonly p: number;
+  /** `p` adjusted by Holm's over the contest's pairs. */
+  readonly pAdjusted: number;
+  /** The faster contender's case id, or `null` when the pair is tied. */
+  readonly faster: string | null;
+}
+
+/** One contest on one runtime: its contenders, and a verdict per pair of those that never failed. */
+export interface Contest {
+  readonly name: string;
+  readonly params: Readonly<Record<string, never>>;
+  readonly runtime: ResultBase["runtime"];
+  readonly rounds: number;
+  /** Sorted by rank then median, by median alone when not judged, the failed ones last. */
+  readonly contenders: readonly ContestContender[];
+  readonly pairs: readonly ContestPair[];
+}
+
 /** The JSON document `run` returns; `schema` names its format version. */
 export interface Report {
   readonly schema: 1;
@@ -107,5 +147,6 @@ export interface Report {
   readonly machine: Machine;
   /** The results that finished, in run order. */
   readonly results: readonly Result[];
-  readonly contests: readonly [];
+  /** The contests that finished, in run order. */
+  readonly contests: readonly Contest[];
 }

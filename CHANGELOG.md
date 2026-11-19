@@ -15,6 +15,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Say that contenders failed, instead of asking for more rounds, when a contest has fewer than two
   finished contenders to judge.
+- Stop the run and exit 141 instead of crashing when stderr's reader closes early, as for stdout.
 
 ## [0.2.0] - 2026-11-19
 

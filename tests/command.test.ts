@@ -777,4 +777,99 @@ describe("main", () => {
       }).not.toThrow();
     });
   });
+
+  describe("when a write to stderr fails", () => {
+    it.each([
+      { code: "EPIPE", exit: 141 },
+      { code: "EIO", exit: 1 },
+    ])(
+      "on $code kills the running case, starts no other, keeps the report file and the table and exits $exit, naming nothing",
+      async ({ code, exit }) => {
+        const dir = workspace();
+        writeFileSync(join(dir, "pear.bench.ts"), "");
+        const stderr = captured();
+        const started: string[] = [];
+        const failsStderrInParse = starter((request, runtime, options) => {
+          started.push(request.id);
+          if (request.id === "parse/fast") stderr.fail(code);
+          return measuresUnlessAborted(runtime, request, options);
+        });
+
+        const ended = await command(
+          dir,
+          ["sort.bench.ts", "parse.bench.ts", "pear.bench.ts", "--output", "report.json"],
+          { stderr, startChild: failsStderrInParse },
+        );
+
+        const report = reportAt(join(dir, "report.json"));
+        expect({
+          code: ended.code,
+          started,
+          ran: report.results.map((result) => result.id),
+          interrupted: report.interrupted,
+          stdout: ended.stdout,
+          said: linesOf(ended.stderr).filter((line) => line.includes(code)),
+        }).toStrictEqual({
+          code: exit,
+          started: ["sort/fast", "parse/fast"],
+          ran: ["sort/fast"],
+          interrupted: true,
+          stdout: formatTable(report.results, report.contests, { color: false }),
+          said: [],
+        });
+      },
+    );
+
+    it.each([
+      { first: "SIGTERM", second: "stderr EIO", exit: 143 },
+      { first: "stderr EIO", second: "SIGINT", exit: 1 },
+      { first: "stdout EPIPE", second: "stderr EIO", exit: 141 },
+      { first: "stderr EIO", second: "stdout EPIPE", exit: 1 },
+    ])("exits $exit when $first comes before $second", async ({ first, second, exit }) => {
+      const signals = new EventEmitter();
+      const stdout = captured();
+      const stderr = captured();
+      const deliver = (event: string): void => {
+        const [stream, code] = event.split(" ");
+        if (stream === "stdout" && code !== undefined) stdout.fail(code);
+        else if (stream === "stderr" && code !== undefined) stderr.fail(code);
+        else signals.emit(event);
+      };
+      const stopsTwice = starter(() => {
+        deliver(first);
+        deliver(second);
+        return stopped;
+      });
+
+      const { code } = await command(workspace(), ["sort.bench.ts", "parse.bench.ts"], {
+        signals,
+        stdout,
+        stderr,
+        startChild: stopsTwice,
+      });
+
+      expect(code).toBe(exit);
+    });
+
+    it("keeps listening for stderr's error once a write failed, so its late error event does not crash", async () => {
+      const stderr = closedHeld("EPIPE");
+
+      await command(workspace(), ["sort.bench.ts"], { stderr });
+
+      expect(() => {
+        stderr.emitHeld();
+      }).not.toThrow();
+    });
+
+    it("keeps listening for stderr's error after a crash, so the crash report's failed write does not crash", async () => {
+      const stderr = captured();
+      await expect(
+        command(workspace(), ["sort.bench.ts"], { stderr, startChild: startsNoCase }),
+      ).rejects.toThrow("a case started");
+
+      expect(() => {
+        stderr.fail("EPIPE");
+      }).not.toThrow();
+    });
+  });
 });

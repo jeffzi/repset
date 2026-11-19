@@ -402,18 +402,6 @@ function numberField(request: object, name: string): number {
 }
 
 /**
- * Reads a number field of the request that may be absent.
- *
- * @param request - The parsed request.
- * @param name - The field to read.
- * @returns The field's value, or `undefined` when the request has no such field.
- * @throws TypeError when the field is present and not a number.
- */
-function optionalNumberField(request: object, name: string): number | undefined {
-  return Reflect.get(request, name) === undefined ? undefined : numberField(request, name);
-}
-
-/**
  * Parses the child's request argument, before anything loads.
  *
  * @param argument - The request as JSON: `mode` and an absolute `file` always, `id` for `measure`
@@ -440,7 +428,10 @@ export function parseRequest(argument: string): ChildRequest {
     case "once":
       return { mode, file, id: stringField(request, "id") };
     case "measure": {
-      const callsPerSample = optionalNumberField(request, "callsPerSample");
+      const callsPerSample =
+        Reflect.get(request, "callsPerSample") === undefined
+          ? undefined
+          : numberField(request, "callsPerSample");
       return {
         mode,
         file,

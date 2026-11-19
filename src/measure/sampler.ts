@@ -187,20 +187,6 @@ function calibratedCount(count: number, spanMs: number, resolutionMs: number): n
 }
 
 /**
- * The count the next batched warmup sample runs, as {@link calibratedCount} gives it, refused once
- * it passes `ceil(200 × resolution / 0.1 ns)`: a body shorter than 0.1 ns is too short to time.
- *
- * @param count - The count that sample ran.
- * @param spanMs - That sample's span, in milliseconds.
- * @param resolutionMs - The timer resolution, in milliseconds.
- * @returns The next count.
- * @throws CalibrationError when the next count passes the cap, naming the count asked for and the cap.
- */
-function cappedCount(count: number, spanMs: number, resolutionMs: number): number {
-  return withinCap(calibratedCount(count, spanMs, resolutionMs), resolutionMs);
-}
-
-/**
  * Refuses a count that passes `ceil(200 × resolution / 0.1 ns)`.
  *
  * @param next - The count asked for.
@@ -258,7 +244,10 @@ export function startWarmup(resolutionMs: number, fixed: number | undefined): Wa
 export function recordWarmup(progress: WarmupProgress, spanMs: number): void {
   progress.samples += 1;
   if (progress.fixed === undefined) {
-    progress.count = cappedCount(progress.count, spanMs, progress.resolutionMs);
+    progress.count = withinCap(
+      calibratedCount(progress.count, spanMs, progress.resolutionMs),
+      progress.resolutionMs,
+    );
   }
 }
 
@@ -276,11 +265,7 @@ function warmedUp(progress: WarmupProgress): WarmupResult {
 // Shared-state timing loop
 // ---------------------------------------------------------------------------
 
-interface Timed<State> {
-  readonly now: () => number;
-  readonly fn: (state: State) => unknown;
-  readonly state: State;
-}
+type Timed<State> = Pick<SharedStateOptions<State>, "now" | "fn" | "state">;
 
 /**
  * Holds what the last sample's last call returned, so the engine cannot treat the body's result as
@@ -567,13 +552,7 @@ export interface PerCallOptions<State> extends Sampling, TimedMinimums {
   readonly inFlight: InFlight<State>;
 }
 
-interface PerCall<State> {
-  readonly now: () => number;
-  readonly setup: () => State;
-  readonly fn: (state: State) => void;
-  readonly teardown: (state: State) => void;
-  readonly inFlight: InFlight<State>;
-}
+type PerCall<State> = Pick<PerCallOptions<State>, "now" | "setup" | "fn" | "teardown" | "inFlight">;
 
 /**
  * Times `count` body calls, each on a state built just before its clock reads and torn down

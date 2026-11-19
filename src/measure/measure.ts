@@ -10,7 +10,7 @@
  * under Bun.
  */
 
-import { performanceNow, thrownMessage, timerResolutionMs, valueAt } from "../utils.js";
+import { thrownMessage, timerResolutionMs, valueAt } from "../utils.js";
 import { type GcDuringTiming, observeCollections, type TimingWindow } from "./collections.js";
 import { runningRuntime } from "./runtime.js";
 import {
@@ -151,6 +151,17 @@ interface BodySampling extends Sampling, TimedMinimums {}
 // ---------------------------------------------------------------------------
 // Measurement
 // ---------------------------------------------------------------------------
+
+/**
+ * The default clock.
+ *
+ * Called on `performance`, since an unbound `now` throws on Node.
+ *
+ * @returns The current high-resolution time, in milliseconds.
+ */
+function performanceNow(): number {
+  return performance.now();
+}
 
 /**
  * Measures a benchmark: the body, then an empty body in the benchmark's own lifecycle.

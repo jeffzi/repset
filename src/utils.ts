@@ -7,17 +7,6 @@
 const TRANSITIONS_PER_PASS = 2000;
 
 /**
- * The default clock.
- *
- * Called on `performance`, since an unbound `now` throws on Node.
- *
- * @returns The current high-resolution time, in milliseconds.
- */
-export function performanceNow(): number {
-  return performance.now();
-}
-
-/**
  * Reads `now` until it has seen {@link TRANSITIONS_PER_PASS} transitions, reads that differ from
  * the previous one, and measures the smallest change between them.
  *

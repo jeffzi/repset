@@ -17,6 +17,7 @@ import {
   noColorGiven,
   OUT_STDOUT,
   parseCommand,
+  REPOSITORY,
 } from "./command-line.js";
 import { ConfigError, failedWith, resolveOptions } from "./options.js";
 import type { Report, Result } from "./report.js";
@@ -67,7 +68,7 @@ export interface CommandIo extends ChildFunctionOverrides {
 }
 
 /** Where a crash's issue link opens a new issue, its body following. */
-const NEW_ISSUE = "https://github.com/jeffzi/repset/issues/new?body=";
+const NEW_ISSUE = `${REPOSITORY}/issues/new?body=`;
 
 /** The longest crash issue link, short enough for browsers and GitHub to open. */
 const MAX_ISSUE_LINK = 6000;
@@ -151,11 +152,6 @@ const GRAPHEMES = new Intl.Segmenter();
 const WIDE =
   /\p{Extended_Pictographic}|[ᄀ-ᅟ⺀-〾ぁ-㏿㐀-䶿一-鿿ꀀ-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦\u{20000}-\u{3FFFF}]/u;
 
-/** The columns a terminal gives one grapheme: two for a wide one, one otherwise. */
-function columnsOf(grapheme: string): number {
-  return WIDE.test(grapheme) ? 2 : 1;
-}
-
 /** Moves the cursor to the start of its row and erases the row. */
 const CLEAR_ROW = "\r\x1b[2K";
 
@@ -207,7 +203,7 @@ function liveLine(stderr: Output, color: boolean): Progress {
     for (const { segment } of GRAPHEMES.segment(
       `${FRAMES[frame]} [${started}/${total}] ${doing}`,
     )) {
-      room -= columnsOf(segment);
+      room -= WIDE.test(segment) ? 2 : 1;
       if (room < 0) break;
       kept.push(segment);
     }

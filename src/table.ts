@@ -23,7 +23,7 @@ const HEADER = ["case", "median", "mean", "min", "max", "samples"] as const;
 const FOOTER =
   "Each case was measured once, in its own process. A verdict between revisions takes a comparison tool.";
 
-export type Style = "bold" | "dim" | "red" | "green";
+type Style = "bold" | "dim" | "red" | "green";
 
 /**
  * Styles `text` when `color` holds. The caller has judged the stream, so the escape codes come
@@ -206,15 +206,15 @@ function sectionLines(results: readonly Result[], color: boolean): string[] {
  * Formats the table of a run's results, one section per runtime in run order.
  *
  * @param results - The results that finished, in run order.
- * @param options - Whether the stream the table goes to shows color; plain when absent.
+ * @param options - Whether the stream the table goes to shows color.
  * @returns The table, ending in a newline, or the empty string when there is no result.
  */
 export function formatTable(
   results: readonly Result[],
-  options: { readonly color?: boolean } = {},
+  options: { readonly color: boolean },
 ): string {
   if (results.length === 0) return "";
-  const color = options.color === true;
+  const { color } = options;
   const byRuntime = Map.groupBy(results, (result) => result.runtime.name);
   const sections = [...byRuntime.values()].map((section) =>
     sectionLines(section, color).join("\n"),

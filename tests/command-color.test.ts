@@ -53,7 +53,7 @@ describe("main", () => {
     it("prints the plain table on a terminal stdout under --no-color", async () => {
       const ended = await runTable(["--no-color"], { stdout: terminal() });
 
-      expect(ended.stdout).toBe(formatTable(ended.results));
+      expect(ended.stdout).toBe(formatTable(ended.results, { color: false }));
     });
 
     it.each([
@@ -64,7 +64,7 @@ describe("main", () => {
 
       const ended = await runTable([], { stdout: terminal() });
 
-      expect(ended.stdout).toBe(formatTable(ended.results));
+      expect(ended.stdout).toBe(formatTable(ended.results, { color: false }));
     });
 
     it("prints the plain table on a terminal stdout that reports one bit of color", async () => {
@@ -72,13 +72,13 @@ describe("main", () => {
 
       const ended = await runTable([], { stdout });
 
-      expect(ended.stdout).toBe(formatTable(ended.results));
+      expect(ended.stdout).toBe(formatTable(ended.results, { color: false }));
     });
 
     it("prints the plain table on a stdout that is not a terminal while stderr is one", async () => {
       const ended = await runTable([], { stdout: captured(), stderr: terminal() });
 
-      expect(ended.stdout).toBe(formatTable(ended.results));
+      expect(ended.stdout).toBe(formatTable(ended.results, { color: false }));
     });
 
     it("colors the table on a terminal stderr under --out -, whatever stdout is", async () => {

@@ -60,8 +60,8 @@ export function failedWith(message: string, error: unknown): ConfigError {
 export interface OptionsInput extends Config {
   /** Keeps only the cases whose id this expression, compiled with the `u` flag, matches. */
   readonly filter?: string | undefined;
-  /** The config file, relative to `cwd`; `false` reads none; `undefined` searches `cwd`. */
-  readonly config?: string | false | undefined;
+  /** The config file, relative to `cwd`; `undefined` searches `cwd`. */
+  readonly config?: string | undefined;
   /** Where a config file is searched for, and what a relative `config` path resolves against. */
   readonly cwd: string;
 }
@@ -135,7 +135,6 @@ export function isFile(path: string): boolean {
 }
 
 function configPath(options: OptionsInput): string | undefined {
-  if (options.config === false) return undefined;
   if (options.config !== undefined) {
     const named = resolve(options.cwd, options.config);
     if (!isFile(named)) throw new ConfigError(`no config file at ${named}`);
@@ -204,14 +203,8 @@ export function isRuntime(value: unknown): value is Runtime {
   return RUNTIMES.some((runtime) => runtime === value);
 }
 
-/** The names, each quoted, joined with ", " and a final " and ": `"a", "b" and "c"`. */
-export function quotedList(names: readonly [string, string, ...string[]]): string {
-  const quoted = names.map((name) => `"${name}"`);
-  return `${quoted.slice(0, -1).join(", ")} and ${quoted.slice(-1).join("")}`;
-}
-
-/** Every runtime repset runs on, as {@link quotedList} writes them. */
-export const QUOTED_RUNTIMES = quotedList(RUNTIMES);
+/** Every runtime repset runs on, each quoted: `"node" and "bun"`. */
+export const QUOTED_RUNTIMES = RUNTIMES.map((runtime) => `"${runtime}"`).join(" and ");
 
 function checkedRuntimes(value: unknown): readonly Runtime[] {
   if (!Array.isArray(value)) throw invalid("runtimes", "an array of runtimes", value);

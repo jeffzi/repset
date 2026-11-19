@@ -219,7 +219,7 @@ describe("main", () => {
 
       expect({ printedDuringRun, stdout: stdout.text }).toStrictEqual({
         printedDuringRun: ["", ""],
-        stdout: formatTable(reportAt(join(dir, "report.json")).results),
+        stdout: formatTable(reportAt(join(dir, "report.json")).results, { color: false }),
       });
     });
   });
@@ -425,7 +425,7 @@ describe("main", () => {
     it("prints the table on stderr", async () => {
       const ended = await runWithMetricLines();
 
-      expect(ended.stderr.endsWith(formatTable(ended.results))).toBe(true);
+      expect(ended.stderr.endsWith(formatTable(ended.results, { color: false }))).toBe(true);
     });
   });
 
@@ -625,7 +625,7 @@ describe("main", () => {
       );
 
       const { results } = parseReport(stdout, "stdout");
-      expect(screen(stderr.text)).toStrictEqual(screen(formatTable(results)));
+      expect(screen(stderr.text)).toStrictEqual(screen(formatTable(results, { color: false })));
     });
 
     it("clears the live line before printing a failed listing's error", async () => {
@@ -690,7 +690,7 @@ describe("main", () => {
         code: 143,
         interrupted: true,
         ran: ["sort/fast"],
-        stdout: formatTable(report.results),
+        stdout: formatTable(report.results, { color: false }),
       });
     });
 

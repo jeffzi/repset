@@ -38,7 +38,10 @@ const EXAMPLES: readonly (readonly [string, string])[] = [
   ["repset --once", "Runs every case once, without timing, to check it works"],
 ];
 
-const README = "https://github.com/jeffzi/repset#readme";
+/** The project's repository on GitHub, which the help and the crash report link to. */
+export const REPOSITORY = "https://github.com/jeffzi/repset";
+
+const README = `${REPOSITORY}#readme`;
 
 interface CommandInput extends StrictOmit<OptionsInput, "cwd"> {
   readonly files: readonly string[] | undefined;

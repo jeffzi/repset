@@ -62,7 +62,6 @@ type RunInput = Parameters<typeof run>[0];
 async function runHere(input: Partial<RunInput> = {}): ReturnType<typeof run> {
   return run({
     cwd: DISCOVERY,
-    config: false,
     files: ["zeta.bench.ts"],
     findRuntime: findAny,
     startChild: measuresAll,
@@ -78,7 +77,6 @@ type OnceInput = Parameters<typeof runOnce>[0];
 async function runOnceHere(input: Partial<OnceInput> = {}): ReturnType<typeof runOnce> {
   return runOnce({
     cwd: DISCOVERY,
-    config: false,
     files: ["zeta.bench.ts"],
     findRuntime: findAny,
     startChild: starter(() => ranOnce),

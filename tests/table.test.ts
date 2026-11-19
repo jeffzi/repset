@@ -97,7 +97,7 @@ function failed(
 
 /** The lines of the table of `results`, the last one empty after the closing newline. */
 function tableLines(results: readonly Result[]): string[] {
-  return formatTable(results).split("\n");
+  return formatTable(results, { color: false }).split("\n");
 }
 
 /** The index of the first line that starts with `id` and a space, or -1 when no row does. */
@@ -124,7 +124,7 @@ function rowTexts(results: readonly Result[], id: string): string[] {
 describe("formatTable", () => {
   describe("when there is no result", () => {
     it("returns the empty string", () => {
-      const table = formatTable([]);
+      const table = formatTable([], { color: false });
 
       expect(table).toBe("");
     });
@@ -314,7 +314,7 @@ describe("formatTable", () => {
     ];
 
     it("styles the table", () => {
-      const plain = formatTable(results);
+      const plain = formatTable(results, { color: false });
 
       const colored = formatTable(results, { color: true });
 
@@ -322,7 +322,7 @@ describe("formatTable", () => {
     });
 
     it("keeps the visible text equal to the plain table", () => {
-      const plain = formatTable(results);
+      const plain = formatTable(results, { color: false });
 
       const colored = formatTable(results, { color: true });
 

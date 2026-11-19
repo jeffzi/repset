@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_MIN_SAMPLES, DEFAULT_MIN_TIME } from "../src/measure/measure.js";
-import { ConfigError, quotedList, resolveOptions, type OptionsInput } from "../src/options.js";
+import { ConfigError, resolveOptions, type OptionsInput } from "../src/options.js";
 import { expectConfigError } from "./config-error.js";
 import { fixturePath } from "./fixture-path.js";
 import { SPAWN_TIMEOUT_MS } from "./spawn-limits.js";
@@ -93,14 +93,6 @@ describe("resolveOptions", () => {
       const result = resolveHere({ config: "apple\0.ts" });
 
       await expect(result).rejects.toBeInstanceOf(ConfigError);
-    });
-  });
-
-  describe("when config is false", () => {
-    it("reads no config file even when the working directory holds one", async () => {
-      const resolved = await resolveOptions({ cwd: fixture("found"), config: false });
-
-      expect(resolved.minSamples).toBe(DEFAULTS.minSamples);
     });
   });
 
@@ -273,13 +265,5 @@ describe("resolveOptions", () => {
         resolved: "./loader.mjs",
       });
     });
-  });
-});
-
-describe("quotedList", () => {
-  it("quotes each name, joining them with commas and a final and", () => {
-    const list = quotedList(["node", "bun", "deno"]);
-
-    expect(list).toBe('"node", "bun" and "deno"');
   });
 });

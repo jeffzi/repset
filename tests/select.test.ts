@@ -117,12 +117,12 @@ describe("selectCases", () => {
           events.push(request.mode);
           return onePerFile(runtime, request, options);
         },
-        onPlanned: (phase, total) => {
-          events.push(`planned ${phase} ${total}`);
+        onPlanned: (total) => {
+          events.push(`planned ${total}`);
         },
       });
 
-      expect(events).toStrictEqual(["planned list 3", "list", "list", "list"]);
+      expect(events).toStrictEqual(["planned 3", "list", "list", "list"]);
     });
   });
 
@@ -217,29 +217,22 @@ describe("selectCases", () => {
       await expectConfigError(result, ["zeta.bench.ts", error.phase, error.message]);
       await expect(result).rejects.toMatchObject({ failureStack: error.stack, output: "plum\n" });
     });
-
-    it("rejects the file when its child answers a list request with no listing", async () => {
-      const ranOnly: StartChild = async () => ({
-        status: "ok",
-        result: { status: "ok" },
-        output: "plum\n",
-      });
-
-      const result = select({ files: ["zeta.bench.ts"], startChild: ranOnly });
-
-      await expectConfigError(result, ["zeta.bench.ts"]);
-      await expect(result).rejects.toMatchObject({ output: "plum\n" });
-    });
   });
 
-  describe("when two cases share an id", () => {
-    it("rejects them, naming the id and the files", async () => {
+  describe("when cases share an id", () => {
+    it("rejects them, naming the first repeated id and every file that registers it in listing order", async () => {
       const result = select({
-        files: ["zeta.bench.ts", "a.bench.ts"],
-        startChild: listing({ "zeta.bench.ts": ["apple"], "a.bench.ts": ["apple"] }),
+        files: ["zeta.bench.ts", "nested2.bench.ts", "alpha.bench.mts"],
+        startChild: listing({
+          "zeta.bench.ts": ["banana", "apple"],
+          "nested2.bench.ts": ["apple"],
+          "alpha.bench.mts": ["apple", "banana"],
+        }),
       });
 
-      await expectConfigError(result, ["apple", "zeta.bench.ts", "a.bench.ts"]);
+      await expectConfigError(result, [
+        /\bapple\b.*\bzeta\.bench\.ts\b.*\bnested2\.bench\.ts\b.*\balpha\.bench\.mts\b/u,
+      ]);
     });
   });
 

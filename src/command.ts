@@ -271,7 +271,7 @@ function childInput(
     signal: context.signal,
     findRuntime: context.findRuntime,
     startChild: announcing(context),
-    onPlanned: (_phase, total) => {
+    onPlanned: (total) => {
       context.progress.planned(total);
     },
   };

@@ -11,7 +11,6 @@ import type {
   ChildError,
   ChildPhase,
   ChildRequest,
-  ChildResult,
   Failed,
   Listed,
   ListedCase,
@@ -68,9 +67,19 @@ interface Captured {
   readonly output: string;
 }
 
-interface Succeeded extends Captured {
+/** The mode of a child's request. */
+type Mode = ChildRequest["mode"];
+
+/** The result a child that succeeded gives, by the mode of its request. */
+interface ResultByMode {
+  readonly list: Listed;
+  readonly measure: Measured;
+  readonly once: Ran;
+}
+
+interface Succeeded<M extends Mode> extends Captured {
   readonly status: "ok";
-  readonly result: Exclude<ChildResult, Failed>;
+  readonly result: ResultByMode[M];
 }
 
 interface ChildFailed extends Captured {
@@ -82,8 +91,11 @@ interface Stopped extends Captured {
   readonly status: "stopped";
 }
 
-/** How a child's call ended: its result, a failure, or a stop the caller asked for. */
-export type Outcome = Succeeded | ChildFailed | Stopped;
+/**
+ * How a child's call ended: the result its request's mode `M` asks for, a failure, or a stop the
+ * caller asked for.
+ */
+export type Outcome<M extends Mode = Mode> = Succeeded<M> | ChildFailed | Stopped;
 
 /**
  * How the child process ended: stopped by the caller's signal, killed at its `timeout` in
@@ -312,17 +324,17 @@ class OutputTail {
  *   wrote stands however the child then ended, unless the caller's signal stopped it.
  * @throws Error What starting the process throws, such as an argument `spawn` rejects.
  */
-export async function startChild(
+export async function startChild<R extends ChildRequest>(
   runtime: FoundRuntime,
-  request: ChildRequest,
+  request: R,
   options: StartOptions,
-): Promise<Outcome> {
+): Promise<Outcome<R["mode"]>> {
   const { child, tail, written } = spawnChild(runtime, request, options);
   const ended = await processEnded(child, options);
   if (ended.kind === "error") {
     return noResult(`could not start the child: ${ended.error.message}`, tail.text());
   }
-  return outcomeOf(ended, readResult(written(), request.mode), tail.text());
+  return outcomeOf(ended, readResult<R["mode"]>(written(), request.mode), tail.text());
 }
 
 /**
@@ -442,10 +454,14 @@ function spawnChild(
  * @returns A stop when the caller stopped the child; otherwise the result or the child's own
  *   failure when it wrote one, or a failure in phase `child` saying how it ended.
  */
-function outcomeOf(ending: Ending, read: ChildResult | string, output: string): Outcome {
+function outcomeOf<M extends Mode>(
+  ending: Ending,
+  read: ResultByMode[M] | Failed | string,
+  output: string,
+): Outcome<M> {
   if (ending.kind === "stopped") return { status: "stopped", output };
   if (typeof read !== "string") {
-    return read.status === "failed"
+    return isFailed(read)
       ? { status: "failed", error: read.error, output }
       : { status: "ok", result: read, output };
   }
@@ -489,7 +505,7 @@ export function howItEnded(subject: string, ending: Exclude<Ending, { kind: "sto
  * @param mode - The mode of the child's request, whose result shape the line must have.
  * @returns The result, or what was wrong with what the child wrote.
  */
-function readResult(written: string, mode: ChildRequest["mode"]): ChildResult | string {
+function readResult<M extends Mode>(written: string, mode: M): ResultByMode[M] | Failed | string {
   if (written === "") return "it wrote no result";
   if (!written.endsWith("\n")) return "its result line has no newline";
   const line = written.slice(0, -1);
@@ -503,8 +519,13 @@ function readResult(written: string, mode: ChildRequest["mode"]): ChildResult | 
     return `its result line is not JSON: ${thrownMessage(error)}`;
   }
   if (isFailed(value)) return value;
-  const answers = { list: isListed, measure: isMeasured, once: isRan }[mode];
-  if (answers(value)) return value;
+  const answers: { readonly [K in Mode]: (value: unknown) => value is ResultByMode[K] } = {
+    list: isListed,
+    measure: isMeasured,
+    once: isRan,
+  };
+  const answer = answers[mode];
+  if (answer(value)) return value;
   return `its result line does not answer a ${mode} request: ${line.slice(0, QUOTED_LINE_CHARS)}`;
 }
 

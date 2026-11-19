@@ -11,7 +11,6 @@ import { fileURLToPath } from "node:url";
 
 import type { ChildError, ChildRequest } from "./child.js";
 import {
-  childFailure,
   findRuntime as realFindRuntime,
   type FoundRuntime,
   type Outcome,
@@ -72,7 +71,7 @@ export interface SelectInput extends ChildFunctionOverrides {
    * Receives the number of benchmark files to list once every runtime is found, before the first
    * listing child starts.
    */
-  readonly onPlanned?: ((phase: "list", total: number) => void) | undefined;
+  readonly onPlanned?: ((total: number) => void) | undefined;
 }
 
 /** A benchmark file whose listing child failed, with what the child left to print before it. */
@@ -163,20 +162,17 @@ function benchmarkFiles(options: ResolvedOptions, files: readonly string[], cwd:
  * @throws {@link ConfigError} Naming the first id two cases share and the files that register it.
  */
 function checkUniqueIds(cases: readonly SelectedCase[]): void {
-  const filesById = new Map<string, Set<string>>();
-  let firstRepeated: string | undefined;
-  for (const selected of cases) {
-    const files = filesById.get(selected.id);
-    if (files === undefined) {
-      filesById.set(selected.id, new Set([selected.file]));
-    } else {
-      files.add(selected.file);
-      firstRepeated ??= selected.id;
-    }
-  }
-  if (firstRepeated === undefined) return;
-  const files = [...(filesById.get(firstRepeated) ?? [])].join(", ");
-  throw new ConfigError(`more than one case has the id ${firstRepeated}, in ${files}`);
+  const seen = new Set<string>();
+  const repeated = cases.find(({ id }) => {
+    if (seen.has(id)) return true;
+    seen.add(id);
+    return false;
+  });
+  if (repeated === undefined) return;
+  const files = new Set(cases.filter(({ id }) => id === repeated.id).map(({ file }) => file));
+  throw new ConfigError(
+    `more than one case has the id ${repeated.id}, in ${[...files].join(", ")}`,
+  );
 }
 
 /**
@@ -204,7 +200,7 @@ export function shownPath(cwd: string, path: string): string {
  * @param input - The options, the working directory, the stop signal, the plan callback and the
  *   child starter.
  * @returns The cases in file order, or `undefined` when the stop signal fired.
- * @throws {@link ListingError} When a listing child fails or gives no listing.
+ * @throws {@link ListingError} When a listing child fails.
  * @throws {@link Error} What `onPlanned` or starting a listing child throws.
  */
 async function listFiles(
@@ -214,7 +210,7 @@ async function listFiles(
 ): Promise<SelectedCase[] | undefined> {
   const { options, cwd, signal, startChild = realStartChild } = input;
   const childOptions = startOptions(options, signal);
-  input.onPlanned?.("list", files.length);
+  input.onPlanned?.(files.length);
   const cases: SelectedCase[] = [];
   for (const path of files) {
     if (signal?.aborted === true) return undefined;
@@ -222,9 +218,6 @@ async function listFiles(
     const outcome = await startChild(runtime, { mode: "list", file: path }, childOptions);
     if (outcome.status === "stopped") return undefined;
     if (outcome.status === "failed") throw new ListingError(file, outcome.error, outcome.output);
-    if (!("cases" in outcome.result)) {
-      throw new ListingError(file, childFailure("the child gave no listing"), outcome.output);
-    }
     for (const listed of outcome.result.cases) cases.push({ ...listed, path, file });
   }
   return cases;
@@ -284,10 +277,10 @@ export interface OnceInput extends OptionsInput, ChildFunctionOverrides {
   /** Kills the running child and starts no further one when it fires. */
   readonly signal?: AbortSignal | undefined;
   /**
-   * Receives each phase and the number of children it will start, before that phase's first child
-   * starts: the benchmark files to list, then the cases times the runtimes to measure or run once.
+   * Receives the number of children each phase will start, before that phase's first child starts:
+   * the benchmark files to list, then the cases times the runtimes to measure or run once.
    */
-  readonly onPlanned?: ((phase: ChildRequest["mode"], total: number) => void) | undefined;
+  readonly onPlanned?: ((total: number) => void) | undefined;
 }
 
 export interface RunInput extends OnceInput {
@@ -321,10 +314,8 @@ export interface OnceRun {
   readonly results: readonly OnceResult[];
 }
 
-type Finished = Exclude<Outcome, { status: "stopped" }>;
-
-/** The failure of a measuring child that answered with something other than a measurement. */
-const NO_MEASUREMENT = childFailure("the child gave no measurement");
+/** How a child asked for `M` ended when the caller did not stop it. */
+type Finished<M extends ChildRequest["mode"]> = Exclude<Outcome<M>, { status: "stopped" }>;
 
 /** The processes of a case whose child failed: one, holding `null` for what it did not reach. */
 const FAILED_PROCESSES: readonly [FailedProcess] = [
@@ -375,10 +366,10 @@ export async function packageVersion(path: string = PACKAGE_JSON): Promise<strin
  * @throws {@link Error} What the plan callback, `passed` or `finished` throws, or what starting a
  *   child throws.
  */
-async function startEach(
+async function startEach<R extends ChildRequest>(
   input: OnceInput,
-  request: (options: ResolvedOptions, selected: SelectedCase) => ChildRequest,
-  finished: (runtime: FoundRuntime, selected: SelectedCase, outcome: Finished) => void,
+  request: (options: ResolvedOptions, selected: SelectedCase) => R,
+  finished: (runtime: FoundRuntime, selected: SelectedCase, outcome: Finished<R["mode"]>) => void,
   passed: (options: ResolvedOptions, total: number) => void,
 ): Promise<{ options: ResolvedOptions; interrupted: boolean }> {
   const options = await resolveOptions(input);
@@ -407,15 +398,18 @@ async function startEach(
 }
 
 /**
- * Turns a child's outcome into the case's report result; any outcome without statistics, not only
- * a failure, becomes a failed result.
+ * Turns a measuring child's outcome into the case's report result.
  *
  * @param selected - The case.
  * @param runtime - The runtime its child ran on.
  * @param outcome - How its measuring child ended.
  * @returns A measured result when the child measured the case, a failed one otherwise.
  */
-function resultOf(selected: SelectedCase, runtime: FoundRuntime, outcome: Finished): Result {
+function resultOf(
+  selected: SelectedCase,
+  runtime: FoundRuntime,
+  outcome: Finished<"measure">,
+): Result {
   const base = {
     id: selected.id,
     name: selected.id,
@@ -425,13 +419,12 @@ function resultOf(selected: SelectedCase, runtime: FoundRuntime, outcome: Finish
     runtime: { name: runtime.runtime, version: runtime.version },
     setupPerCall: selected.setupPerCall,
   };
-  if (outcome.status === "ok" && "stats" in outcome.result) {
+  if (outcome.status === "ok") {
     const { stats, sampling, checks, gc } = outcome.result;
     const measuring = { round: 1, orderInRound: 1, stats, sampling, checks, gc, rawSamples: null };
     return { ...base, status: "ok", error: null, median: stats.median, processes: [measuring] };
   }
-  const { phase, message, stack, teardownError } =
-    outcome.status === "failed" ? outcome.error : NO_MEASUREMENT;
+  const { phase, message, stack, teardownError } = outcome.error;
   const error = { phase, message, stack, teardownError, output: outcome.output };
   return { ...base, status: "failed", error, median: null, processes: FAILED_PROCESSES };
 }
@@ -528,7 +521,7 @@ export async function run(input: RunInput): Promise<Report> {
     },
     (resolved, total) => {
       input.onSelected?.(reportOf(resolved, false));
-      input.onPlanned?.("measure", total);
+      input.onPlanned?.(total);
     },
   );
   return reportOf(options, interrupted);
@@ -561,7 +554,7 @@ export async function runOnce(input: OnceInput): Promise<OnceRun> {
         results.push({ ...ran, status: "failed", error: { phase, message, teardownError } });
       }
     },
-    (_options, total) => input.onPlanned?.("once", total),
+    (_options, total) => input.onPlanned?.(total),
   );
   return { interrupted, results };
 }

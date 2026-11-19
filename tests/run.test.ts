@@ -92,10 +92,10 @@ function logsStarts(events: string[], start: StartChild): StartChild {
   };
 }
 
-/** A plan callback that logs each non-listing phase and its child count in `events` as `planned <phase> <n>`. */
+/** A plan callback that logs each phase's child count in `events` as `planned <n>`. */
 function logsPlans(events: string[]): NonNullable<OnceInput["onPlanned"]> {
-  return (phase, total) => {
-    if (phase !== "list") events.push(`planned ${phase} ${String(total)}`);
+  return (total) => {
+    events.push(`planned ${String(total)}`);
   };
 }
 
@@ -259,35 +259,11 @@ describe("run", () => {
   });
 
   describe("when a case fails", () => {
-    it.each([
-      {
-        why: "answers with a failure whose cleanup teardown failed too",
-        outcome: {
-          status: "failed",
-          error: { phase: "fn", message: "kiwi", stack: "at fn", teardownError: MELON },
-          output: "plum\n",
-        },
-        error: {
-          phase: "fn",
-          message: "kiwi",
-          stack: "at fn",
-          teardownError: MELON,
-          output: "plum\n",
-        },
-      },
-      {
-        why: "answers with no measurement",
-        outcome: { status: "ok", result: { status: "ok" }, output: "plum\n" },
-        error: {
-          phase: "child",
-          message: expect.any(String),
-          stack: null,
-          teardownError: null,
-          output: "plum\n",
-        },
-      },
-    ] as const)("gives a failed result when its child $why", async ({ outcome, error }) => {
-      const report = await runHere({ startChild: starter(() => outcome) });
+    it("gives a failed result when its child answers with a failure whose cleanup teardown failed too", async () => {
+      const error = { phase: "fn", message: "kiwi", stack: "at fn", teardownError: MELON } as const;
+      const failsFn = starter(() => ({ status: "failed", error, output: "plum\n" }));
+
+      const report = await runHere({ startChild: failsFn });
 
       expect(report.results).toMatchObject([
         {
@@ -297,7 +273,7 @@ describe("run", () => {
           runtime: { name: "node", version: found("node").version },
           setupPerCall: false,
           status: "failed",
-          error,
+          error: { ...error, output: "plum\n" },
           median: null,
           processes: [{ stats: null }],
         },
@@ -373,7 +349,8 @@ describe("run", () => {
       });
 
       expect(events).toStrictEqual([
-        "planned measure 4",
+        "planned 2",
+        "planned 4",
         "measure",
         "measure",
         "measure",
@@ -496,7 +473,7 @@ describe("runOnce", () => {
         onPlanned: logsPlans(events),
       });
 
-      expect(events).toStrictEqual(["planned once 4", "once", "once", "once", "once"]);
+      expect(events).toStrictEqual(["planned 2", "planned 4", "once", "once", "once", "once"]);
     });
   });
 });

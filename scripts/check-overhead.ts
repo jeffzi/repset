@@ -21,7 +21,7 @@ import { RUNTIMES, type Runtime } from "../src/measure/runtime.js";
 import { DEFAULT_TIMEOUT } from "../src/options.js";
 import type { FailedResult, Report } from "../src/report.js";
 import { isRecord, property, thrownMessage, valueAt } from "../src/utils.js";
-import { BODY_NAMES, type BodyName } from "./check-overhead/bodies.js";
+import { BODY_NAMES, type BodyName, benchName } from "./check-overhead/bodies.js";
 import {
   judgeScenario,
   type Pairs,
@@ -114,14 +114,34 @@ function howRunEnded(subject: string, end: RunEnd): string {
  *   not a report, or holds no failed result.
  */
 function failedResult(reportPath: string): FailedResult | undefined {
-  let parsed: unknown;
+  let report: Report;
   try {
-    parsed = JSON.parse(readFileSync(reportPath, "utf8"));
+    report = readReport(reportPath);
   } catch {
     return undefined;
   }
-  if (!isReport(parsed)) return undefined;
-  return parsed.results.find((result): result is FailedResult => result.status === "failed");
+  return report.results.find((result): result is FailedResult => result.status === "failed");
+}
+
+/**
+ * Reads the report one run of the repset command wrote.
+ *
+ * @param reportPath - The file the command wrote its report to.
+ * @returns The report.
+ * @throws Error naming `reportPath` when the file is missing, unreadable, not JSON, or not a
+ *   report.
+ */
+function readReport(reportPath: string): Report {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(reportPath, "utf8"));
+  } catch (error) {
+    throw new Error(`cannot read the report ${reportPath}: ${thrownMessage(error)}`, {
+      cause: error,
+    });
+  }
+  if (!isReport(parsed)) throw new Error(`${reportPath} is not a report`);
+  return parsed;
 }
 
 /** The message saying `failed`'s case failed, naming the scenario `name`, the phase and the error. */
@@ -174,19 +194,17 @@ function onlyResult(
   name: string,
   reportPath: string,
 ): { readonly report: Report; readonly result: Report["results"][number] } {
-  let parsed: unknown;
+  let report: Report;
   try {
-    parsed = JSON.parse(readFileSync(reportPath, "utf8"));
+    report = readReport(reportPath);
   } catch (error) {
-    throw new Error(`${name}: cannot read the report ${reportPath}: ${thrownMessage(error)}`, {
-      cause: error,
-    });
+    throw new Error(`${name}: ${thrownMessage(error)}`, { cause: error });
   }
-  const result = isReport(parsed) && parsed.results.length === 1 ? parsed.results[0] : undefined;
-  if (!isReport(parsed) || result === undefined) {
-    throw new Error(`${name}: ${reportPath} is not a report holding exactly one result`);
+  const [result, ...others] = report.results;
+  if (result === undefined || others.length > 0) {
+    throw new Error(`${name}: ${reportPath} holds ${String(report.results.length)} results, not 1`);
   }
-  return { report: parsed, result };
+  return { report, result };
 }
 
 /**
@@ -294,7 +312,7 @@ function readRepset(scenario: Scenario): RepsetReading {
       "--runtime",
       scenario.runtime,
       "--filter",
-      `^overhead/${scenario.body}$`,
+      `^${benchName(scenario.body)}$`,
       "--node-import",
       "tsx",
       "--output",

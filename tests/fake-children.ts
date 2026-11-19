@@ -61,14 +61,25 @@ export const ranOnce: Outcome = { status: "ok", result: { status: "ok" }, output
 export type CaseToList = Pick<ListedCase, "id" | "setupPerCall"> &
   Partial<Pick<ListedCase, "name" | "contender">>;
 
+/** The contender `key` of the contest `concat`. */
+export function contender(key: string): CaseToList {
+  return { id: `concat/${key}`, setupPerCall: false, name: "concat", contender: key };
+}
+
+/** A plain case run once per process. */
+export const APPLE: CaseToList = { id: "apple", setupPerCall: false };
+
+/** Another plain case run once per process. */
+export const BANANA: CaseToList = { id: "banana", setupPerCall: false };
+
 /** An outcome in which the child listed `cases`. */
 export function listed(cases: CaseToList[]): Outcome {
   const listedCases = cases.map(
-    ({ id, setupPerCall, name = id, contender = null }): ListedCase => ({
+    ({ id, setupPerCall, name = id, contender: key = null }): ListedCase => ({
       id,
       setupPerCall,
       name,
-      contender,
+      contender: key,
     }),
   );
   return { status: "ok", result: { status: "ok", cases: listedCases }, output: "" };

@@ -31,7 +31,7 @@ import {
   shownPath,
 } from "./select.js";
 import { failureLines, formatTable, paint } from "./table.js";
-import { thrownMessage } from "./utils.js";
+import { errorStack, isInstance, thrownMessage } from "./utils.js";
 
 /** Where the command prints: `process.stdout` and `process.stderr` fit. */
 export interface Output {
@@ -60,7 +60,21 @@ type Signal = (typeof SIGNALS)[number];
 
 /** What delivers the interrupting signals: `process` fits. */
 export interface SignalSource {
+  /**
+   * Listens for an interrupting signal.
+   *
+   * @param signal - The signal to listen for.
+   * @param listener - Called when the signal arrives.
+   * @returns Whatever the source returns; the command ignores it.
+   */
   on(signal: Signal, listener: () => void): unknown;
+  /**
+   * Stops listening for an interrupting signal.
+   *
+   * @param signal - The signal to stop listening for.
+   * @param listener - The listener {@link SignalSource.on} added.
+   * @returns Whatever the source returns; the command ignores it.
+   */
   off(signal: Signal, listener: () => void): unknown;
 }
 
@@ -442,7 +456,7 @@ function encodedStart(text: string, room: number): string {
 export function crashReport(error: unknown, about: CrashAbout): string {
   const version = about.version ?? "unknown";
   const message = thrownMessage(error);
-  const stack = (error instanceof Error ? error.stack : undefined) ?? message;
+  const stack = errorStack(error) ?? message;
   const head = encodeURIComponent(
     `- repset: ${version}\n- OS: ${about.os}\n- Runtime: ${about.runtime}\n\n\`\`\`text\n`,
   );
@@ -556,8 +570,8 @@ async function perform(args: readonly string[], context: Context): Promise<numbe
   } catch (error) {
     context.progress.stop();
     // Commander ends a run that printed the help or the version with an error of exit code 0.
-    if (error instanceof CommanderError) return 0;
-    if (!(error instanceof ConfigError)) throw error;
+    if (isInstance(error, CommanderError)) return 0;
+    if (!isInstance(error, ConfigError)) throw error;
     printError(context.stderr, error, context.colors.stderr);
     return 2;
   }

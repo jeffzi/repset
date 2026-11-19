@@ -23,7 +23,7 @@ import {
   withCaseState,
 } from "./measure/measure.js";
 import { RESULT_FD } from "./result-fd.js";
-import { describe, isInstance, thrownMessage } from "./utils.js";
+import { describe, errorStack, isInstance, thrownMessage } from "./utils.js";
 
 // ---------------------------------------------------------------------------
 // Request and result protocol
@@ -82,13 +82,8 @@ export interface Failed {
   readonly error: ChildError;
 }
 
-export interface ListedCase {
-  readonly id: string;
+export interface ListedCase extends Pick<RegisteredCase, "id" | "name" | "contender"> {
   readonly setupPerCall: boolean;
-  /** The name passed to `bench()`. */
-  readonly name: string;
-  /** The contender's key in the record `fn`, or `null` for a benchmark with one `fn`. */
-  readonly contender: string | null;
 }
 
 export interface Listed {
@@ -204,21 +199,6 @@ export function parseRequest(argument: string): ChildRequest {
       throw new TypeError(
         `the request's mode must be list, measure or once, got ${describe(mode)}`,
       );
-  }
-}
-
-/**
- * Reads the stack of a thrown value without letting the check or the read throw.
- *
- * @param value - The thrown value.
- * @returns The stack when `value` is an `Error` with a string stack; `null` when it is not, or when
- *   the check or the read throws.
- */
-function errorStack(value: unknown): string | null {
-  try {
-    return value instanceof Error && typeof value.stack === "string" ? value.stack : null;
-  } catch {
-    return null;
   }
 }
 

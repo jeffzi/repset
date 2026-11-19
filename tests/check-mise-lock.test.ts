@@ -39,9 +39,11 @@ describe("checkMiseLock", () => {
         "npm:prettier": [entry("3.6.2")],
       });
 
-      expect(() => {
+      const check = (): void => {
         checkMiseLock(text);
-      }).not.toThrow();
+      };
+
+      expect(check).not.toThrow();
     });
   });
 });

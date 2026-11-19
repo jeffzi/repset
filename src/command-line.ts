@@ -66,7 +66,7 @@ const OPTIONS: readonly (readonly [string, string])[] = [
   ["--node-import <module>", "Load this module before each benchmark file on Node, such as tsx"],
   [
     "-o, --output <file>",
-    'Write the JSON report to <file>; "-" writes it to stdout and the table to stderr',
+    `Write the JSON report to <file>; "${OUTPUT_STDOUT}" writes it to stdout and the table to stderr`,
   ],
   ["--list", "List the selected case ids without running them"],
   ["--once", "Run each selected case once on each runtime, without timing, to check it works"],

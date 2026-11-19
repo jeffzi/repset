@@ -144,40 +144,40 @@ describe("repsetReading", () => {
         when: "it exits with another status",
         exit: { status: 2, signal: null },
         text: FAILED_REPORT_TEXT,
-        ending: "exited with status 2",
+        ended: /bun one-call inlined.*\b2\b/v,
       },
       {
         when: "a signal kills it",
         exit: { status: null, signal: "SIGKILL" },
         text: FAILED_REPORT_TEXT,
-        ending: "was killed by SIGKILL",
+        ended: /bun one-call inlined.*\bSIGKILL\b/v,
       },
       {
         when: "it exits 1 and writes no report",
         exit: { status: 1, signal: null },
         text: undefined,
-        ending: "exited with status 1",
+        ended: /bun one-call inlined.*\b1\b/v,
       },
       {
         when: "it exits 1 and its report file holds JSON that is not a report",
         exit: { status: 1, signal: null },
         text: JSON.stringify({ ...report([]), results: FAILED_RESULT }),
-        ending: "exited with status 1",
+        ended: /bun one-call inlined.*\b1\b/v,
       },
       {
         when: "it exits 1 and its report holds no failed result",
         exit: { status: 1, signal: null },
         text: JSON.stringify(report([])),
-        ending: "exited with status 1",
+        ended: /bun one-call inlined.*\b1\b/v,
       },
     ] as const)(
       "throws naming the scenario and how repset ended when $when",
-      ({ exit, text, ending }) => {
+      ({ exit, text, ended }) => {
         const path = reportFile(text);
 
         const read = (): RepsetReading => repsetReading(SCENARIO, exit, path);
 
-        expect(read).toThrow(`bun one-call inlined: repset ${ending}`);
+        expect(read).toThrow(ended);
       },
     );
   });
@@ -259,20 +259,19 @@ describe("checkedBaselineMedian", () => {
       {
         when: "it exits non-zero",
         exit: { status: 3, signal: null },
-        ending: "exited with status 3",
+        ended: /bun one-call inlined.*\b3\b/v,
       },
       {
         when: "a signal kills it",
         exit: { status: null, signal: "SIGTERM" },
-        ending: "was killed by SIGTERM",
+        ended: /bun one-call inlined.*\bSIGTERM\b/v,
       },
     ] as const)(
       "throws naming the scenario and how the baseline ended when $when",
-      ({ exit, ending }) => {
+      ({ exit, ended }) => {
         const median = (): number => checkedBaselineMedian(SCENARIO, exit, "");
 
-        expect(median).toThrow(/bun one-call inlined/v);
-        expect(median).toThrow(ending);
+        expect(median).toThrow(ended);
       },
     );
   });

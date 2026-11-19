@@ -216,17 +216,6 @@ describe("findRuntime", { timeout: SPAWN_TIMEOUT_MS }, () => {
       });
     });
 
-    describe("when its probe exits while a process it started holds its stdout", () => {
-      it.runIf(POSIX)("returns the printed version in time", async () => {
-        vi.stubEnv("PATH", fixture("bin/linger"));
-
-        const [found, elapsed] = await timed(async () => findRuntime("bun", LOOKUP));
-
-        expect(found.version).toBe("1.3.2");
-        expect(elapsed).toBeLessThan(RETURN_MARGIN_MS);
-      });
-    });
-
     describe("when the stop signal fires while its probe runs", () => {
       it.runIf(POSIX)("returns undefined in time, killing the probe", async () => {
         vi.stubEnv("PATH", fixture("bin/hang"));

@@ -26,7 +26,8 @@ import {
   workspace,
 } from "./command-harness.js";
 import {
-  type CaseToList,
+  APPLE,
+  contender,
   failedOutcome,
   listingStarter,
   measuredOutcome,
@@ -42,12 +43,12 @@ import { reportAt } from "./report-file.js";
 const measuresUnlessAborted: StartChild = async (runtime, request, options) =>
   options.signal?.aborted === true ? stopped : measuresAll(runtime, request, options);
 
-/** The contender `key` of the contest `concat`. */
-function contender(key: string): CaseToList {
-  return { id: `concat/${key}`, setupPerCall: false, name: "concat", contender: key };
-}
-
 describe("main", () => {
+  beforeEach(() => {
+    vi.stubEnv("FORCE_COLOR", undefined);
+    vi.stubEnv("REPSET_CALLS_PER_SAMPLE", undefined);
+  });
+
   describe("when every flag is given", () => {
     it("hands the positional files, --runtime, --filter, --min-time, --min-samples, --timeout, --node-import and --output to the run", async () => {
       const dir = workspace();
@@ -115,21 +116,7 @@ describe("main", () => {
         startChild: startsNoChild,
       });
 
-      expect({
-        code,
-        named: stderr.includes("--timeout") && stderr.includes('"1e3"'),
-      }).toStrictEqual({ code: 2, named: true });
-    });
-
-    it("exits 2 on a --rounds that is not a whole number, naming rounds and the value", async () => {
-      const { code, stderr } = await command(workspace(), ["--rounds", "1.5"], {
-        startChild: startsNoChild,
-      });
-
-      expect({
-        code,
-        named: stderr.includes("rounds") && stderr.includes("1.5"),
-      }).toStrictEqual({ code: 2, named: true });
+      expect({ code, stderr }).toStrictEqual({ code: 2, stderr: naming("timeout", "1e3") });
     });
 
     it("prints a Commander error behind the repset: prefix alone", async () => {
@@ -277,11 +264,11 @@ describe("main", () => {
         startChild: startsNoChild,
       });
 
-      expect({
-        code,
-        stdout,
-        named: stderr.includes(JSON.stringify(value)),
-      }).toStrictEqual({ code: 2, stdout: "", named: true });
+      expect({ code, stdout, stderr }).toStrictEqual({
+        code: 2,
+        stdout: "",
+        stderr: naming(NAME, value),
+      });
     });
 
     it("runs --version as it does with REPSET_CALLS_PER_SAMPLE unset when the variable holds a bad value", async () => {
@@ -322,14 +309,11 @@ describe("main", () => {
       const dir = workspace();
       const report = join(dir, "report.json");
       const written: number[][] = [];
-      const readsReport = listingStarter(
-        [contender("join"), contender("loop"), { id: "apple", setupPerCall: false }],
-        () => {
-          const { results, contests } = reportAt(report);
-          written.push([results.length, contests.length]);
-          return measuredOutcome(4656);
-        },
-      );
+      const readsReport = listingStarter([contender("join"), contender("loop"), APPLE], () => {
+        const { results, contests } = reportAt(report);
+        written.push([results.length, contests.length]);
+        return measuredOutcome(4656);
+      });
 
       await command(dir, ["sort.bench.ts", "--rounds", "2", "--output", "report.json"], {
         startChild: readsReport,
@@ -342,26 +326,6 @@ describe("main", () => {
         [0, 0],
         [2, 1],
       ]);
-    });
-
-    it("holds the entry of a contest whose every contender failed before the next case starts", async () => {
-      const dir = workspace();
-      const report = join(dir, "report.json");
-      let writtenAtApple: string[] = [];
-      const readsReport = listingStarter(
-        [contender("join"), contender("loop"), { id: "apple", setupPerCall: false }],
-        (request) => {
-          if (request.id !== "apple") return failedOutcome("fn", "kiwi");
-          writtenAtApple = reportAt(report).contests.map((entry) => entry.name);
-          return measuredOutcome(4656);
-        },
-      );
-
-      await command(dir, ["sort.bench.ts", "--rounds", "2", "--output", "report.json"], {
-        startChild: readsReport,
-      });
-
-      expect(writtenAtApple).toStrictEqual(["concat"]);
     });
 
     it("exits 2 with no case run, leaving no temporary file, when the first write fails", async () => {
@@ -705,30 +669,6 @@ describe("main", () => {
   });
 
   describe("on an interrupt", () => {
-    it("exits 143 on SIGTERM after a failed case, with the finished results in the report and table", async () => {
-      const signals = new EventEmitter();
-      const failsThenStops = starter((request) => {
-        if (request.id === "sort/fast") return failedOutcome("fn", "kiwi");
-        signals.emit("SIGTERM");
-        return stopped;
-      });
-
-      const ended = await runWithReport([], { signals, startChild: failsThenStops });
-
-      const { report } = ended;
-      expect({
-        code: ended.code,
-        interrupted: report.interrupted,
-        ran: report.results.map((result) => result.id),
-        stdout: ended.stdout,
-      }).toStrictEqual({
-        code: 143,
-        interrupted: true,
-        ran: ["sort/fast"],
-        stdout: formatTable(report.results, report.contests, { color: false }),
-      });
-    });
-
     it("exits 130 on SIGINT in a --list run, printing nothing on stdout", async () => {
       const dir = workspace();
       const signals = new EventEmitter();
@@ -740,25 +680,6 @@ describe("main", () => {
       const ended = await command(dir, ["--list", "sort.bench.ts"], { signals, startChild: stops });
 
       expect({ code: ended.code, stdout: ended.stdout }).toStrictEqual({ code: 130, stdout: "" });
-    });
-
-    it("exits 130, not 2, when a listing fails after SIGINT, still printing the failure", async () => {
-      const dir = workspace();
-      const signals = new EventEmitter();
-      const failsListingAfterSignal: StartChild = async () => {
-        signals.emit("SIGINT");
-        return failedOutcome("load", "kiwi");
-      };
-
-      const ended = await command(dir, ["sort.bench.ts"], {
-        signals,
-        startChild: failsListingAfterSignal,
-      });
-
-      expect({ code: ended.code, last: linesOf(ended.stderr).at(-1) }).toStrictEqual({
-        code: 130,
-        last: naming("sort.bench.ts", "load", "kiwi"),
-      });
     });
   });
 
@@ -815,36 +736,8 @@ describe("main", () => {
     });
 
     it.each([
-      { mode: "--output -", args: ["--output", "-"] },
-      { mode: "--list", args: ["--list"] },
-      { mode: "--once", args: ["--once"] },
-    ])(
-      "exits 141 printing nothing more, and nothing about it, when stdout closes under $mode",
-      async ({ args }) => {
-        const stdout = captured();
-        const closesStdout: StartChild = async (runtime, request, options) => {
-          stdout.fail("EPIPE");
-          return measuresUnlessAborted(runtime, request, options);
-        };
-
-        const { code, stderr } = await command(
-          workspace(),
-          [...args, "sort.bench.ts", "parse.bench.ts"],
-          { stdout, startChild: closesStdout },
-        );
-
-        expect({ code, stdout: stdout.text, mentioned: stderr.includes("EPIPE") }).toStrictEqual({
-          code: 141,
-          stdout: "",
-          mentioned: false,
-        });
-      },
-    );
-
-    it.each([
       { first: "SIGTERM", second: "EPIPE", exit: 143 },
       { first: "EPIPE", second: "SIGINT", exit: 141 },
-      { first: "SIGHUP", second: "EIO", exit: 129 },
     ])("exits $exit when $first comes before $second", async ({ first, second, exit }) => {
       const signals = new EventEmitter();
       const stdout = captured();

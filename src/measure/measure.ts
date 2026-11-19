@@ -10,7 +10,7 @@
  * under Bun.
  */
 
-import { isInstance, thrownMessage, timerResolutionMs, valueAt } from "../utils.js";
+import { isInstance, quantile, thrownMessage, timerResolutionMs } from "../utils.js";
 import { type GcDuringTiming, observeCollections, type TimingWindow } from "./collections.js";
 import { runningRuntime } from "./runtime.js";
 import {
@@ -306,7 +306,7 @@ function collectGarbage(gc: NonNullable<typeof globalThis.gc>): void {
 }
 
 /**
- * Keeps a `MeasureError` a collection already raised, and wraps any other thrown value.
+ * Keeps a `MeasureError` already raised as it is, and wraps any other thrown value.
  *
  * @param phase - Where the case failed when `error` is neither a `MeasureError` nor a
  *   `CalibrationError`.
@@ -734,23 +734,6 @@ function sampleEmpty(options: EmptyOptions): EmptyResult {
 // ---------------------------------------------------------------------------
 // Statistics
 // ---------------------------------------------------------------------------
-
-/**
- * Reads quantile `q` of the ascending per-call times, linearly interpolated between the two
- * nearest ranks.
- *
- * @param sorted - The per-call times, ascending.
- * @param q - The quantile, from 0 to 1.
- * @returns The interpolated time.
- * @throws RangeError when no span was stored.
- */
-export function quantile(sorted: ArrayLike<number>, q: number): number {
-  const position = (sorted.length - 1) * q;
-  const lowerRank = Math.floor(position);
-  const lowTime = valueAt(sorted, lowerRank);
-  const highTime = valueAt(sorted, Math.ceil(position));
-  return lowTime + (highTime - lowTime) * (position - lowerRank);
-}
 
 /**
  * Summarizes a sampler's timed spans as per-call statistics in nanoseconds.

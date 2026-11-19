@@ -68,22 +68,27 @@ describe("crashReport", () => {
   });
 
   describe("when the message is long", () => {
-    it("cuts it on a whole character so the link stays within 6000 characters and decodes", () => {
-      const message = Array.from({ length: 3000 }, (_, index) => `${index}🍌`).join("");
+    const message = Array.from({ length: 3000 }, (_, index) => `${index}🍌`).join("");
+    const platform = { version: "1.2.3", os: OS, runtime: RUNTIME };
 
-      const text = crashReport(new Error(message), { version: "1.2.3", os: OS, runtime: RUNTIME });
+    it("keeps the link within 6000 characters, filled to within one code point", () => {
+      const text = crashReport(new Error(message), platform);
 
-      const link = linkOf(text);
+      const length = linkOf(text).length;
+      // One code point encodes to at most 12 characters, so a fuller cut would not have fit.
+      expect(length > 6000 - 12 && length <= 6000).toBe(true);
+    });
+
+    it("cuts the message on a whole character", () => {
+      const text = crashReport(new Error(message), platform);
+
+      // `issueBody` decodes strictly, so a cut through a code point throws here.
       const body = issueBody(text) ?? "";
       const kept = body.slice(
         body.indexOf("```text\n") + "```text\n".length,
         body.lastIndexOf("\n```"),
       );
-      // One code point encodes to at most 12 characters, so a fuller cut would not have fit.
-      expect({
-        full: link.length > 6000 - 12 && link.length <= 6000,
-        start: kept.startsWith("0🍌1🍌") && message.startsWith(kept),
-      }).toStrictEqual({ full: true, start: true });
+      expect(kept.startsWith("0🍌1🍌") && message.startsWith(kept)).toBe(true);
     });
   });
 });

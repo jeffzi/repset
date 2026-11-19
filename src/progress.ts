@@ -3,20 +3,13 @@
  * child elsewhere.
  */
 import type { Output } from "./command.js";
-import { paint } from "./table.js";
+import { GRAPHEMES, paint, visibleWidth } from "./table.js";
 
 /** The frames of the live line's indicator, one per tick. */
 const FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 
 /** How long each indicator frame shows, in milliseconds. */
 const FRAME_MS = 80;
-
-/** Splits the live line into the characters a person sees, so a cut never splits one. */
-const GRAPHEMES = new Intl.Segmenter();
-
-/** The characters a terminal draws two columns wide: East Asian wide and full-width ones, and emoji. */
-const WIDE =
-  /\p{Extended_Pictographic}|[ᄀ-ᅟ⺀-〾ぁ-㏿㐀-䶿一-鿿ꀀ-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦\u{20000}-\u{3FFFF}]/u;
 
 /** Moves the cursor to the start of its row and erases the row. */
 const CLEAR_ROW = "\r\x1b[2K";
@@ -67,7 +60,7 @@ function liveLine(stderr: Output, color: boolean): Progress {
     for (const { segment } of GRAPHEMES.segment(
       `${FRAMES[frame]} [${started}/${total}] ${doing}`,
     )) {
-      room -= WIDE.test(segment) ? 2 : 1;
+      room -= visibleWidth(segment);
       if (room < 0) break;
       kept.push(segment);
     }

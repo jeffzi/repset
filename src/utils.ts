@@ -98,6 +98,21 @@ export function thrownMessage(value: unknown): string {
 }
 
 /**
+ * Reads the stack of a thrown value without letting the check or the read throw.
+ *
+ * @param value - The thrown value.
+ * @returns The stack when `value` is an `Error` with a string stack; `null` when it is not, or when
+ *   the check or the read throws.
+ */
+export function errorStack(value: unknown): string | null {
+  try {
+    return value instanceof Error && typeof value.stack === "string" ? value.stack : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Whether `value` is an instance of `type`, without letting the check throw.
  *
  * @param value - The value to check.
@@ -130,4 +145,20 @@ export function valueAt<T>(values: ArrayLike<T>, index: number): T {
     throw new RangeError(`no value at index ${index}: ${values.length} values`);
   }
   return value;
+}
+
+/**
+ * Reads quantile `q` of ascending values, linearly interpolated between the two nearest ranks.
+ *
+ * @param sorted - The values, ascending.
+ * @param q - The quantile, from 0 to 1.
+ * @returns The interpolated value.
+ * @throws RangeError when `sorted` is empty.
+ */
+export function quantile(sorted: ArrayLike<number>, q: number): number {
+  const position = (sorted.length - 1) * q;
+  const lowerRank = Math.floor(position);
+  const lowValue = valueAt(sorted, lowerRank);
+  const highValue = valueAt(sorted, Math.ceil(position));
+  return lowValue + (highValue - lowValue) * (position - lowerRank);
 }

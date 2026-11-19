@@ -129,18 +129,31 @@ describe("embedCode", () => {
   });
 
   describe("when a later markdown file fails", () => {
-    it("rejects naming that file and leaves the earlier file unchanged", async () => {
-      const valid = `${codeBlock("./x.ts", "stale")}\n`;
-      const dir = createProject({
+    const VALID = `${codeBlock("./x.ts", "stale")}\n`;
+
+    /** A project whose a.md embeds cleanly and whose later b.md embeds a URL, which fails. */
+    function laterFails(): string {
+      return createProject({
         "x.ts": "export const x = 1;\n",
-        "a.md": valid,
+        "a.md": VALID,
         "b.md": `${codeBlock("https://example.invalid/x.ts", "stale")}\n`,
       });
+    }
+
+    it("rejects naming the later file that failed", async () => {
+      const dir = laterFails();
 
       const run = embedCode([join(dir, "a.md"), join(dir, "b.md")]);
 
       await expect(run).rejects.toThrow(join(dir, "b.md"));
-      expect(read(dir, "a.md")).toBe(valid);
+    });
+
+    it("leaves the earlier file unchanged", async () => {
+      const dir = laterFails();
+
+      await expect(embedCode([join(dir, "a.md"), join(dir, "b.md")])).rejects.toBeInstanceOf(Error);
+
+      expect(read(dir, "a.md")).toBe(VALID);
     });
   });
 

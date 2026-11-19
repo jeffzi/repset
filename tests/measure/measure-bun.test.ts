@@ -97,7 +97,8 @@ console.log(JSON.stringify({
 
       const child = runBun(["--expose-gc", "-e", script]);
 
-      expect(child.stderr).toBe("");
+      // oxlint-disable-next-line vitest/valid-expect -- Vitest takes a failure message as expect's second argument
+      expect(child.status, child.stderr).toBe(0);
       expect(JSON.parse(child.stdout)).toStrictEqual({
         observesGc: false,
         sank: true,

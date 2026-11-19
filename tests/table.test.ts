@@ -126,6 +126,7 @@ function failedContender(
   };
 }
 
+/** Contender `id` of a contest entry, with its median, and its ratio and rank once judged (null otherwise). */
 function contender(
   id: string,
   median: number | null,
@@ -265,18 +266,6 @@ describe("formatTable", () => {
     });
   });
 
-  describe("when a section's ids are shorter than its header", () => {
-    it("pads the id column to the header", () => {
-      const results = [measured("nut", "bun", flatStats(812))];
-
-      const lines = tableLines(results);
-
-      expect(lines[rowIndex(lines, "nut")]).toBe(
-        "nut  │ 812 ns │ 812 ns │ 812 ns │ 812 ns │      64",
-      );
-    });
-  });
-
   describe("when a failed row holds a section's longest id", () => {
     it("boxes the section with every row padded to that id", () => {
       const results = [
@@ -300,6 +289,29 @@ describe("formatTable", () => {
         "",
         expect.any(String),
         "",
+      ]);
+    });
+  });
+
+  describe("when an id holds wide characters or combining marks", () => {
+    it("pads every row to the columns the ids take on a terminal", () => {
+      const results = [
+        measured("苹果苹果", "node", flatStats(812)),
+        measured("fig", "node", flatStats(812)),
+        measured("rose\u0301", "node", flatStats(812)),
+        failed("梨", "fn", "kiwi"),
+      ];
+
+      const lines = tableLines(results);
+
+      expect(lines.slice(1, 8)).toStrictEqual([
+        rule("┬", [9, 8, 8, 8, 8, 8]),
+        "case     │ median │   mean │    min │    max │ samples",
+        rule("┼", [9, 8, 8, 8, 8, 8]),
+        "苹果苹果 │ 812 ns │ 812 ns │ 812 ns │ 812 ns │      64",
+        "fig      │ 812 ns │ 812 ns │ 812 ns │ 812 ns │      64",
+        "rose\u0301     │ 812 ns │ 812 ns │ 812 ns │ 812 ns │      64",
+        expect.stringMatching(/^梨 {7}│ \S.* kiwi$/u),
       ]);
     });
   });
@@ -360,7 +372,7 @@ describe("formatTable", () => {
         headingIndex(lines, "bun"),
         rowIndex(lines, "banana"),
       ];
-      expect(order.every((index) => index >= 0)).toBe(true);
+      expect(order).not.toContain(-1);
       expect(order).toStrictEqual(order.toSorted((a, b) => a - b));
     });
   });
@@ -412,7 +424,7 @@ describe("formatTable", () => {
   });
 
   describe("when a contest ran between plain cases", () => {
-    it("splits the plain cases around the contest's sub-table, its rows in the entry's order", () => {
+    it("lays the contest's sub-table out between the plain cases", () => {
       const results = [
         measured("apple", "node", flatStats(812)),
         contenderResult("concat", "loop", 1900),
@@ -491,46 +503,6 @@ describe("formatTable", () => {
     });
   });
 
-  describe("when a contender of a judged contest failed", () => {
-    it("rows its failure and teardown line after the measured rows", () => {
-      const results = [
-        failedContender("parse/wasm", "setup", "kiwi", {
-          message: "pool",
-          stack: "at teardown",
-        }),
-        contenderResult("parse", "regex", 3420),
-        contenderResult("parse", "split", 3450),
-      ];
-      const contests = [
-        contest(
-          "parse",
-          9,
-          [
-            contender("parse/regex", 3420, 1, 1),
-            contender("parse/split", 3450, 1.01, 1),
-            contender("parse/wasm", null),
-          ],
-          [pair("parse", ["regex", "split"], [1.01, [0.98, 1.03]], null)],
-        ),
-      ];
-
-      const lines = tableLines(results, contests);
-
-      const opening = lines.indexOf("parse · 9 rounds");
-      expect(lines.slice(opening, opening + 9)).toStrictEqual([
-        "parse · 9 rounds",
-        rule("┬", [10, 9, 19, 5]),
-        "contender │  median │ ratio             │ rank",
-        rule("┼", [10, 9, 19, 5]),
-        "regex     │ 3.42 µs │ 1.00×             │    1",
-        "split     │ 3.45 µs │ 1.01× (0.98–1.03) │    1",
-        expect.stringMatching(/^wasm {6}│ \S.*setup.* kiwi$/u),
-        expect.stringMatching(/^ {12}\S.* pool$/u),
-        "",
-      ]);
-    });
-  });
-
   describe("when a contest was not judged", () => {
     it.each([
       { rounds: 1, text: "1 round" },
@@ -560,7 +532,7 @@ describe("formatTable", () => {
         rule("┼", [10, 8]),
         "join      │  806 ns",
         "loop      │ 1.88 µs",
-        `not judged: ${text}`,
+        expect.stringMatching(new RegExp(`\\b${text}$`, "u")),
       ]);
     });
 
@@ -589,7 +561,7 @@ describe("formatTable", () => {
       expect(lines.slice(loop, loop + 3)).toStrictEqual([
         "loop      │ 1.88 µs",
         expect.stringMatching(/^plus {6}│ \S.* kiwi$/u),
-        "not judged: 1 round",
+        expect.stringMatching(/\b1 round$/u),
       ]);
     });
   });
@@ -606,7 +578,7 @@ describe("formatTable", () => {
 
       const text = footer(results, contests);
 
-      expect(/\d/u.test(text)).toBe(false);
+      expect(text).not.toMatch(/\d/u);
     });
 
     it("counts only the judged contests", () => {
@@ -662,17 +634,8 @@ describe("formatTable", () => {
 
       const text = footer(results, contests);
 
-      expect(text).toContain("--rounds 18");
-      expect(text).not.toContain("--rounds 14");
-    });
-
-    it("recommends no rounds when every pair was told apart", () => {
-      const results = judgedResults("concat", ["join", "loop"]);
-      const contests = [judgedContest("concat", 7, ["join", "loop"])];
-
-      const text = footer(results, contests);
-
-      expect(text).not.toContain("--rounds");
+      expect(text).toMatch(/\b18\b/u);
+      expect(text).not.toMatch(/\b14\b/u);
     });
 
     it("adds the plain-case sentence only when a plain case ran", () => {

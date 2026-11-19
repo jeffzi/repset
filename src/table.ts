@@ -61,9 +61,26 @@ export function paint(style: Style, text: string, color: boolean): string {
   return color ? styleText(style, text, { validateStream: false }) : text;
 }
 
-/** The columns `text` takes on a terminal, escape codes excluded. */
-function visibleWidth(text: string): number {
-  return stripVTControlCharacters(text).length;
+/** Splits text into the characters a person sees. */
+export const GRAPHEMES = new Intl.Segmenter();
+
+/** The characters a terminal draws two columns wide: East Asian wide and full-width ones, and emoji. */
+const WIDE =
+  /\p{Extended_Pictographic}|[ᄀ-ᅟ⺀-〾ぁ-㏿㐀-䶿一-鿿ꀀ-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦\u{20000}-\u{3FFFF}]/u;
+
+/** The columns `text` takes on a terminal: escape codes none, a wide character two, any other one. */
+export function visibleWidth(text: string): number {
+  let width = 0;
+  for (const { segment } of GRAPHEMES.segment(stripVTControlCharacters(text))) {
+    width += WIDE.test(segment) ? 2 : 1;
+  }
+  return width;
+}
+
+/** Pads `text` with spaces to `width` terminal columns, on the side `align` names. */
+function padTo(text: string, width: number, align: Align): string {
+  const fill = " ".repeat(Math.max(0, width - visibleWidth(text)));
+  return align === "left" ? `${text}${fill}` : `${fill}${text}`;
 }
 
 /** Prints `value` with three significant digits, never in exponent form. */
@@ -124,8 +141,7 @@ function alignRow(
 ): string {
   return row
     .map((cell, column) => {
-      const width = widths[column] ?? 0;
-      return align[column] === "left" ? cell.padEnd(width) : cell.padStart(width);
+      return padTo(cell, widths[column] ?? 0, align[column] ?? "right");
     })
     .join(COLUMN_SEPARATOR);
 }
@@ -207,7 +223,7 @@ function failedLines(
   idWidth: number,
   color: boolean,
 ): string[] {
-  const idCell = `${label.padEnd(idWidth)}${COLUMN_SEPARATOR}`;
+  const idCell = `${padTo(label, idWidth, "left")}${COLUMN_SEPARATOR}`;
   const failure = paint("red", `failed in ${result.error.phase}`, color);
   const cellStart = " ".repeat(visibleWidth(idCell));
   return failureLines(`${idCell}${failure}: `, result.error, cellStart, cellStart);

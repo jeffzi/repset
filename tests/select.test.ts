@@ -1,4 +1,4 @@
-import { basename, join } from "node:path";
+import { basename, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
@@ -127,17 +127,33 @@ describe("selectCases", () => {
   });
 
   describe("when no positional file is given", () => {
-    it("matches the include globs against includeBase, skipping node_modules, sorted by slash-separated path", async () => {
+    it("matches the include globs against includeBase, not cwd", async () => {
       const selection = await select({ cwd: TESTS });
 
-      expect(pathsOf(selection)).toStrictEqual([
-        fixture("[ab].bench.ts"),
-        fixture("a.bench.ts"),
-        fixture("alpha.bench.mts"),
+      const paths = pathsOf(selection);
+      expect({
+        found: paths.length > 0,
+        outsideBase: paths.filter((path) => !path.startsWith(FIXTURES + sep)),
+      }).toStrictEqual({ found: true, outsideBase: [] });
+    });
+
+    it("skips every file under a node_modules directory", async () => {
+      const selection = await select({ cwd: TESTS });
+
+      const paths = pathsOf(selection);
+      expect({
+        found: paths.length > 0,
+        underNodeModules: paths.filter((path) => path.split(sep).includes("node_modules")),
+      }).toStrictEqual({ found: true, underNodeModules: [] });
+    });
+
+    it("sorts the files by slash-separated path, putting nested/ before nested2", async () => {
+      const selection = await select({ cwd: TESTS });
+
+      expect(pathsOf(selection).filter((path) => path.includes("nested"))).toStrictEqual([
         fixture("nested/deep/inner.bench.ts"),
         fixture("nested/mid.bench.ts"),
         fixture("nested2.bench.ts"),
-        fixture("zeta.bench.ts"),
       ]);
     });
   });

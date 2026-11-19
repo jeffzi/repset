@@ -5,7 +5,7 @@
 import { globSync } from "node:fs";
 import { basename, relative, resolve, sep } from "node:path";
 
-import type { ChildError } from "./child.js";
+import type { ChildError, ListedCase } from "./child.js";
 import {
   findRuntime as realFindRuntime,
   type FoundRuntime,
@@ -14,17 +14,11 @@ import {
 } from "./children.js";
 import { ConfigError, isFile, type ResolvedOptions } from "./options.js";
 
-export interface SelectedCase {
-  readonly id: string;
-  /** The name passed to `bench()`. */
-  readonly name: string;
-  /** The contender's key in the record `fn`, or `null` for a benchmark with one `fn`. */
-  readonly contender: string | null;
+export interface SelectedCase extends ListedCase {
   /** The benchmark file that registers the case, as an absolute path. */
   readonly path: string;
   /** The file as the report writes it: relative to the working directory, with `/` separators. */
   readonly file: string;
-  readonly setupPerCall: boolean;
 }
 
 /** The runtimes and cases a run measures, or a stop that came during runtime discovery or listing. */
@@ -162,12 +156,12 @@ function checkUniqueIds(cases: readonly SelectedCase[]): void {
 }
 
 /**
- * Collects what starts a child from the resolved options; `nodeImport` is `undefined` when the
- * options have none.
+ * Collects what starts a child from the resolved options.
  *
  * @param options - The resolved options.
  * @param signal - The caller's stop signal.
- * @returns The options' timeout and resolved `nodeImport`, and the signal.
+ * @returns The options' timeout and resolved `nodeImport`, and the signal; `nodeImport` is
+ *   `undefined` when the options have none.
  */
 export function startOptions(
   options: ResolvedOptions,

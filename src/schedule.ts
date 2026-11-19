@@ -126,21 +126,29 @@ function groupsOf(cases: readonly SelectedCase[]): SelectedCase[][] {
   return groups;
 }
 
+/** The significance level of a contest's family of pairs. */
+export const ALPHA = 0.05;
+
+/** How many distinct pairs `size` cases form. */
+export function pairsOf(size: number): number {
+  return (size * (size - 1)) / 2;
+}
+
 /**
  * Counts the rounds a group runs.
  *
  * @param size - The number of cases in the group.
  * @param rounds - The `rounds` option.
  * @returns 1 for a lone case; otherwise `rounds`, or when unset the smallest `n` with
- *   `4 / 2ⁿ ≤ 0.05 / pairs`, at which a pair can pass Holm's strictest step with one round
+ *   `4 / 2ⁿ ≤ ALPHA / pairs`, at which a pair can pass Holm's strictest step with one round
  *   dissenting.
  */
 function roundsOf(size: number, rounds: number | undefined): number {
   if (size < 2) return 1;
   if (rounds !== undefined) return rounds;
-  const pairs = (size * (size - 1)) / 2;
+  const pairs = pairsOf(size);
   let count = 1;
-  while (4 / 2 ** count > 0.05 / pairs) count += 1;
+  while (4 / 2 ** count > ALPHA / pairs) count += 1;
   return count;
 }
 

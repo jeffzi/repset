@@ -8,7 +8,6 @@ import { fileURLToPath } from "node:url";
 
 import type { ChildError, MeasureRequest } from "./child.js";
 import type { FoundRuntime } from "./children.js";
-import { quantile } from "./measure/measure.js";
 import type { Runtime } from "./measure/runtime.js";
 import type { ResolvedOptions } from "./options.js";
 import type {
@@ -23,10 +22,17 @@ import type {
   Result,
   ResultBase,
 } from "./report.js";
-import { drawRandomSeed, type OnceInput, type StartHandlers, startEach } from "./schedule.js";
+import {
+  ALPHA,
+  drawRandomSeed,
+  type OnceInput,
+  pairsOf,
+  type StartHandlers,
+  startEach,
+} from "./schedule.js";
 import type { SelectedCase } from "./select.js";
 import { hodgesLehmann, holm, signedRankInterval, signedRankP } from "./signed-rank.js";
-import { property, valueAt } from "./utils.js";
+import { property, quantile, valueAt } from "./utils.js";
 
 // ---------------------------------------------------------------------------
 // Run inputs and results
@@ -93,7 +99,7 @@ const NOTHING_MEASURED = {
 // ---------------------------------------------------------------------------
 
 /**
- * Reads the `version` string of a `package.json`, rejecting a file that holds none.
+ * Reads the `version` string of a `package.json`.
  *
  * @param path - The `package.json` to read; the package's own by default.
  * @returns Its `version`.
@@ -129,9 +135,6 @@ function resultBase(selected: SelectedCase, runtime: FoundRuntime): ResultBase {
 // ---------------------------------------------------------------------------
 // Contest judging
 // ---------------------------------------------------------------------------
-
-/** The significance level of a contest's family of pairs. */
-const ALPHA = 0.05;
 
 /** How many timer resolutions per call a pair's ratio must clear past 1 to tell its contenders apart. */
 const RESOLUTIONS = 1.25;
@@ -230,7 +233,7 @@ function contestOf(results: readonly [Result, ...Result[]]): Contest {
   const failed = results
     .filter((result): result is FailedResult => result.status === "failed")
     .map(({ id }) => ({ id, median: null, ratio: null, rank: null }));
-  const pairCount = (measured.length * (measured.length - 1)) / 2;
+  const pairCount = pairsOf(measured.length);
   const head = { name, params: {}, runtime, rounds };
   if (measured.length < 2 || 2 / 2 ** rounds > ALPHA / pairCount) {
     const contenders = measured
@@ -276,6 +279,21 @@ function contestOf(results: readonly [Result, ...Result[]]): Contest {
 // ---------------------------------------------------------------------------
 
 /**
+ * Reads the median of `values`, interpolated between the two middle values when their count is
+ * even.
+ *
+ * @param values - The values, in any order; they are left as they are.
+ * @returns The median.
+ * @throws RangeError when `values` is empty.
+ */
+export function medianOf(values: readonly number[]): number {
+  return quantile(
+    values.toSorted((left, right) => left - right),
+    0.5,
+  );
+}
+
+/**
  * The result of a case whose every process measured, its median the median of theirs.
  *
  * @param selected - The case.
@@ -288,9 +306,13 @@ function measuredResult(
   runtime: FoundRuntime,
   processes: readonly [MeasuredProcess, ...MeasuredProcess[]],
 ): MeasuredResult {
-  const medians = processes.map((process) => process.stats.median).toSorted((a, b) => a - b);
-  const median = quantile(medians, 0.5);
-  return { ...resultBase(selected, runtime), status: "ok", error: null, median, processes };
+  return {
+    ...resultBase(selected, runtime),
+    status: "ok",
+    error: null,
+    median: medianOf(processes.map((process) => process.stats.median)),
+    processes,
+  };
 }
 
 /**
@@ -360,10 +382,11 @@ function resultHandlers(
 }
 
 /**
- * Describes the host; `cpu` and `cores` are `null` when `cpus` lists none.
+ * Describes the host.
  *
  * @param cpus - Lists the host's logical CPUs.
- * @returns The OS, the architecture, the first CPU's model and the CPU count.
+ * @returns The OS, the architecture, the first CPU's model and the CPU count; `cpu` and `cores`
+ *   are `null` when `cpus` lists none.
  */
 function machineOf(cpus: () => readonly { readonly model: string }[]): Machine {
   const listed = cpus();

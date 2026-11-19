@@ -22,14 +22,7 @@ function isReport(value: unknown): value is Report {
   );
 }
 
-/**
- * The report `text` holds.
- *
- * @param text - The JSON the command wrote.
- * @param source - Names where `text` came from in the error thrown when it holds no report.
- * @returns The parsed report.
- * @throws When `text` is not JSON, or holds no schema-1 report.
- */
+/** The schema-1 report the JSON `text` holds; throws naming `source` when it holds none. */
 export function parseReport(text: string, source: string): Report {
   const parsed: unknown = JSON.parse(text);
   if (!isReport(parsed)) throw new Error(`${source} does not hold a schema-1 report`);

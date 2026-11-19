@@ -6,11 +6,12 @@ const EXACT_COUNTS = 53;
 
 /**
  * The null distribution of the sum of the positive weights when each weight's sign is a fair coin
- * flip. Up to 53 weights `mass` holds integer counts of sign assignments over a `total` of 2^n,
- * exact in a double; past that it holds probabilities over a `total` of 1.
+ * flip.
  *
  * @param weights - Nonnegative integer weights.
- * @returns `mass[t]` over `total` is the probability that the positive weights sum to `t`.
+ * @returns `mass[t]` over `total` is the probability that the positive weights sum to `t`. Up to
+ *   {@link EXACT_COUNTS} weights, `mass` holds integer counts of sign assignments over a `total` of
+ *   2^n, exact in a double; past that it holds probabilities over a `total` of 1.
  */
 function nullDistribution(weights: readonly number[]): { mass: number[]; total: number } {
   const exact = weights.length <= EXACT_COUNTS;

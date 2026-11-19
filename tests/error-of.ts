@@ -1,11 +1,4 @@
-/**
- * Returns the Error a synchronous call throws, failing the test when it throws nothing, a non-Error,
- * or returns a promise.
- *
- * @param call - The synchronous call expected to throw.
- * @returns The Error the call threw.
- * @throws {Error} When the call returns a promise, throws a non-Error, or throws nothing.
- */
+/** The Error a synchronous call throws; fails the test on no throw, a non-Error or a promise. */
 export function errorOf(call: () => unknown): Error {
   let returned: unknown;
   try {

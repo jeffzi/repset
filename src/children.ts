@@ -407,7 +407,7 @@ export function childRuntimeFlags(runtime: Runtime, nodeImport: string | undefin
 interface StartedChild {
   readonly child: ChildProcess;
   readonly tail: OutputTail;
-  /** Everything the child wrote on file descriptor 3 so far. */
+  /** Everything the child wrote on file descriptor {@link RESULT_FD} so far. */
   readonly written: () => string;
 }
 
@@ -418,7 +418,9 @@ interface StartedChild {
  * @param request - What the child is asked to do.
  * @param options - The module a Node child imports first, and the file to start in place of the
  *   child entry.
- * @returns The process, the tail of its stdout and stderr, and a reader of its file descriptor 3.
+ * @returns The process, the tail of its stdout and stderr, and a reader of its file descriptor
+ *   {@link RESULT_FD}.
+ * @throws Error What `spawn` throws for an argument it rejects.
  */
 function spawnChild(
   runtime: FoundRuntime,
@@ -429,7 +431,11 @@ function spawnChild(
   const child = spawn(
     runtime.executable,
     [...childRuntimeFlags(runtime.runtime, nodeImport), entry, JSON.stringify(request)],
-    { stdio: ["ignore", "pipe", "pipe", "pipe"], windowsHide: true },
+    {
+      // Stdin is ignored; stdout, stderr and every descriptor up to the result's are pipes.
+      stdio: ["ignore", ...Array.from({ length: RESULT_FD }, () => "pipe" as const)],
+      windowsHide: true,
+    },
   );
   const tail = new OutputTail();
   // Each stream decodes on its own, so a character split across chunks stays whole.
@@ -438,11 +444,11 @@ function spawnChild(
       tail.add(text);
     });
   }
-  const fd3: Buffer[] = [];
+  const resultChunks: Buffer[] = [];
   child.stdio[RESULT_FD]?.on("data", (chunk: Buffer) => {
-    fd3.push(chunk);
+    resultChunks.push(chunk);
   });
-  return { child, tail, written: () => Buffer.concat(fd3).toString("utf8") };
+  return { child, tail, written: () => Buffer.concat(resultChunks).toString("utf8") };
 }
 
 /**
@@ -499,9 +505,9 @@ export function howItEnded(subject: string, ending: Exclude<Ending, { kind: "sto
 // ---------------------------------------------------------------------------
 
 /**
- * Reads the result line a child wrote on file descriptor 3.
+ * Reads the result line a child wrote on file descriptor {@link RESULT_FD}.
  *
- * @param written - Everything the child wrote on file descriptor 3.
+ * @param written - Everything the child wrote on file descriptor {@link RESULT_FD}.
  * @param mode - The mode of the child's request, whose result shape the line must have.
  * @returns The result, or what was wrong with what the child wrote.
  */
@@ -510,7 +516,7 @@ function readResult<M extends Mode>(written: string, mode: M): ResultByMode[M] |
   if (!written.endsWith("\n")) return "its result line has no newline";
   const line = written.slice(0, -1);
   if (line.includes("\n")) {
-    return `it wrote ${written.split("\n").length - 1} lines on file descriptor 3, not one`;
+    return `it wrote ${written.split("\n").length - 1} lines on file descriptor ${RESULT_FD}, not one`;
   }
   let value: unknown;
   try {

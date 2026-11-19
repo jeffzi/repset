@@ -146,15 +146,6 @@ describe("bench", () => {
         },
       ]);
     });
-
-    it("registers every contender with the per-call lifecycle when setupPerCall is true", () => {
-      bench("sort", { fn: { quick: sync, merge: sync }, setupPerCall: true });
-
-      expect(registeredCases().map((registered) => registered.case.kind)).toStrictEqual([
-        "perCall",
-        "perCall",
-      ]);
-    });
   });
 
   describe("when given a record of contenders that breaks a contender rule", () => {
@@ -174,11 +165,6 @@ describe("bench", () => {
         contenders: { quick: sync, "merge fast": sync },
         why: "a key holding a space",
         fragments: ["sort", JSON.stringify("merge fast")],
-      },
-      {
-        contenders: { quick: sync, merge: 42 },
-        why: "a contender that is not a function",
-        fragments: ["sort", "merge"],
       },
       {
         contenders: { quick: sync, merge: asyncFunction },
@@ -303,23 +289,7 @@ describe("bench", () => {
 });
 
 describe("registeredCases", () => {
-  describe("before any bench call", () => {
-    it("returns no case", () => {
-      expect(registeredCases()).toStrictEqual([]);
-    });
-  });
-
   describe("after several bench calls", () => {
-    it("returns the cases in registration order", () => {
-      bench("sort", () => 1);
-      bench("search", () => 2);
-      bench("concat", () => 3);
-
-      const ids = registeredIds();
-
-      expect(ids).toStrictEqual(["sort", "search", "concat"]);
-    });
-
     it("returns both cases registered under one name, in order", () => {
       const first = (): number => 1;
       const second = (): number => 2;

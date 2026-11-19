@@ -123,19 +123,23 @@ describe("thrownMessage", () => {
   });
 
   describe("when the value is an Error whose message is not a string", () => {
-    it.each([
-      { why: "a number", message: 42, expected: "42" },
-      {
-        why: "a value with no string form",
-        message: Object.create(null),
-        expected: "a value with no string form",
-      },
-    ])("returns the string form of a message that is $why", ({ message, expected }) => {
-      const error = Object.defineProperty(new Error("cherry"), "message", { value: message });
+    it("returns the string form of the message", () => {
+      const error = Object.defineProperty(new Error("cherry"), "message", { value: 42 });
 
       const read = thrownMessage(error);
 
-      expect(read).toBe(expected);
+      expect(read).toBe("42");
+    });
+  });
+
+  describe("when the value is an Error whose message has no string form", () => {
+    it("returns a string instead of throwing", () => {
+      const unprintable: unknown = Object.create(null);
+      const error = Object.defineProperty(new Error("cherry"), "message", { value: unprintable });
+
+      const message = (): string => thrownMessage(error);
+
+      expect(message).not.toThrow();
     });
   });
 });

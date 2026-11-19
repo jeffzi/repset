@@ -14,7 +14,7 @@ import {
   type Command,
   commandLine,
   noColorGiven,
-  OUT_STDOUT,
+  OUTPUT_STDOUT,
   parseCommand,
   REPOSITORY,
 } from "./command-line.js";
@@ -90,7 +90,7 @@ export interface Stdout extends Output {
 
 /** What the command reads from and prints to, and the functions it starts children with. */
 export interface CommandIo extends ChildFunctionOverrides {
-  /** The directory positional files, `--out` and `--config` are relative to; `process.cwd()` by default. */
+  /** The directory positional files, `--output` and `--config` are relative to; `process.cwd()` by default. */
   readonly cwd?: string | undefined;
   readonly stdout?: Stdout | undefined;
   readonly stderr?: Output | undefined;
@@ -247,7 +247,7 @@ function writeReportOrFail(path: string, shown: string, report: Report): void {
 }
 
 /**
- * The callbacks that write the report while the run goes on, when `--out` names a file.
+ * The callbacks that write the report while the run goes on, when `--output` names a file.
  *
  * @param path - The report file, as an absolute path.
  * @param shown - The report file as error messages show it.
@@ -295,10 +295,12 @@ function reportWrites(path: string, shown: string): Pick<RunInput, "onSelected" 
  */
 async function measure(command: Command, context: Context): Promise<number> {
   const { stdout, stderr, progress } = context;
-  const { out } = command;
-  const toStdout = out === OUT_STDOUT;
+  const { output } = command;
+  const toStdout = output === OUTPUT_STDOUT;
   const file =
-    out === undefined || toStdout ? undefined : { name: out, path: resolve(context.cwd, out) };
+    output === undefined || toStdout
+      ? undefined
+      : { name: output, path: resolve(context.cwd, output) };
   const writes = file === undefined ? undefined : reportWrites(file.path, file.name);
   const report = await run({
     ...command.input,

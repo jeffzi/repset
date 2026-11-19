@@ -50,7 +50,7 @@ const measuresUnlessAborted: StartChild = async (runtime, request, options) =>
 
 describe("main", () => {
   describe("when every flag is given", () => {
-    it("hands the positional files, --runtime, --filter, --min-time, --min-samples, --timeout, --node-import and --out to the run", async () => {
+    it("hands the positional files, --runtime, --filter, --min-time, --min-samples, --timeout, --node-import and --output to the run", async () => {
       const dir = workspace();
 
       const { code } = await command(dir, [
@@ -67,7 +67,7 @@ describe("main", () => {
         "1234",
         "--node-import",
         "tsx",
-        "--out",
+        "--output",
         "report.json",
       ]);
 
@@ -95,7 +95,7 @@ describe("main", () => {
   describe("when the command line is wrong", () => {
     it.each([
       { why: "an empty number", args: ["--min-time", ""] },
-      { why: "--metric-lines with --out -", args: ["--metric-lines", "--out", "-"] },
+      { why: "--metric-lines with --output -", args: ["--metric-lines", "--output", "-"] },
       { why: "--list with --once", args: ["--list", "--once"] },
     ])(
       "exits 2 on $why with a message on stderr, nothing on stdout, no child",
@@ -227,7 +227,7 @@ describe("main", () => {
         return measuresAll(runtime, request, options);
       });
 
-      await command(dir, ["sort.bench.ts", "parse.bench.ts", "--out", "report.json"], {
+      await command(dir, ["sort.bench.ts", "parse.bench.ts", "--output", "report.json"], {
         stdout,
         startChild: watchesStdout,
       });
@@ -291,7 +291,7 @@ describe("main", () => {
     });
   });
 
-  describe("when --out names a file", () => {
+  describe("when --output names a file", () => {
     it("writes the report once listing passed and again after every result", async () => {
       const dir = workspace();
       const report = join(dir, "report.json");
@@ -303,7 +303,7 @@ describe("main", () => {
 
       await command(
         dir,
-        ["--runtime", "node,bun", "sort.bench.ts", "parse.bench.ts", "--out", "report.json"],
+        ["--runtime", "node,bun", "sort.bench.ts", "parse.bench.ts", "--output", "report.json"],
         { startChild: readsReport },
       );
 
@@ -317,7 +317,7 @@ describe("main", () => {
       const dir = workspace();
       blockWrites(join(dir, "out/report.json"));
 
-      const { code } = await command(dir, ["sort.bench.ts", "--out", "out/report.json"], {
+      const { code } = await command(dir, ["sort.bench.ts", "--output", "out/report.json"], {
         startChild: startsNoCase,
       });
 
@@ -342,7 +342,7 @@ describe("main", () => {
 
       const { code, stderr } = await command(
         dir,
-        ["--runtime", "node,bun", "sort.bench.ts", "parse.bench.ts", "--out", "out/report.json"],
+        ["--runtime", "node,bun", "sort.bench.ts", "parse.bench.ts", "--output", "out/report.json"],
         { startChild: failsOneWrite },
       );
 
@@ -369,7 +369,7 @@ describe("main", () => {
 
       const { code, stderr } = await command(
         dir,
-        ["sort.bench.ts", "parse.bench.ts", "--out", "out/report.json"],
+        ["sort.bench.ts", "parse.bench.ts", "--output", "out/report.json"],
         { startChild: blocksLastWrites },
       );
 
@@ -380,10 +380,10 @@ describe("main", () => {
     });
   });
 
-  describe("when --out is -", () => {
+  describe("when --output is -", () => {
     /** Runs two files with the report on stdout. */
     async function runToStdout(): Promise<Ended> {
-      return command(workspace(), ["sort.bench.ts", "parse.bench.ts", "--out", "-"]);
+      return command(workspace(), ["sort.bench.ts", "parse.bench.ts", "--output", "-"]);
     }
 
     it("prints the report on stdout, exiting 0", async () => {
@@ -413,7 +413,7 @@ describe("main", () => {
       });
       const { code, stderr } = await command(
         dir,
-        ["sort.bench.ts", "parse.bench.ts", "--metric-lines", "--out", "report.json"],
+        ["sort.bench.ts", "parse.bench.ts", "--metric-lines", "--output", "report.json"],
         { stdout, startChild: watchesStdout },
       );
       const { results } = reportAt(join(dir, "report.json"));
@@ -632,12 +632,12 @@ describe("main", () => {
       });
     });
 
-    it("clears the live line before printing the table under --out -", async () => {
+    it("clears the live line before printing the table under --output -", async () => {
       const stderr = terminalOf(80);
 
       const { stdout } = await command(
         workspace(),
-        ["sort.bench.ts", "parse.bench.ts", "--out", "-"],
+        ["sort.bench.ts", "parse.bench.ts", "--output", "-"],
         { startChild: failsParse, stderr },
       );
 
@@ -693,7 +693,7 @@ describe("main", () => {
 
       const ended = await command(
         dir,
-        ["sort.bench.ts", "parse.bench.ts", "--out", "report.json"],
+        ["sort.bench.ts", "parse.bench.ts", "--output", "report.json"],
         { signals, startChild: failsThenStops },
       );
 
@@ -768,7 +768,7 @@ describe("main", () => {
             "parse.bench.ts",
             "pear.bench.ts",
             "--metric-lines",
-            "--out",
+            "--output",
             "report.json",
           ],
           { stdout, startChild: failsStdoutInParse },
@@ -798,7 +798,7 @@ describe("main", () => {
 
       const { code } = await command(
         dir,
-        ["sort.bench.ts", "parse.bench.ts", "--out", "report.json"],
+        ["sort.bench.ts", "parse.bench.ts", "--output", "report.json"],
         { stdout: closed("EPIPE") },
       );
 
@@ -812,7 +812,7 @@ describe("main", () => {
 
     it.each([
       { mode: "the table", args: [] },
-      { mode: "--out -", args: ["--out", "-"] },
+      { mode: "--output -", args: ["--output", "-"] },
       { mode: "--metric-lines", args: ["--metric-lines"] },
       { mode: "--list", args: ["--list"] },
       { mode: "--once", args: ["--once"] },

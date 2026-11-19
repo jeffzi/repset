@@ -14,9 +14,9 @@ export type StrictOmit<T, K extends keyof T> = Omit<T, K>;
 /** Flags that cannot be given together, by name without the leading dashes. */
 const EXCLUSIVE: readonly (readonly [string, string])[] = [
   ["list", "once"],
-  ["list", "out"],
+  ["list", "output"],
   ["list", "metric-lines"],
-  ["once", "out"],
+  ["once", "output"],
   ["once", "metric-lines"],
 ];
 
@@ -26,15 +26,15 @@ const DECIMAL = /^\d+(?:\.\d+)?$/;
 /** The environment variable that fixes the calls per sample of every measuring child of a run. */
 export const CALLS_PER_SAMPLE = "REPSET_CALLS_PER_SAMPLE";
 
-/** The `--out` value that sends the report to stdout instead of a file. */
-export const OUT_STDOUT = "-";
+/** The `--output` value that sends the report to stdout instead of a file. */
+export const OUTPUT_STDOUT = "-";
 
 /** The README's common commands; keep them in step with it. */
 const EXAMPLES: readonly (readonly [string, string])[] = [
   ["repset benchmarks/sort.bench.ts", "Runs the benchmarks of that file only"],
   ["repset --filter '^sort/'", "Runs the cases whose id matches the regular expression"],
   ["repset --runtime node,bun", "Runs every case on Node, then on Bun"],
-  ["repset --out report.json", "Writes the JSON report to report.json"],
+  ["repset --output report.json", "Writes the JSON report to report.json"],
   ["repset --once", "Runs every case once, without timing, to check it works"],
 ];
 
@@ -50,8 +50,8 @@ interface CommandInput extends StrictOmit<OptionsInput, "cwd"> {
 export interface Command {
   readonly mode: "run" | "list" | "once";
   readonly input: CommandInput;
-  /** The `--out` value as written: a file relative to the working directory, or `-` for stdout. */
-  readonly out: string | undefined;
+  /** The `--output` value as written: a file relative to the working directory, or `-` for stdout. */
+  readonly output: string | undefined;
   readonly metricLines: boolean;
   /** The calls per sample `REPSET_CALLS_PER_SAMPLE` fixes for a run, or `undefined` when unset. */
   readonly callsPerSample: number | undefined;
@@ -142,13 +142,16 @@ export function commandLine(version: string, stdout: Output, colors: Colors): Pa
     .option("--min-samples <n>", "Timing takes at least this many samples")
     .option("--timeout <ms>", "The longest one child may run")
     .option("--node-import <module>", "A module Node children import first, such as tsx")
-    .option("--out <file>", "Write the report there; - writes it to stdout and the table to stderr")
+    .option(
+      "-o, --output <file>",
+      "Write the report there; - writes it to stdout and the table to stderr",
+    )
     .option("--metric-lines", "Print one METRIC line per result on stdout and the table to stderr")
     .option("--list", "Print the selected case ids and exit")
     .option("--once", "Run every selected case once per runtime, with no timing")
     .option("--config <file>", "Read this config file instead of looking for one")
     .option("--no-color", "Print no color, even on a terminal")
-    .helpOption("--help", "Print this help")
+    .helpOption("-h, --help", "Print this help")
     .version(version, "--version", "Print the version")
     .addHelpText("after", helpEpilogue(colors.stdout))
     .configureHelp(createHelpConfig())
@@ -176,7 +179,9 @@ export function commandLine(version: string, stdout: Output, colors: Colors): Pa
  */
 export function noColorGiven(args: readonly string[]): boolean {
   const options = commandLine("", { write: () => true }, { stdout: false, stderr: false }).options;
-  const takesValue = new Set(options.filter((option) => option.required).map(({ long }) => long));
+  const takesValue = new Set(
+    options.filter((option) => option.required).flatMap(({ short, long }) => [short, long]),
+  );
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--") return false;
@@ -210,8 +215,8 @@ export function parseCommand(args: readonly string[], parser: Parser): Command {
       .filter((option) => parser.getOptionValueSource(option.attributeName()) === "cli")
       .map((option) => option.name()),
   );
-  if (given.has("metric-lines") && text("out") === OUT_STDOUT) {
-    throw new ConfigError("--metric-lines cannot be used with --out -");
+  if (given.has("metric-lines") && text("output") === OUTPUT_STDOUT) {
+    throw new ConfigError("--metric-lines cannot be used with --output -");
   }
   const conflict = EXCLUSIVE.find(([one, other]) => given.has(one) && given.has(other));
   if (conflict !== undefined) {
@@ -232,7 +237,7 @@ export function parseCommand(args: readonly string[], parser: Parser): Command {
       nodeImport: text("nodeImport"),
       config: text("config"),
     },
-    out: text("out"),
+    output: text("output"),
     metricLines: given.has("metric-lines"),
     callsPerSample: fixedCallsPerSample(process.env[CALLS_PER_SAMPLE]),
   };

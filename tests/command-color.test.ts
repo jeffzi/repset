@@ -35,7 +35,7 @@ describe("main", () => {
       const dir = workspace();
       const ended = await command(
         dir,
-        ["sort.bench.ts", "parse.bench.ts", "--out", "report.json", ...args],
+        ["sort.bench.ts", "parse.bench.ts", "--output", "report.json", ...args],
         { startChild: failsParse, ...io },
       );
       return { ...ended, results: reportAt(join(dir, "report.json")).results };
@@ -81,10 +81,10 @@ describe("main", () => {
       expect(ended.stdout).toBe(formatTable(ended.results, { color: false }));
     });
 
-    it("colors the table on a terminal stderr under --out -, whatever stdout is", async () => {
+    it("colors the table on a terminal stderr under --output -, whatever stdout is", async () => {
       const { stdout, stderr } = await command(
         workspace(),
-        ["sort.bench.ts", "parse.bench.ts", "--out", "-"],
+        ["sort.bench.ts", "parse.bench.ts", "--output", "-"],
         { startChild: failsParse, stdout: captured(), stderr: terminal() },
       );
 
@@ -124,6 +124,7 @@ describe("main", () => {
     it.each([
       { why: "after a -- terminator", args: ["--", "--no-color"] },
       { why: "as the value of a value flag", args: ["--filter", "--no-color", "--banana"] },
+      { why: "as the value of a short value flag", args: ["-o", "--no-color", "--banana"] },
     ])("keeps color on a terminal stderr when --no-color comes $why", async ({ args }) => {
       const { code, stderr } = await command(workspace(), args, {
         startChild: startsNoChild,

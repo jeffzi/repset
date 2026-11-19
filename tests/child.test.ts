@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { join } from "node:path";
 import { Readable } from "node:stream";
 import { text } from "node:stream/consumers";
 import { fileURLToPath } from "node:url";
@@ -8,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { listCases, measureCase, parseRequest, runOnce, type ChildResult } from "../src/child.js";
+import { fixturePath } from "./fixture-path.js";
 import { enabledGc } from "./measure/fixtures.js";
 import { resetRegistry } from "./registry.js";
 import { KILL_AFTER_MS, SPAWN_TIMEOUT_MS } from "./spawn-limits.js";
@@ -15,11 +15,9 @@ import { KILL_AFTER_MS, SPAWN_TIMEOUT_MS } from "./spawn-limits.js";
 /** The slot where the `lifecycle.ts` fixture records each callback it runs. */
 const CALLS = Symbol.for("repset.child-calls");
 
-const FIXTURES = fileURLToPath(new URL("fixtures/child/", import.meta.url));
-
 /** The absolute path of the child fixture `name`. */
 function fixture(name: string): string {
-  return join(FIXTURES, name);
+  return fixturePath("child", name);
 }
 
 const FILE = fixture("three-cases.ts");

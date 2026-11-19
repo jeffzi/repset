@@ -7,9 +7,10 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_MIN_SAMPLES, DEFAULT_MIN_TIME } from "../src/measure/measure.js";
 import { ConfigError, quotedList, resolveOptions, type OptionsInput } from "../src/options.js";
 import { expectConfigError } from "./config-error.js";
+import { fixturePath } from "./fixture-path.js";
 import { SPAWN_TIMEOUT_MS } from "./spawn-limits.js";
 
-const FIXTURES = fileURLToPath(new URL("fixtures/config", import.meta.url));
+const FIXTURES = fixturePath("config");
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 

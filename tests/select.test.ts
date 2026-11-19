@@ -3,20 +3,23 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import type { FoundRuntime, LookupOptions, Outcome } from "../src/children.js";
+import type { FoundRuntime, LookupOptions } from "../src/children.js";
 import { ConfigError, type ResolvedOptions } from "../src/options.js";
 import { selectCases, type SelectedCase, type Selection } from "../src/run.js";
 import { expectConfigError } from "./config-error.js";
 import {
+  failedOutcome,
   findAny,
   found,
   type FindRuntime,
   listed,
   type Runtime,
   type StartChild,
+  stopped,
 } from "./fake-children.js";
+import { fixturePath } from "./fixture-path.js";
 
-const FIXTURES = fileURLToPath(new URL("fixtures/discovery", import.meta.url));
+const FIXTURES = fixturePath("discovery");
 
 const TESTS = fileURLToPath(new URL(".", import.meta.url));
 
@@ -51,11 +54,7 @@ const onePerFile: StartChild = async (_runtime, request) =>
   listed([{ id: basename(request.file), setupPerCall: false }]);
 
 /** A listing outcome that fails, which fails the selection if its child is started. */
-const FAILED: Outcome = {
-  status: "failed",
-  error: { phase: "load", message: "kiwi", stack: null, teardownError: null },
-  output: "",
-};
+const FAILED = failedOutcome("load", "kiwi");
 
 /** A runtime lookup that finds node and is stopped while looking for bun. */
 function stoppedOnBun(
@@ -328,7 +327,7 @@ describe("selectCases", () => {
       const stopping: StartChild = async (_runtime, request) => {
         if (basename(request.file) === "zeta.bench.ts") return FAILED;
         controller.abort();
-        return { status: "stopped", output: "" };
+        return stopped;
       };
 
       const selection = await select({

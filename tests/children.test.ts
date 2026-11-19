@@ -1,6 +1,5 @@
 import { copyFileSync, existsSync } from "node:fs";
 import { extname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -16,11 +15,12 @@ import {
 import { expectConfigError } from "./config-error.js";
 import { errorOf } from "./error-of.js";
 import { MELON } from "./fake-children.js";
+import { fixturePath } from "./fixture-path.js";
 import { requiresRealBunHere, runtimesHere } from "./real-bun.js";
 import { KILL_AFTER_MS, POSIX, RETURN_MARGIN_MS, SPAWN_TIMEOUT_MS } from "./spawn-limits.js";
 import { suiteTemporaryDir, temporaryDir } from "./temporary-dir.js";
 
-const FIXTURES = fileURLToPath(new URL("fixtures/children/", import.meta.url));
+const FIXTURES = fixturePath("children");
 
 /** The absolute path of the children fixture `name`. */
 function fixture(name: string): string {
@@ -29,7 +29,7 @@ function fixture(name: string): string {
 
 /** The absolute path of the benchmark file `name` the child tests use. */
 function benchFile(name: string): string {
-  return fileURLToPath(new URL(`fixtures/child/${name}`, import.meta.url));
+  return fixturePath("child", name);
 }
 
 /** How long after a lookup or a child starts its stop signal fires. */

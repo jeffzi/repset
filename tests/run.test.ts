@@ -1,5 +1,5 @@
 import { basename, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { pathToFileURL } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -20,18 +20,20 @@ import {
   startsNoChild,
   stopped,
 } from "./fake-children.js";
+import { fixturePath } from "./fixture-path.js";
 
-const DISCOVERY = fileURLToPath(new URL("fixtures/discovery", import.meta.url));
+const DISCOVERY = fixturePath("discovery");
 
-const RUN_FIXTURES = fileURLToPath(new URL("fixtures/run", import.meta.url));
+const RUN_FIXTURES = fixturePath("run");
 
 /** A stand-in for the package's `package.json` whose version is `1.2.3`. */
 const VERSIONED = join(RUN_FIXTURES, "version.json");
 
+/** The config fixtures that import a module beside them. */
+const NESTED_CONFIGS = fixturePath("config", "nested");
+
 /** A config file that sets `nodeImport` to `./loader.mjs`, beside which `loader.mjs` resolves. */
-const DOT_IMPORT_CONFIG = fileURLToPath(
-  new URL("fixtures/config/nested/dot-import.ts", import.meta.url),
-);
+const DOT_IMPORT_CONFIG = join(NESTED_CONFIGS, "dot-import.ts");
 
 const STARTED_AT = new Date("2026-11-01T12:00:00.000Z");
 
@@ -422,7 +424,7 @@ describe("run", () => {
 
   describe("when the config file sets a relative nodeImport", () => {
     it("starts every child under timeout with the nodeImport as the file URL beside the config", async () => {
-      const resolved = new URL("fixtures/config/nested/loader.mjs", import.meta.url).href;
+      const resolved = pathToFileURL(join(NESTED_CONFIGS, "loader.mjs")).href;
       const echoOptions: StartChild = async (_runtime, request, options) => {
         const asked = `${request.mode} ${String(options.nodeImport)} ${String(options.timeout)}`;
         return request.mode === "list"

@@ -1,17 +1,15 @@
-import { join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Result } from "../src/report.js";
 import { formatTable } from "../src/table.js";
 import {
   captured,
   command,
-  type CommandIo,
-  type Ended,
   failsParse,
   measuresAll,
+  runToStdout,
+  runWithReport,
   starter,
   stubColorTerminalEnv,
   styled,
@@ -19,7 +17,6 @@ import {
   workspace,
 } from "./command-harness.js";
 import { failedOutcome, startsNoChild } from "./fake-children.js";
-import { parseReport, reportAt } from "./report-file.js";
 
 describe("main", () => {
   describe("when a stream would show color", () => {
@@ -27,33 +24,22 @@ describe("main", () => {
       stubColorTerminalEnv();
     });
 
-    /** Runs two files with the report in `report.json`, returning what ended and the results. */
-    async function runTable(
-      args: readonly string[],
-      io: CommandIo,
-    ): Promise<Ended & { readonly results: readonly Result[] }> {
-      const dir = workspace();
-      const ended = await command(
-        dir,
-        ["sort.bench.ts", "parse.bench.ts", "--output", "report.json", ...args],
-        { startChild: failsParse, ...io },
-      );
-      return { ...ended, results: reportAt(join(dir, "report.json")).results };
-    }
-
     it("prints the colored table on a terminal stdout", async () => {
-      const ended = await runTable([], { stdout: terminal() });
+      const ended = await runWithReport([], { startChild: failsParse, stdout: terminal() });
 
       expect({ styled: styled(ended.stdout), stdout: ended.stdout }).toStrictEqual({
         styled: true,
-        stdout: formatTable(ended.results, { color: true }),
+        stdout: formatTable(ended.report.results, { color: true }),
       });
     });
 
     it("prints the plain table on a terminal stdout under --no-color", async () => {
-      const ended = await runTable(["--no-color"], { stdout: terminal() });
+      const ended = await runWithReport(["--no-color"], {
+        startChild: failsParse,
+        stdout: terminal(),
+      });
 
-      expect(ended.stdout).toBe(formatTable(ended.results, { color: false }));
+      expect(ended.stdout).toBe(formatTable(ended.report.results, { color: false }));
     });
 
     it.each([
@@ -62,33 +48,36 @@ describe("main", () => {
     ])("prints the plain table on a terminal stdout when $name", async ({ variable, value }) => {
       vi.stubEnv(variable, value);
 
-      const ended = await runTable([], { stdout: terminal() });
+      const ended = await runWithReport([], { startChild: failsParse, stdout: terminal() });
 
-      expect(ended.stdout).toBe(formatTable(ended.results, { color: false }));
+      expect(ended.stdout).toBe(formatTable(ended.report.results, { color: false }));
     });
 
     it("prints the plain table on a terminal stdout that reports one bit of color", async () => {
       const stdout = Object.assign(terminal(), { getColorDepth: () => 1 });
 
-      const ended = await runTable([], { stdout });
+      const ended = await runWithReport([], { startChild: failsParse, stdout });
 
-      expect(ended.stdout).toBe(formatTable(ended.results, { color: false }));
+      expect(ended.stdout).toBe(formatTable(ended.report.results, { color: false }));
     });
 
     it("prints the plain table on a stdout that is not a terminal while stderr is one", async () => {
-      const ended = await runTable([], { stdout: captured(), stderr: terminal() });
+      const ended = await runWithReport([], {
+        startChild: failsParse,
+        stdout: captured(),
+        stderr: terminal(),
+      });
 
-      expect(ended.stdout).toBe(formatTable(ended.results, { color: false }));
+      expect(ended.stdout).toBe(formatTable(ended.report.results, { color: false }));
     });
 
     it("colors the table on a terminal stderr under --output -, whatever stdout is", async () => {
-      const { stdout, stderr } = await command(
-        workspace(),
-        ["sort.bench.ts", "parse.bench.ts", "--output", "-"],
-        { startChild: failsParse, stdout: captured(), stderr: terminal() },
-      );
+      const { results, stderr } = await runToStdout({
+        startChild: failsParse,
+        stdout: captured(),
+        stderr: terminal(),
+      });
 
-      const { results } = parseReport(stdout, "stdout");
       expect({
         results: results.length,
         tableEnd: stderr.endsWith(formatTable(results, { color: true })),
@@ -137,9 +126,9 @@ describe("main", () => {
     it("prints the colored table on a terminal stdout when NO_COLOR is empty", async () => {
       vi.stubEnv("NO_COLOR", "");
 
-      const ended = await runTable([], { stdout: terminal() });
+      const ended = await runWithReport([], { startChild: failsParse, stdout: terminal() });
 
-      expect(ended.stdout).toBe(formatTable(ended.results, { color: true }));
+      expect(ended.stdout).toBe(formatTable(ended.report.results, { color: true }));
     });
 
     it("keeps the METRIC lines on stdout plain while the live line shows on a terminal stderr", async () => {

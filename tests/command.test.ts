@@ -18,6 +18,8 @@ import {
   linesOf,
   measuresAll,
   naming,
+  runToStdout,
+  runWithReport,
   starter,
   startsNoCase,
   stubColorTerminalEnv,
@@ -33,7 +35,7 @@ import {
   startsNoChild,
   stopped,
 } from "./fake-children.js";
-import { parseReport, reportAt } from "./report-file.js";
+import { reportAt } from "./report-file.js";
 
 /** The metric lines `results` print, each ending with a newline. */
 function metricText(results: readonly Result[]): string {
@@ -219,7 +221,6 @@ describe("main", () => {
 
   describe("when a run measures", () => {
     it("prints the table on stdout once, when the run ends", async () => {
-      const dir = workspace();
       const stdout = captured();
       const printedDuringRun: string[] = [];
       const watchesStdout = starter((request, runtime, options) => {
@@ -227,14 +228,11 @@ describe("main", () => {
         return measuresAll(runtime, request, options);
       });
 
-      await command(dir, ["sort.bench.ts", "parse.bench.ts", "--output", "report.json"], {
-        stdout,
-        startChild: watchesStdout,
-      });
+      const { report } = await runWithReport([], { stdout, startChild: watchesStdout });
 
       expect({ printedDuringRun, stdout: stdout.text }).toStrictEqual({
         printedDuringRun: ["", ""],
-        stdout: formatTable(reportAt(join(dir, "report.json")).results, { color: false }),
+        stdout: formatTable(report.results, { color: false }),
       });
     });
   });
@@ -381,15 +379,9 @@ describe("main", () => {
   });
 
   describe("when --output is -", () => {
-    /** Runs two files with the report on stdout. */
-    async function runToStdout(): Promise<Ended> {
-      return command(workspace(), ["sort.bench.ts", "parse.bench.ts", "--output", "-"]);
-    }
-
     it("prints the report on stdout, exiting 0", async () => {
-      const { code, stdout } = await runToStdout();
+      const { code, results } = await runToStdout();
 
-      const { results } = parseReport(stdout, "stdout");
       expect({ code, results: results.length }).toStrictEqual({ code: 0, results: 2 });
     });
   });
@@ -404,19 +396,17 @@ describe("main", () => {
 
     /** Runs both files with metric lines, failing parse/fast, noting stdout as each child starts. */
     async function runWithMetricLines(): Promise<MetricRun> {
-      const dir = workspace();
       const stdout = captured();
       const printedAtStart: string[] = [];
       const watchesStdout = starter((request, runtime, options) => {
         printedAtStart.push(stdout.text);
         return failsParse(runtime, request, options);
       });
-      const { code, stderr } = await command(
-        dir,
-        ["sort.bench.ts", "parse.bench.ts", "--metric-lines", "--output", "report.json"],
-        { stdout, startChild: watchesStdout },
-      );
-      const { results } = reportAt(join(dir, "report.json"));
+      const { code, stderr, report } = await runWithReport(["--metric-lines"], {
+        stdout,
+        startChild: watchesStdout,
+      });
+      const { results } = report;
       return {
         code,
         stdout: stdout.text,
@@ -635,13 +625,8 @@ describe("main", () => {
     it("clears the live line before printing the table under --output -", async () => {
       const stderr = terminalOf(80);
 
-      const { stdout } = await command(
-        workspace(),
-        ["sort.bench.ts", "parse.bench.ts", "--output", "-"],
-        { startChild: failsParse, stderr },
-      );
+      const { results } = await runToStdout({ startChild: failsParse, stderr });
 
-      const { results } = parseReport(stdout, "stdout");
       expect(screen(stderr.text)).toStrictEqual(screen(formatTable(results, { color: false })));
     });
 
@@ -683,7 +668,6 @@ describe("main", () => {
 
   describe("on an interrupt", () => {
     it("exits 143 on SIGTERM after a failed case, with the finished results in the report and table", async () => {
-      const dir = workspace();
       const signals = new EventEmitter();
       const failsThenStops = starter((request) => {
         if (request.id === "sort/fast") return failedOutcome("fn", "kiwi");
@@ -691,13 +675,9 @@ describe("main", () => {
         return stopped;
       });
 
-      const ended = await command(
-        dir,
-        ["sort.bench.ts", "parse.bench.ts", "--output", "report.json"],
-        { signals, startChild: failsThenStops },
-      );
+      const ended = await runWithReport([], { signals, startChild: failsThenStops });
 
-      const report = reportAt(join(dir, "report.json"));
+      const { report } = ended;
       expect({
         code: ended.code,
         interrupted: report.interrupted,
@@ -794,15 +774,8 @@ describe("main", () => {
     );
 
     it("exits 141 with interrupted false when the closed stdout only met the table, the last write", async () => {
-      const dir = workspace();
+      const { code, report } = await runWithReport([], { stdout: closed("EPIPE") });
 
-      const { code } = await command(
-        dir,
-        ["sort.bench.ts", "parse.bench.ts", "--output", "report.json"],
-        { stdout: closed("EPIPE") },
-      );
-
-      const report = reportAt(join(dir, "report.json"));
       expect({
         code,
         interrupted: report.interrupted,

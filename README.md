@@ -151,7 +151,7 @@ Each case was measured once, in its own process. A verdict between revisions tak
 
 Common options:
 
-| Command                               | What it does                                           |
+| Command                               | Purpose                                                |
 | ------------------------------------- | ------------------------------------------------------ |
 | `npx repset benchmarks/sort.bench.ts` | Run only the cases in that file                        |
 | `npx repset --filter '^sort/'`        | Run the cases whose id starts with `sort/`             |

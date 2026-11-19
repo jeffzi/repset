@@ -20,7 +20,7 @@ import {
 } from "./command-line.js";
 import { ConfigError, failedWith, resolveOptions } from "./options.js";
 import { progressOn, type Progress } from "./progress.js";
-import type { Report, Result } from "./report.js";
+import type { Report } from "./report.js";
 import {
   type ChildFunctionOverrides,
   type ChildFunctions,
@@ -33,7 +33,7 @@ import {
   selectCases,
   shownPath,
 } from "./run.js";
-import { failureLines, formatTable, metricLine, paint } from "./table.js";
+import { failureLines, formatTable, paint } from "./table.js";
 import { thrownMessage } from "./utils.js";
 
 /** Where the command prints: `process.stdout` and `process.stderr` fit. */
@@ -282,8 +282,7 @@ function reportWrites(path: string, shown: string): Pick<RunInput, "onSelected" 
 // ---------------------------------------------------------------------------
 
 /**
- * Measures the selected cases, printing the table, the metric lines and the report where the
- * flags send them.
+ * Measures the selected cases, printing the table and the report where the flags send them.
  *
  * @param command - What the command line asks for.
  * @param context - The streams, the working directory, the stop signal and the child functions.
@@ -307,14 +306,10 @@ async function measure(command: Command, context: Context): Promise<number> {
     ...childInput(context),
     callsPerSample: command.callsPerSample,
     onSelected: writes?.onSelected,
-    onResult: (result: Result) => {
-      const line = command.metricLines ? metricLine(result) : undefined;
-      if (line !== undefined) progress.above(stdout, `${line}\n`);
-      writes?.onResult?.(result);
-    },
+    onResult: writes?.onResult,
   });
   progress.stop();
-  const tableTo = toStdout || command.metricLines ? "stderr" : "stdout";
+  const tableTo = toStdout ? "stderr" : "stdout";
   context[tableTo].write(formatTable(report.results, { color: context.colors[tableTo] }));
   if (toStdout) stdout.write(reportText(report));
   let written = true;

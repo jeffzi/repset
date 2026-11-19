@@ -1,5 +1,5 @@
 /**
- * The text a run shows a person: the table of its results, and the metric line of each result.
+ * The text a run shows a person: the table of its results.
  *
  * Pure functions from the report's types to text; nothing here prints.
  */
@@ -220,16 +220,4 @@ export function formatTable(
     sectionLines(section, color).join("\n"),
   );
   return `${[...sections, FOOTER].join("\n\n")}\n`;
-}
-
-/**
- * The line a tool that reads metrics from stdout takes a measured case's median from.
- *
- * @param result - A result that finished.
- * @returns `METRIC <case id>/runtime=<runtime>#time=<median>`, the median in nanoseconds per call
- *   as its shortest round-trip text, or `undefined` for a failed result, which has no median.
- */
-export function metricLine(result: Result): string | undefined {
-  if (result.status === "failed") return undefined;
-  return `METRIC ${result.id}/runtime=${result.runtime.name}#time=${String(result.median)}`;
 }

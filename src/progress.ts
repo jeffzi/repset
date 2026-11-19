@@ -27,8 +27,6 @@ export interface Progress {
   planned(total: number): void;
   /** Shows that the phase's next child starts, doing what `text` says. */
   starting(text: string): void;
-  /** Writes `text` to `output` above the live line, once a child started, so they never share a row. */
-  above(output: Output, text: string): void;
   /** Stops the indicator and erases the live line; calling it again does nothing. */
   stop(): void;
 }
@@ -39,9 +37,6 @@ function linePerChild(stderr: Output): Progress {
     planned: () => undefined,
     starting: (text) => {
       stderr.write(`${text}\n`);
-    },
-    above: (output, text) => {
-      output.write(text);
     },
     stop: () => undefined,
   };
@@ -88,11 +83,6 @@ function liveLine(stderr: Output, color: boolean): Progress {
         frame = (frame + 1) % FRAMES.length;
         draw();
       }, FRAME_MS).unref();
-      draw();
-    },
-    above: (output, text) => {
-      stderr.write(CLEAR_ROW);
-      output.write(text);
       draw();
     },
     stop: () => {

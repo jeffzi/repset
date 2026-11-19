@@ -5,15 +5,13 @@ import { stripVTControlCharacters } from "node:util";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Result } from "../src/report.js";
-import { formatTable, metricLine } from "../src/table.js";
+import { formatTable } from "../src/table.js";
 import {
   blockWrites,
   captured,
   closed,
   closedHeld,
   command,
-  type Ended,
   failsParse,
   linesOf,
   measuresAll,
@@ -36,15 +34,6 @@ import {
   stopped,
 } from "./fake-children.js";
 import { reportAt } from "./report-file.js";
-
-/** The metric lines `results` print, each ending with a newline. */
-function metricText(results: readonly Result[]): string {
-  return results
-    .map((result) => metricLine(result))
-    .filter((line) => line !== undefined)
-    .map((line) => `${line}\n`)
-    .join("");
-}
 
 /** A child starter that ends as stopped once the run is aborted, and measures every case before. */
 const measuresUnlessAborted: StartChild = async (runtime, request, options) =>
@@ -97,7 +86,6 @@ describe("main", () => {
   describe("when the command line is wrong", () => {
     it.each([
       { why: "an empty number", args: ["--min-time", ""] },
-      { why: "--metric-lines with --output -", args: ["--metric-lines", "--output", "-"] },
       { why: "--list with --once", args: ["--list", "--once"] },
     ])(
       "exits 2 on $why with a message on stderr, nothing on stdout, no child",
@@ -383,56 +371,6 @@ describe("main", () => {
       const { code, results } = await runToStdout();
 
       expect({ code, results: results.length }).toStrictEqual({ code: 0, results: 2 });
-    });
-  });
-
-  describe("when --metric-lines is given", () => {
-    /** A metric-lines run's ending, with what stdout held as each child started and the report. */
-    interface MetricRun extends Ended {
-      readonly printedAtStart: readonly string[];
-      readonly results: readonly Result[];
-      readonly metricText: string;
-    }
-
-    /** Runs both files with metric lines, failing parse/fast, noting stdout as each child starts. */
-    async function runWithMetricLines(): Promise<MetricRun> {
-      const stdout = captured();
-      const printedAtStart: string[] = [];
-      const watchesStdout = starter((request, runtime, options) => {
-        printedAtStart.push(stdout.text);
-        return failsParse(runtime, request, options);
-      });
-      const { code, stderr, report } = await runWithReport(["--metric-lines"], {
-        stdout,
-        startChild: watchesStdout,
-      });
-      const { results } = report;
-      return {
-        code,
-        stdout: stdout.text,
-        stderr,
-        printedAtStart,
-        results,
-        metricText: metricText(results),
-      };
-    }
-
-    it("prints each measured result's metric line on stdout", async () => {
-      const ended = await runWithMetricLines();
-
-      expect(ended.stdout).toBe(ended.metricText);
-    });
-
-    it("prints each metric line as its result finishes", async () => {
-      const ended = await runWithMetricLines();
-
-      expect(ended.printedAtStart).toStrictEqual(["", ended.metricText]);
-    });
-
-    it("prints the table on stderr", async () => {
-      const ended = await runWithMetricLines();
-
-      expect(ended.stderr.endsWith(formatTable(ended.results, { color: false }))).toBe(true);
     });
   });
 
@@ -743,14 +681,7 @@ describe("main", () => {
 
         const ended = await command(
           dir,
-          [
-            "sort.bench.ts",
-            "parse.bench.ts",
-            "pear.bench.ts",
-            "--metric-lines",
-            "--output",
-            "report.json",
-          ],
+          ["sort.bench.ts", "parse.bench.ts", "pear.bench.ts", "--output", "report.json"],
           { stdout, startChild: failsStdoutInParse },
         );
 
@@ -767,7 +698,7 @@ describe("main", () => {
           started: ["sort/fast", "parse/fast"],
           ran: ["sort/fast"],
           interrupted: true,
-          stdout: metricText(report.results),
+          stdout: "",
           said,
         });
       },
@@ -786,7 +717,6 @@ describe("main", () => {
     it.each([
       { mode: "the table", args: [] },
       { mode: "--output -", args: ["--output", "-"] },
-      { mode: "--metric-lines", args: ["--metric-lines"] },
       { mode: "--list", args: ["--list"] },
       { mode: "--once", args: ["--once"] },
     ])(
@@ -864,25 +794,6 @@ describe("main", () => {
 
       await command(workspace(), ["sort.bench.ts"], { stdout });
 
-      expect(() => {
-        stdout.emitHeld();
-      }).not.toThrow();
-    });
-
-    it("waits for stdout's writes before it rethrows a crash, so a write failing after it does not crash", async () => {
-      const stdout = closedHeld("EPIPE");
-      const error = new Error("kiwi");
-      const throwsOnParse = starter((request, runtime, options) => {
-        if (request.id === "parse/fast") throw error;
-        return measuresAll(runtime, request, options);
-      });
-
-      const ended = command(workspace(), ["--metric-lines", "sort.bench.ts", "parse.bench.ts"], {
-        stdout,
-        startChild: throwsOnParse,
-      });
-
-      await expect(ended).rejects.toBe(error);
       expect(() => {
         stdout.emitHeld();
       }).not.toThrow();

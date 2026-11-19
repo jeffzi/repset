@@ -25,9 +25,7 @@ export type StrictOmit<T, K extends keyof T> = Omit<T, K>;
 const EXCLUSIVE: readonly (readonly [string, string])[] = [
   ["list", "once"],
   ["list", "output"],
-  ["list", "metric-lines"],
   ["once", "output"],
-  ["once", "metric-lines"],
 ];
 
 /** Decimal digits with an optional fraction: `Number` alone reads `""` as 0 and accepts `1e3`. */
@@ -69,11 +67,6 @@ const OPTIONS: readonly (readonly [string, string])[] = [
     "-o, --output <file>",
     'Write the JSON report to <file>; "-" writes it to stdout and the table to stderr',
   ],
-  [
-    "--metric-lines",
-    "Print each case's median as a METRIC line on stdout, for tools such as gymrat; " +
-      "the table goes to stderr",
-  ],
   ["--list", "List the selected case ids without running them"],
   ["--once", "Run each selected case once on each runtime, without timing, to check it works"],
   ["--config <file>", `Use this config file instead of looking for ${CONFIG_NAMES.join(", ")}`],
@@ -103,7 +96,6 @@ export interface Command {
   readonly input: CommandInput;
   /** The `--output` value as written: a file relative to the working directory, or `-` for stdout. */
   readonly output: string | undefined;
-  readonly metricLines: boolean;
   /** The calls per sample `REPSET_CALLS_PER_SAMPLE` fixes for a run, or `undefined` when unset. */
   readonly callsPerSample: number | undefined;
 }
@@ -249,9 +241,6 @@ export function parseCommand(args: readonly string[], parser: Parser): Command {
       .filter((option) => parser.getOptionValueSource(option.attributeName()) === "cli")
       .map((option) => option.name()),
   );
-  if (given.has("metric-lines") && text("output") === OUTPUT_STDOUT) {
-    throw new ConfigError("--metric-lines cannot be used with --output -");
-  }
   const conflict = EXCLUSIVE.find(([one, other]) => given.has(one) && given.has(other));
   if (conflict !== undefined) {
     throw new ConfigError(`--${conflict[0]} cannot be used with --${conflict[1]}`);
@@ -272,7 +261,6 @@ export function parseCommand(args: readonly string[], parser: Parser): Command {
       config: text("config"),
     },
     output: text("output"),
-    metricLines: given.has("metric-lines"),
     callsPerSample: fixedCallsPerSample(process.env[CALLS_PER_SAMPLE]),
   };
 }

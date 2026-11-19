@@ -22,6 +22,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Read flags as most command-line tools do: a repeated flag takes its last value, a flag's value may
   start with `-`, and `--version` wins over `--help`.
 
+### Removed
+
+- Remove `--metric-lines`. A tool that compares runs reads the JSON report instead, from
+  `--output -`.
+
 ### Fixed
 
 - Write the final report and exit 129 on `SIGHUP`, as on `SIGINT` and `SIGTERM`.

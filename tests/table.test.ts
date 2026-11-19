@@ -11,7 +11,7 @@ import type {
   Result,
   ResultError,
 } from "../src/report.js";
-import { formatTable, metricLine } from "../src/table.js";
+import { formatTable } from "../src/table.js";
 import { found, measured as measuredChild } from "./fake-children.js";
 
 type Runtime = Result["runtime"]["name"];
@@ -327,26 +327,6 @@ describe("formatTable", () => {
       const colored = formatTable(results, { color: true });
 
       expect(stripVTControlCharacters(colored)).toBe(plain);
-    });
-  });
-});
-
-describe("metricLine", () => {
-  describe("when the case was measured", () => {
-    it("names the case and runtime with the median's shortest text", () => {
-      const result = measured("apple", "bun", flatStats(812.5));
-
-      const line = metricLine(result);
-
-      expect(line).toMatch(/\bapple\b.*\bbun\b.*\b812\.5$/u);
-    });
-  });
-
-  describe("when the case failed", () => {
-    it("returns undefined", () => {
-      const line = metricLine(failed("apple", "fn", "plum exploded"));
-
-      expect(line).toBeUndefined();
     });
   });
 });

@@ -180,7 +180,10 @@ describe("errorStack", () => {
 
   describe("when the value holds no readable string stack", () => {
     it.each([
-      { thrown: "a value that is not an Error", value: "pear" },
+      {
+        thrown: "a value that is not an Error, even with a string stack",
+        value: { stack: "at pear" },
+      },
       {
         thrown: "an Error whose stack is not a string",
         value: Object.defineProperty(new Error("plum"), "stack", { value: 42 }),

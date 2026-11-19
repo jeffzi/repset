@@ -50,7 +50,7 @@ describe("main", () => {
     clearShellEnv();
   });
 
-  describe("when files and every run option are given", () => {
+  describe("when files with runtimes, a filter, timing limits, a loader and an output are given", () => {
     it("hands the positional files, --runtime, --filter, --min-time, --min-samples, --timeout, --node-import and --output to the run", async () => {
       const dir = workspace();
 

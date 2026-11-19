@@ -556,7 +556,11 @@ function isFailed(value: unknown): value is Failed {
 
 function isListedCase(value: unknown): value is ListedCase {
   return (
-    isRecord(value) && typeof value["id"] === "string" && typeof value["setupPerCall"] === "boolean"
+    isRecord(value) &&
+    typeof value["id"] === "string" &&
+    typeof value["setupPerCall"] === "boolean" &&
+    typeof value["name"] === "string" &&
+    (typeof value["contender"] === "string" || value["contender"] === null)
   );
 }
 

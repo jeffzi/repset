@@ -1,5 +1,6 @@
 /**
- * `bench()` and the registry it fills, which the package entry re-exports and the child reads.
+ * `bench()`, which the package entry re-exports, and the registry it fills, which the child reads
+ * through `registeredCases()`.
  *
  * The registry lives in one slot on `globalThis`, so every loaded copy of repset fills and reads
  * the same one: a benchmark file that registers through a copy the child never imports must not
@@ -16,22 +17,37 @@ import { describe, isRecord } from "./utils.js";
 /** The parameter combination `fn` receives when there is no `setup`; it has no key yet. */
 type NoParams = Readonly<Record<string, never>>;
 
+/** A body to time, which receives the state `setup` builds. */
+type BenchFunction<State> = (state: NoInfer<State>) => unknown;
+
 /** The object form of a benchmark: how to build its state, the body to time, how to release it. */
 export interface Benchmark<State> {
   /** Builds the state off the clock; absent, `fn` receives the empty parameter combination. */
   readonly setup?: (() => State) | undefined;
-  readonly fn: (state: NoInfer<State>) => unknown;
+  /**
+   * The body to time, or a record of two or more contenders: each key registers its own case,
+   * timing its own function with the benchmark's `setup`, `teardown` and `setupPerCall`.
+   */
+  readonly fn: BenchFunction<State> | Readonly<Record<string, BenchFunction<State>>>;
   /** Releases a state off the clock; absent means nothing to release. */
   readonly teardown?: ((state: NoInfer<State>) => void) | undefined;
   /** Runs `setup` before every call of `fn` and `teardown` after it. */
   readonly setupPerCall?: boolean | undefined;
 }
 
-/** A registered benchmark: its id and the case `measure` runs. */
+/** A registered benchmark: its id, where it comes from, and the case `measure` runs. */
 export interface RegisteredCase {
+  /** The benchmark's name, followed by `/` and the contender key for a contender. */
   readonly id: string;
+  /** The name passed to `bench()`. */
+  readonly name: string;
+  /** The contender's key in the record `fn`, or `null` for a benchmark with one `fn`. */
+  readonly contender: string | null;
   readonly case: Case<unknown>;
 }
+
+/** A case `bench()` builds, before it gets its id. */
+type ContenderCase = Pick<RegisteredCase, "contender" | "case">;
 
 interface Registry {
   readonly format: typeof FORMAT;
@@ -44,7 +60,7 @@ const REGISTRY_KEY = Symbol.for("repset.registry");
  * Bump when the registry's shape changes: a copy refuses any other number rather than misreading
  * it.
  */
-const FORMAT = 1;
+const FORMAT = 2;
 
 /** Shared by every call and every benchmark, so the default `setup` allocates nothing. */
 const EMPTY_PARAMS: NoParams = Object.freeze({});
@@ -64,8 +80,17 @@ const FIELDS = ["setup", "fn", "teardown", "setupPerCall"] as const;
 
 const KNOWN_FIELDS: ReadonlySet<string> = new Set(FIELDS);
 
-/** One or more `/`-separated segments, each of ASCII letters, digits, `_`, `-` and `.`. */
-const NAME_RULE = /^[\w.-]+(?:\/[\w.-]+)*$/u;
+/** One segment of a name: ASCII letters, digits, `_`, `-` and `.`. */
+const SEGMENT = String.raw`[\w.-]+`;
+
+/** One or more `/`-separated segments. */
+const NAME_RULE = new RegExp(`^${SEGMENT}(?:/${SEGMENT})*$`, "u");
+
+/** A contender key is one segment, so a contender's id adds exactly one segment to the name. */
+const CONTENDER_RULE = new RegExp(`^${SEGMENT}$`, "u");
+
+/** A contest compares functions, so it takes at least two. */
+const MIN_CONTENDERS = 2;
 
 /** The `Symbol.toStringTag` of an `async function` and of an `async function*`. */
 const ASYNC_TAGS: ReadonlyMap<unknown, string> = new Map([
@@ -137,18 +162,59 @@ function optionalFunction(
 }
 
 /**
- * Builds the case a benchmark registers, after checking every field.
+ * Checks a benchmark object's `fn`, which is one function or a record of contenders.
+ *
+ * @param subject - The benchmark, as an error message names it.
+ * @param fn - The `fn` field's value.
+ * @returns Each function to time with its contender key, in the record's key order; a single
+ *   function comes with the key `null`.
+ * @throws TypeError when `fn` is not a function or a record, when a record has fewer than two
+ *   contenders or a key that is not one segment of the name rule, or when a function is an
+ *   `async function` or `async function*`.
+ */
+function contendersOf(
+  subject: string,
+  fn: unknown,
+): { readonly contender: string | null; readonly fn: CaseFunction }[] {
+  if (!isRecord(fn)) {
+    return [{ contender: null, fn: checkedFunction(`${subject} field fn`, fn) }];
+  }
+  const keys = Object.keys(fn);
+  if (keys.length < MIN_CONTENDERS) {
+    throw new TypeError(
+      `${subject} field fn must hold at least ${MIN_CONTENDERS} contenders, got ${keys.length}`,
+    );
+  }
+  return keys.map((key) => {
+    const contenderSubject = `${subject} contender ${JSON.stringify(key)}`;
+    if (!CONTENDER_RULE.test(key)) {
+      throw new TypeError(
+        `${contenderSubject} is not valid: a contender key is one segment made of ASCII letters, digits, "_", "-" and "."`,
+      );
+    }
+    return { contender: key, fn: checkedFunction(contenderSubject, fn[key]) };
+  });
+}
+
+/**
+ * Builds the cases a benchmark registers, after checking every field.
  *
  * @param name - The benchmark's name, already checked.
  * @param benchmark - The second argument passed to `bench()`.
- * @returns The case, holding the user's own functions.
+ * @returns One case per contender, or one case with the contender `null`, holding the user's own
+ *   functions.
  * @throws TypeError when `benchmark` is neither a function nor a benchmark object, or when the
  *   benchmark object has a field repset does not know or a field of the wrong type.
  */
-function caseOf(name: string, benchmark: unknown): Case<unknown> {
+function casesOf(name: string, benchmark: unknown): ContenderCase[] {
   const subject = `benchmark ${JSON.stringify(name)}`;
   if (typeof benchmark === "function") {
-    return { kind: "sharedState", setup: noParams, fn: checkedFunction(subject, benchmark) };
+    return [
+      {
+        contender: null,
+        case: { kind: "sharedState", setup: noParams, fn: checkedFunction(subject, benchmark) },
+      },
+    ];
   }
   if (!isRecord(benchmark)) {
     throw new TypeError(
@@ -162,7 +228,7 @@ function caseOf(name: string, benchmark: unknown): Case<unknown> {
       );
     }
   }
-  const fn = checkedFunction(`${subject} field fn`, Reflect.get(benchmark, "fn"));
+  const contenders = contendersOf(subject, Reflect.get(benchmark, "fn"));
   const setup = optionalFunction(subject, benchmark, "setup") ?? noParams;
   const teardown = optionalFunction(subject, benchmark, "teardown");
   const setupPerCall: unknown = Reflect.get(benchmark, "setupPerCall");
@@ -171,12 +237,11 @@ function caseOf(name: string, benchmark: unknown): Case<unknown> {
       `${subject} field setupPerCall must be a boolean, got ${describe(setupPerCall)}`,
     );
   }
-  return {
-    kind: setupPerCall === true ? "perCall" : "sharedState",
-    setup,
-    fn,
-    ...(teardown === undefined ? {} : { teardown }),
-  };
+  const kind = setupPerCall === true ? "perCall" : "sharedState";
+  return contenders.map(({ contender, fn }) => ({
+    contender,
+    case: { kind, setup, fn, ...(teardown === undefined ? {} : { teardown }) },
+  }));
 }
 
 /**
@@ -215,7 +280,7 @@ function registry(): RegisteredCase[] {
 }
 
 /**
- * Registers a benchmark under `name`.
+ * Registers a benchmark under `name`: one case, or one case per contender when `fn` is a record.
  *
  * `fn`, `setup` and `teardown` reach `measure` as the very functions given, so nothing sits
  * between the sampling loop and the body.
@@ -225,11 +290,14 @@ function registry(): RegisteredCase[] {
  *
  * A rejected call registers nothing. A duplicate name is not rejected: both cases are kept.
  *
- * @param name - The benchmark's name, which becomes its case id.
+ * @param name - The benchmark's name, which becomes its case id; a contender's id is the name
+ *   followed by `/` and the contender key.
  * @param benchmark - The function to time, or a benchmark object.
  * @throws TypeError when `name` breaks the name rule, when `benchmark` is not a function or a
  *   benchmark object, when a benchmark object has a field repset does not know or a field of the
- *   wrong type, or when `fn`, `setup` or `teardown` is an `async function` or `async function*`.
+ *   wrong type, when a record `fn` has fewer than two contenders or a key that is not one segment
+ *   of the name rule, or when `fn`, a contender, `setup` or `teardown` is an `async function` or
+ *   `async function*`.
  * @throws TypeError when the registry on `globalThis` has a format this copy does not know.
  */
 export function bench<State = NoParams>(
@@ -237,16 +305,20 @@ export function bench<State = NoParams>(
   benchmark: ((params: NoParams) => unknown) | Benchmark<State>,
 ): void {
   checkName(name);
-  // `caseOf` takes `unknown`: a case's state only ever flows from its own setup to its own fn and
+  // `casesOf` takes `unknown`: a case's state only ever flows from its own setup to its own fn and
   // teardown, so the registry erases State, and the checks cannot trust the compile-time type.
-  const benchmarkCase = caseOf(name, benchmark);
-  registry().push({ id: name, case: benchmarkCase });
+  const cases = casesOf(name, benchmark);
+  const registered = registry();
+  for (const { contender, case: benchmarkCase } of cases) {
+    const id = contender === null ? name : `${name}/${contender}`;
+    registered.push({ id, name, contender, case: benchmarkCase });
+  }
 }
 
 /**
  * Reads every registered case.
  *
- * @returns The id and the `Case` of each registered benchmark, in registration order.
+ * @returns The id, name, contender and `Case` of each registered case, in registration order.
  * @throws TypeError when the registry on `globalThis` has a format this copy does not know.
  */
 export function registeredCases(): readonly RegisteredCase[] {

@@ -85,6 +85,10 @@ export interface Failed {
 export interface ListedCase {
   readonly id: string;
   readonly setupPerCall: boolean;
+  /** The name passed to `bench()`. */
+  readonly name: string;
+  /** The contender's key in the record `fn`, or `null` for a benchmark with one `fn`. */
+  readonly contender: string | null;
 }
 
 export interface Listed {
@@ -266,9 +270,11 @@ function failedResult(phase: ChildPhase, thrown: unknown): Failed {
  */
 export async function listCases(file: string): Promise<Listed | Failed> {
   try {
-    const cases = (await loadCases(file)).map(({ id, case: registered }) => ({
+    const cases = (await loadCases(file)).map(({ id, name, contender, case: registered }) => ({
       id,
       setupPerCall: registered.kind === "perCall",
+      name,
+      contender,
     }));
     return { status: "ok", cases };
   } catch (error) {
@@ -458,8 +464,7 @@ const ANSWERING_KEY = Symbol.for("repset.child.answering");
 
 /**
  * Claims the request for this copy of the module. A loader such as tsx can evaluate this module
- * twice in one process, once as the entry and once through an import of it the benchmark file
- * reaches, and only one copy may write the result line.
+ * twice in one process, and only one copy may write the result line.
  *
  * @returns `true` for the first copy to ask, `false` for every later one.
  */
@@ -469,6 +474,6 @@ function claimAnswer(): boolean {
   return true;
 }
 
-// Not awaited at the top level: a top-level await would leave this module evaluating while the
-// benchmark file loads, and an import of this module the file reaches would wait for it to finish.
+// Not awaited at the top level: `main()` imports the benchmark file, so awaiting it here would keep
+// this module evaluating until that file finishes loading.
 if (startedOnThisModule() && claimAnswer()) void main();

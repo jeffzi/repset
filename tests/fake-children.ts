@@ -57,9 +57,21 @@ export function measuredOutcome(median: number): Outcome {
 /** An outcome in which the child ran its case once. */
 export const ranOnce: Outcome = { status: "ok", result: { status: "ok" }, output: "" };
 
+/** A case to list, whose benchmark name defaults to its id and whose contender defaults to `null`. */
+export type CaseToList = Pick<ListedCase, "id" | "setupPerCall"> &
+  Partial<Pick<ListedCase, "name" | "contender">>;
+
 /** An outcome in which the child listed `cases`. */
-export function listed(cases: ListedCase[]): Outcome {
-  return { status: "ok", result: { status: "ok", cases }, output: "" };
+export function listed(cases: CaseToList[]): Outcome {
+  const listedCases = cases.map(
+    ({ id, setupPerCall, name = id, contender = null }): ListedCase => ({
+      id,
+      setupPerCall,
+      name,
+      contender,
+    }),
+  );
+  return { status: "ok", result: { status: "ok", cases: listedCases }, output: "" };
 }
 
 /** A child starter that fails its caller with a plain error if any child starts. */
@@ -84,7 +96,7 @@ export const MELON = { message: "melon", stack: "at teardown" } as const;
 
 /** A child starter that lists the one case `listCase` gives per file and answers the rest with `answer`. */
 export function starter(
-  listCase: (file: string) => { id: string; setupPerCall: boolean },
+  listCase: (file: string) => CaseToList,
   answer: (
     request: Asked,
     runtime: FoundRuntime,

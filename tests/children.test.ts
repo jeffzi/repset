@@ -87,7 +87,24 @@ const FN_KIWI = { phase: "fn", message: "kiwi", stack: "at fn" } as const;
 /** The failure of a child that left no usable result line. */
 const NO_RESULT = { status: "failed", error: { phase: "child", stack: null } };
 
-const LISTED_LINE = '{"status":"ok","cases":[{"id":"apple","setupPerCall":false}]}';
+/**
+ * Listed cases as the parent accepts them: `contender` is `null` for a plain benchmark and the key
+ * for a contender.
+ */
+const LISTED_APPLE = { id: "apple", setupPerCall: false, name: "apple", contender: null } as const;
+const LISTED_QUICK = {
+  id: "sort/quick",
+  setupPerCall: false,
+  name: "sort",
+  contender: "quick",
+} as const;
+
+const LISTED_LINE = JSON.stringify({ status: "ok", cases: [LISTED_APPLE] });
+
+/** The result line of a listing whose one case is `listedCase`. */
+function listingLine(listedCase: object): string {
+  return `${JSON.stringify({ status: "ok", cases: [listedCase] })}\n`;
+}
 
 /** A measurement complete in every field, whose `status` alone does not answer a measure request. */
 const MEASURED_PEAR_LINE = JSON.stringify({
@@ -280,9 +297,14 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
       {
         why: "a listing",
         request: { mode: "list", file: `${LISTED_LINE}\n` },
+        expected: { status: "ok", result: { status: "ok", cases: [LISTED_APPLE] }, output: "" },
+      },
+      {
+        why: "a listing of a contender",
+        request: { mode: "list", file: listingLine(LISTED_QUICK) },
         expected: {
           status: "ok",
-          result: { status: "ok", cases: [{ id: "apple", setupPerCall: false }] },
+          result: { status: "ok", cases: [LISTED_QUICK] },
           output: "",
         },
       },
@@ -340,6 +362,14 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
         },
       },
       { why: "a listing for a once request", request: echoing(`${LISTED_LINE}\n`) },
+      {
+        why: "a listing whose case has no name",
+        request: { mode: "list", file: listingLine({ ...LISTED_APPLE, name: undefined }) },
+      },
+      {
+        why: "a listing whose case's contender is a number",
+        request: { mode: "list", file: listingLine({ ...LISTED_APPLE, contender: 7 }) },
+      },
       {
         why: "a failure with no message",
         request: echoing(

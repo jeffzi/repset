@@ -218,7 +218,9 @@ async function listFiles(
     const outcome = await startChild(runtime, { mode: "list", file: path }, childOptions);
     if (outcome.status === "stopped") return undefined;
     if (outcome.status === "failed") throw new ListingError(file, outcome.error, outcome.output);
-    for (const listed of outcome.result.cases) cases.push({ ...listed, path, file });
+    for (const { id, setupPerCall } of outcome.result.cases) {
+      cases.push({ id, path, file, setupPerCall });
+    }
   }
   return cases;
 }

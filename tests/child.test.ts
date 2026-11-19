@@ -12,7 +12,7 @@ import { enabledGc } from "./measure/fixtures.js";
 import { resetRegistry } from "./registry.js";
 import { KILL_AFTER_MS, SPAWN_TIMEOUT_MS } from "./spawn-limits.js";
 
-/** The slot where the `lifecycle.ts` fixture records each callback it runs. */
+/** The slot where the `lifecycle.ts` and `contest.ts` fixtures record each callback they run. */
 const CALLS = Symbol.for("repset.child-calls");
 
 /** The absolute path of the child fixture `name`. */
@@ -26,9 +26,9 @@ const FILE = fixture("three-cases.ts");
 const FILE_LISTED = {
   status: "ok",
   cases: [
-    { id: "alpha", setupPerCall: false },
-    { id: "beta", setupPerCall: true },
-    { id: "gamma", setupPerCall: false },
+    { id: "alpha", setupPerCall: false, name: "alpha", contender: null },
+    { id: "beta", setupPerCall: true, name: "beta", contender: null },
+    { id: "gamma", setupPerCall: false, name: "gamma", contender: null },
   ],
 };
 
@@ -41,6 +41,9 @@ const MEASURE_TIMEOUT_MS = 15_000;
 const MEASURE_REQUEST = { mode: "measure", file: FILE, id: "alpha", ...SHORT_RUN };
 
 const LIFECYCLE = fixture("lifecycle.ts");
+
+/** A plain benchmark, then the contest `sort` of the contenders `quick` and `merge`. */
+const CONTEST = fixture("contest.ts");
 
 /** The `lifecycle.ts` cases whose thrown value yields no stack, with the message they report. */
 const NO_STACK_CASES = [
@@ -56,7 +59,7 @@ const NO_STACK_CASES = [
   },
 ];
 
-/** The callbacks the `lifecycle.ts` fixture recorded since the test began. */
+/** The callbacks the fixtures recorded since the test began. */
 function calls(): unknown[] {
   const recorded: unknown = Reflect.get(globalThis, CALLS);
   if (!Array.isArray(recorded)) throw new Error("no call list installed");
@@ -140,10 +143,25 @@ describe("parseRequest", () => {
 
 describe("listCases", () => {
   describe("when the file registers cases", () => {
-    it("returns each case's id and setupPerCall in registration order", async () => {
+    it("returns each case's id, setupPerCall, name and contender in registration order", async () => {
       const result = await listCases(FILE);
 
       expect(result).toStrictEqual(FILE_LISTED);
+    });
+  });
+
+  describe("when the file registers a contest", () => {
+    it("returns each contender's benchmark name and key beside a plain benchmark's null contender", async () => {
+      const result = await listCases(CONTEST);
+
+      expect(result).toStrictEqual({
+        status: "ok",
+        cases: [
+          { id: "plain", setupPerCall: false, name: "plain", contender: null },
+          { id: "sort/quick", setupPerCall: false, name: "sort", contender: "quick" },
+          { id: "sort/merge", setupPerCall: false, name: "sort", contender: "merge" },
+        ],
+      });
     });
   });
 
@@ -241,6 +259,13 @@ describe("measureCase", () => {
       expect(quantiles).toStrictEqual(quantiles.toSorted((a, b) => a - b));
     });
 
+    it("measures the contender its id names, no other contender", async () => {
+      const result = await measureShort(CONTEST, "sort/merge");
+
+      expect(result.status).toBe("ok");
+      expect(calls()).toStrictEqual(["merge fn"]);
+    });
+
     it("measures at the calls per sample it is given, reporting it as fixed", async () => {
       const result = await measureCase(LIFECYCLE, "steady", { ...SHORT_RUN, callsPerSample: 3 });
 
@@ -290,6 +315,13 @@ describe("runOnce", () => {
 
       expect(result.status).toBe("ok");
       expect(calls()).toStrictEqual(["quiet setup", "quiet fn", "quiet teardown"]);
+    });
+
+    it("runs the contender its id names, no other contender", async () => {
+      const result = await runOnce(CONTEST, "sort/merge");
+
+      expect(result.status).toBe("ok");
+      expect(calls()).toStrictEqual(["merge fn"]);
     });
   });
 
@@ -409,7 +441,7 @@ describe("the child started on node", { timeout: SPAWN_TIMEOUT_MS }, () => {
       expect(run.status).toBe(0);
       expect(resultLine(run.fd3)).toStrictEqual({
         status: "ok",
-        cases: [{ id: "orange", setupPerCall: false }],
+        cases: [{ id: "orange", setupPerCall: false, name: "orange", contender: null }],
       });
     });
   });
@@ -431,7 +463,7 @@ describe("the child started on node", { timeout: SPAWN_TIMEOUT_MS }, () => {
 
       expect(resultLine(run.fd3)).toStrictEqual({
         status: "ok",
-        cases: [{ id: "found", setupPerCall: false }],
+        cases: [{ id: "found", setupPerCall: false, name: "found", contender: null }],
       });
     });
   });

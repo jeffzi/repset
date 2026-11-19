@@ -32,6 +32,35 @@ describe("bench", () => {
     });
   });
 
+  describe("when the benchmark object has a record of contenders", () => {
+    it("types every contender to receive what setup returns", () => {
+      bench("sort", {
+        setup: () => [3, 1, 2],
+        fn: {
+          quick: (values) => {
+            expectTypeOf(values).toEqualTypeOf<number[]>();
+          },
+          merge: (values) => {
+            expectTypeOf(values).toEqualTypeOf<number[]>();
+          },
+        },
+      });
+    });
+
+    it("rejects a contender whose parameter type differs from what setup returns", () => {
+      assertCompiles(() => {
+        bench("sort", {
+          setup: () => [3, 1, 2],
+          fn: {
+            quick: (values: number[]) => values.length,
+            // @ts-expect-error -- merge takes a string, setup returns numbers
+            merge: (text: string) => text.length,
+          },
+        });
+      });
+    });
+  });
+
   describe("when there is no setup", () => {
     it("rejects a bare fn whose parameter requires a key", () => {
       assertCompiles(() => {

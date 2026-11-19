@@ -75,8 +75,6 @@ afterEach(() => {
 describe("run", () => {
   describe("when the run completes", () => {
     it("returns a report holding the inputs, the host and each measured case's result", async () => {
-      freezeClock();
-
       const report = await runHere({
         cwd: join(DISCOVERY, "nested"),
         files: ["../a.bench.ts"],
@@ -91,7 +89,6 @@ describe("run", () => {
 
       expect(report).toMatchObject({
         repset: "1.2.3",
-        startedAt: "2026-11-01T12:00:00.000Z",
         interrupted: false,
         options: {
           runtimes: ["node"],

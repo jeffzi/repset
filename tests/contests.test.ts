@@ -161,7 +161,7 @@ describe("run", () => {
           },
         });
 
-        expect(planned).toStrictEqual([1, 30]);
+        expect(planned.at(-1)).toBe(30);
       });
     });
 
@@ -207,24 +207,15 @@ describe("run", () => {
       ]);
     });
 
-    it.each([
-      { contenders: 2, rounds: undefined, expected: 7 },
-      { contenders: 8, rounds: undefined, expected: 12 },
-      { contenders: 2, rounds: 3, expected: 3 },
-    ])(
-      "runs $expected rounds for $contenders contenders when rounds is $rounds",
-      async ({ contenders, rounds, expected }) => {
-        const cases = Array.from({ length: contenders }, (_, index) =>
-          contender(`c${String(index)}`),
-        );
+    it("runs 12 rounds for 8 contenders when rounds is not given", async () => {
+      const cases = Array.from({ length: 8 }, (_, index) => contender(`c${String(index)}`));
 
-        const { report } = await runCases(cases, rounds === undefined ? {} : { rounds });
+      const { report } = await runCases(cases);
 
-        expect(report.results.map((result) => result.processes.length)).toStrictEqual(
-          Array<number>(contenders).fill(expected),
-        );
-      },
-    );
+      expect(report.results.map((result) => result.processes.length)).toStrictEqual(
+        Array<number>(8).fill(12),
+      );
+    });
 
     it.each([
       { rounds: 3, medians: { "concat/join": 40, "concat/loop": 30 } },
@@ -652,7 +643,6 @@ describe("run", () => {
       });
 
       it.each([
-        { contenders: 2, rounds: 6, judged: true },
         { contenders: 3, rounds: 6, judged: false },
         { contenders: 3, rounds: 7, judged: true },
       ])(

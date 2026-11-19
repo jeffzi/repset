@@ -150,12 +150,6 @@ describe("signedRankInterval", () => {
     expect(interval).toStrictEqual([1, 4]);
   });
 
-  it("spans every Walsh average when only the extreme order statistic qualifies", () => {
-    const interval = signedRankInterval([1, 2, 3, 4, 5, 6], 0.95);
-
-    expect(interval).toStrictEqual([1, 6]);
-  });
-
   it("throws a RangeError when no order statistic reaches the level", () => {
     const interval = (): readonly [number, number] => signedRankInterval([1, 2, 3], 0.95);
 

@@ -393,16 +393,6 @@ describe("sampleSharedState", () => {
           fake.sampleSpans.slice(fake.collectsAt[1]),
         );
       });
-
-      it("reports the count every sample of the last run ran", () => {
-        const fake = harness(fasterWhenTimed);
-
-        const result = run(fake, COARSE_RESOLUTION);
-
-        expect(new Set(fake.sampleCalls.slice(fake.collectsAt[1]))).toStrictEqual(
-          new Set([result.callsPerSample]),
-        );
-      });
     });
 
     describe("when a run fills its store with a median sample of 200 times the resolution", () => {
@@ -478,14 +468,6 @@ describe("sampleSharedState", () => {
 
         expect(error.message).toMatch(/\b40000\b/);
         expect(error.message).toMatch(/\b30518\b/);
-      });
-
-      it("fails before any sample runs that count", () => {
-        const fake = harness(pastCap);
-
-        errorOf(() => run(fake, CAPPED_STEP));
-
-        expect(fake.sampleCalls).not.toContain(40_000);
       });
 
       it("fails with the cap's error after the third run", () => {

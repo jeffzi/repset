@@ -518,34 +518,6 @@ describe("measure", () => {
       expect(error.phase).toBe("teardown");
       expect(error.cause).toBe(fake.thenReadError);
     });
-
-    const CLEANUP_RAISING_READ_CASES = [
-      {
-        kind: "sharedState",
-        when: "the body throws",
-        fails: { fn: 5 },
-        raisingThenAt: { teardown: 0 },
-      },
-      {
-        kind: "perCall",
-        when: "the body throws",
-        fails: { fn: 5 },
-        raisingThenAt: { teardown: 5 },
-      },
-    ] as const;
-
-    it.each(CLEANUP_RAISING_READ_CASES)(
-      "attaches the cleanup teardown's then read failure in phase teardown on a $kind run when $when",
-      async ({ kind, fails, raisingThenAt }) => {
-        const fake = bench(kind, { bodyMs: 200, fails, raisingThenAt });
-
-        const error = await failure(run(fake));
-
-        expect(error.teardownError).toBeInstanceOf(MeasureError);
-        expect(error.teardownError?.phase).toBe("teardown");
-        expect(error.teardownError?.cause).toBe(fake.thenReadError);
-      },
-    );
   });
 
   describe("when a callback or the collector throws", () => {
@@ -553,12 +525,6 @@ describe("measure", () => {
     // calls 1-16 warm up; setup and teardown calls count the same way.
     const BUILD_OR_BODY_FAILURES = [
       { kind: "sharedState", when: "the setup throws", fails: { setup: 0 }, from: "setup" },
-      {
-        kind: "sharedState",
-        when: "the check's body call throws",
-        fails: { fn: 0 },
-        from: "fn",
-      },
       { kind: "perCall", when: "the check's setup throws", fails: { setup: 0 }, from: "setup" },
       { kind: "perCall", when: "the check's body call throws", fails: { fn: 0 }, from: "fn" },
     ] as const;

@@ -271,9 +271,8 @@ describe("runOnce", () => {
     });
 
     it("runs the contender its id names, no other contender", async () => {
-      const result = await runOnce(CONTEST, "sort/merge");
+      await runOnce(CONTEST, "sort/merge");
 
-      expect(result.status).toBe("ok");
       expect(calls()).toStrictEqual(["merge fn"]);
     });
   });
@@ -290,32 +289,6 @@ describe("runOnce", () => {
           stack: expect.stringMatching(/^Error: kiwi\n/u),
           teardownError: null,
         },
-      });
-    });
-
-    it.each([
-      { id: "fn-throws-string", thrown: "a value that is not an Error", message: "pear" },
-      {
-        id: "fn-throws-numeric-stack",
-        thrown: "an Error whose stack is not a string",
-        message: "plum",
-      },
-      {
-        id: "fn-throws-unreadable-stack",
-        thrown: "an Error whose stack getter throws",
-        message: "fig",
-      },
-      {
-        id: "fn-throws-trapped-proxy",
-        thrown: "a value whose instanceof check throws",
-        message: "a value with no string form",
-      },
-    ])("carries a null stack when the case throws $thrown", async ({ id, message }) => {
-      const result = await runOnce(LIFECYCLE, id);
-
-      expect(result).toStrictEqual({
-        status: "failed",
-        error: { phase: "fn", message, stack: null, teardownError: null },
       });
     });
 

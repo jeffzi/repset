@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   describe as describeValue,
+  errorStack,
   isRecord,
   thrownMessage,
   timerResolutionMs,
@@ -9,6 +10,15 @@ import {
 } from "../src/utils.js";
 
 const RESOLUTION = 0.125;
+
+/** An `Error` whose `stack` getter throws. */
+function unreadableStackError(): Error {
+  return Object.defineProperty(new Error("fig"), "stack", {
+    get: () => {
+      throw new Error("trap");
+    },
+  });
+}
 
 /**
  * The first transition that spans a single resolution; every one before it spans several.
@@ -140,6 +150,33 @@ describe("thrownMessage", () => {
       const message = (): string => thrownMessage(error);
 
       expect(message).not.toThrow();
+    });
+  });
+});
+
+describe("errorStack", () => {
+  describe("when the value is an Error with a string stack", () => {
+    it("returns that stack", () => {
+      const error = Object.defineProperty(new Error("plum"), "stack", { value: "at plum" });
+
+      const stack = errorStack(error);
+
+      expect(stack).toBe("at plum");
+    });
+  });
+
+  describe("when the value holds no readable string stack", () => {
+    it.each([
+      { thrown: "a value that is not an Error", value: "pear" },
+      {
+        thrown: "an Error whose stack is not a string",
+        value: Object.defineProperty(new Error("plum"), "stack", { value: 42 }),
+      },
+      { thrown: "an Error whose stack getter throws", value: unreadableStackError() },
+    ])("returns null for $thrown", ({ value }) => {
+      const stack = errorStack(value);
+
+      expect(stack).toBeNull();
     });
   });
 });

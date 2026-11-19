@@ -20,6 +20,10 @@
       "default": "./dist/index.js"
     }
   },
+  "dependencies": {
+    "@jeffzi/epaulettes": "^0.2.0",
+    "commander": "^15.1.0"
+  },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.0",
     "@commitlint/cli": "^21.2.0",

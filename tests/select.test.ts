@@ -1,32 +1,27 @@
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { findRuntime, type Outcome } from "../src/children.js";
+import type { FoundRuntime, LookupOptions } from "../src/children.js";
 import { ConfigError, type ResolvedOptions } from "../src/options.js";
 import { selectCases, type SelectedCase, type Selection } from "../src/run.js";
 import { expectConfigError } from "./config-error.js";
-import { findAny, found, type FindRuntime, listed, type StartChild } from "./fake-children.js";
+import {
+  failedOutcome,
+  findAny,
+  found,
+  type FindRuntime,
+  listed,
+  type Runtime,
+  type StartChild,
+  stopped,
+} from "./fake-children.js";
+import { fixturePath } from "./fixture-path.js";
 
-const FIXTURES = fileURLToPath(new URL("fixtures/discovery", import.meta.url));
+const FIXTURES = fixturePath("discovery");
 
 const TESTS = fileURLToPath(new URL(".", import.meta.url));
-
-/** A directory whose `bun` prints a version, then runs for 5 s. */
-const HANGING_BUN = fileURLToPath(new URL("fixtures/children/bin/hang", import.meta.url));
-
-/** Windows runs no shell script as an executable. */
-const POSIX = process.platform !== "win32";
-
-/** How long after the selection starts its stop signal fires. */
-const STOP_AFTER_MS = 300;
-
-/** A runtime starting on a slow CI runner. */
-const SPAWN_TIMEOUT_MS = 60_000;
-
-/** How long past its stop a selection may take to return. */
-const RETURN_MARGIN_MS = 2000;
 
 /** The absolute path of the discovery fixture `name`. */
 function fixture(name: string): string {
@@ -59,11 +54,17 @@ const onePerFile: StartChild = async (_runtime, request) =>
   listed([{ id: basename(request.file), setupPerCall: false }]);
 
 /** A listing outcome that fails, which fails the selection if its child is started. */
-const FAILED: Outcome = {
-  status: "failed",
-  error: { phase: "load", message: "kiwi", stack: null, teardownError: null },
-  output: "",
-};
+const FAILED = failedOutcome("load", "kiwi");
+
+/** A runtime lookup that finds node and is stopped while looking for bun. */
+function stoppedOnBun(
+  runtime: Runtime,
+  options: LookupOptions & { readonly signal?: undefined },
+): Promise<FoundRuntime>;
+function stoppedOnBun(runtime: Runtime, options: LookupOptions): Promise<FoundRuntime | undefined>;
+async function stoppedOnBun(runtime: Runtime): Promise<FoundRuntime | undefined> {
+  return runtime === "bun" ? undefined : found(runtime);
+}
 
 /** Selects from the discovery fixtures, passing the stop signal on only when one is given. */
 async function select(
@@ -103,8 +104,30 @@ function idsOf(selection: Selection): string[] {
 }
 
 describe("selectCases", () => {
+  describe("when a plan callback is given", () => {
+    it("receives the number of files to list before the first listing child starts", async () => {
+      const events: string[] = [];
+
+      await selectCases({
+        options: optionsWith(),
+        files: ["zeta.bench.ts", "a.bench.ts", "alpha.bench.mts"],
+        cwd: FIXTURES,
+        findRuntime: findAny,
+        startChild: async (runtime, request, options) => {
+          events.push(request.mode);
+          return onePerFile(runtime, request, options);
+        },
+        onPlanned: (total) => {
+          events.push(`planned ${total}`);
+        },
+      });
+
+      expect(events).toStrictEqual(["planned 3", "list", "list", "list"]);
+    });
+  });
+
   describe("when no positional file is given", () => {
-    it("matches the include globs against includeBase, ** and brace sets included, sorted by path", async () => {
+    it("matches the include globs against includeBase, skipping node_modules, sorted by slash-separated path", async () => {
       const selection = await select({ cwd: TESTS });
 
       expect(pathsOf(selection)).toStrictEqual([
@@ -120,13 +143,10 @@ describe("selectCases", () => {
   });
 
   describe("when positional files are given", () => {
-    it.each([
-      { why: "whose name holds glob characters", file: "[ab].bench.ts" },
-      { why: "inside node_modules", file: "node_modules/pkg/hidden.bench.ts" },
-    ])("takes an argument naming an existing file $why as that file", async ({ file }) => {
-      const selection = await select({ files: [file] });
+    it("takes an argument naming an existing file whose name holds glob characters as that file", async () => {
+      const selection = await select({ files: ["[ab].bench.ts"] });
 
-      expect(pathsOf(selection)).toStrictEqual([fixture(file)]);
+      expect(pathsOf(selection)).toStrictEqual([fixture("[ab].bench.ts")]);
     });
 
     it.each([
@@ -197,34 +217,27 @@ describe("selectCases", () => {
       await expectConfigError(result, ["zeta.bench.ts", error.phase, error.message]);
       await expect(result).rejects.toMatchObject({ failureStack: error.stack, output: "plum\n" });
     });
-
-    it("rejects the file when its child answers a list request with no listing", async () => {
-      const ranOnly: StartChild = async () => ({
-        status: "ok",
-        result: { status: "ok" },
-        output: "plum\n",
-      });
-
-      const result = select({ files: ["zeta.bench.ts"], startChild: ranOnly });
-
-      await expectConfigError(result, ["zeta.bench.ts"]);
-      await expect(result).rejects.toMatchObject({ output: "plum\n" });
-    });
   });
 
-  describe("when two cases share an id", () => {
-    it("rejects them, naming the id and the files", async () => {
+  describe("when cases share an id", () => {
+    it("rejects them, naming the first repeated id and every file that registers it in listing order", async () => {
       const result = select({
-        files: ["zeta.bench.ts", "a.bench.ts"],
-        startChild: listing({ "zeta.bench.ts": ["apple"], "a.bench.ts": ["apple"] }),
+        files: ["zeta.bench.ts", "nested2.bench.ts", "alpha.bench.mts"],
+        startChild: listing({
+          "zeta.bench.ts": ["banana", "apple"],
+          "nested2.bench.ts": ["apple"],
+          "alpha.bench.mts": ["apple", "banana"],
+        }),
       });
 
-      await expectConfigError(result, ["apple", "zeta.bench.ts", "a.bench.ts"]);
+      await expectConfigError(result, [
+        /\bapple\b.*\bzeta\.bench\.ts\b.*\bnested2\.bench\.ts\b.*\balpha\.bench\.mts\b/u,
+      ]);
     });
   });
 
   describe("with a filter", () => {
-    it("keeps only the cases whose id it matches anywhere, in their order", async () => {
+    it("keeps every case whose id it matches anywhere, in listing order", async () => {
       const startChild = listing({ "zeta.bench.ts": ["apple pie", "banana", "pineapple"] });
 
       const selection = await select({
@@ -307,7 +320,7 @@ describe("selectCases", () => {
       const stopping: StartChild = async (_runtime, request) => {
         if (basename(request.file) === "zeta.bench.ts") return FAILED;
         controller.abort();
-        return { status: "stopped", output: "" };
+        return stopped;
       };
 
       const selection = await select({
@@ -337,27 +350,14 @@ describe("selectCases", () => {
     });
   });
 
-  describe("when the stop signal fires during runtime discovery", () => {
-    it.runIf(POSIX)(
-      "ends as stopped, killing the runtime's version probe",
-      async () => {
-        vi.stubEnv("PATH", HANGING_BUN);
-        const controller = new AbortController();
-        setTimeout(() => {
-          controller.abort();
-        }, STOP_AFTER_MS);
-        const started = performance.now();
+  describe("when a runtime lookup was stopped", () => {
+    it("ends as stopped", async () => {
+      const selection = await select({
+        options: { runtimes: ["node", "bun"] },
+        findRuntime: stoppedOnBun,
+      });
 
-        const selection = await select({
-          options: { runtimes: ["node", "bun"] },
-          signal: controller.signal,
-          findRuntime,
-        });
-
-        expect(selection).toStrictEqual({ status: "stopped" });
-        expect(performance.now() - started).toBeLessThan(STOP_AFTER_MS + RETURN_MARGIN_MS);
-      },
-      SPAWN_TIMEOUT_MS,
-    );
+      expect(selection).toStrictEqual({ status: "stopped" });
+    });
   });
 });

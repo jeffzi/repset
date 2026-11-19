@@ -8,19 +8,19 @@
  * It reads `dist/`, so build first. Nothing in it runs two children at once: the check is a
  * measurement, and a second process would move both readings.
  */
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { SamplingReport } from "../src/child.js";
-import { childRuntimeFlags, findRuntime } from "../src/children.js";
-import { CALLS_PER_SAMPLE } from "../src/command.js";
+import { childRuntimeFlags, findRuntime, howItEnded } from "../src/children.js";
+import { CALLS_PER_SAMPLE } from "../src/command-line.js";
 import { RUNTIMES, type Runtime } from "../src/measure/runtime.js";
 import { DEFAULT_TIMEOUT } from "../src/options.js";
-import type { Report } from "../src/report.js";
-import { isRecord, thrownMessage } from "../src/utils.js";
+import type { FailedResult, Report } from "../src/report.js";
+import { isRecord, property, thrownMessage, valueAt } from "../src/utils.js";
 import { BODY_NAMES, type BodyName } from "./check-overhead/bodies.js";
 import {
   judgeScenario,
@@ -63,6 +63,9 @@ export interface Readers {
   readonly baseline: (scenario: Scenario, counts: BaselineCounts) => number;
 }
 
+/** How one spawned run ended: its exit status, or the signal that killed it. */
+type RunEnd = Pick<SpawnSyncReturns<string>, "status" | "signal">;
+
 /** One round of a scenario: its pairs, and the repset readings behind them in pair order. */
 interface Round {
   readonly pairs: Pairs;
@@ -92,8 +95,38 @@ function scenarioName(scenario: Scenario): string {
 // Reading repset and the baseline
 // ---------------------------------------------------------------------------
 
-function exitDescription(status: number | null): string {
-  return status === null ? "was ended by a signal" : `exited ${String(status)}`;
+/**
+ * Says how a run that did not end cleanly ended.
+ *
+ * @param subject - What ran, as the sentence's subject.
+ * @param end - The run's exit status and signal.
+ * @returns `<subject> was killed by <signal>`, or `<subject> exited with status <status>`.
+ */
+function howRunEnded(subject: string, end: RunEnd): string {
+  return howItEnded(subject, { kind: "exit", code: end.status, signal: end.signal });
+}
+
+/**
+ * Reads the failed result a run that exited 1 left in its report.
+ *
+ * @param reportPath - The file the command wrote its report to.
+ * @returns The report's first failed result, or `undefined` when the file is missing, unreadable,
+ *   not a report, or holds no failed result.
+ */
+function failedResult(reportPath: string): FailedResult | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(reportPath, "utf8"));
+  } catch {
+    return undefined;
+  }
+  if (!isReport(parsed)) return undefined;
+  return parsed.results.find((result): result is FailedResult => result.status === "failed");
+}
+
+/** The message saying `failed`'s case failed, naming the scenario `name`, the phase and the error. */
+function caseFailure(name: string, failed: FailedResult): string {
+  return `${name}: the case failed in phase ${failed.error.phase}: ${failed.error.message}`;
 }
 
 /**
@@ -106,39 +139,6 @@ function exitDescription(status: number | null): string {
  */
 function isReport(value: unknown): value is Report {
   return isRecord(value) && value["schema"] === REPORT_SCHEMA && Array.isArray(value["results"]);
-}
-
-/**
- * Builds the repset command line for one reading of `scenario`.
- *
- * @param scenario - The scenario to read.
- * @param outPath - Where the command writes its report.
- * @param env - The environment to start from.
- * @returns The arguments to run under the driver's own Node, and the command's environment:
- *   `REPSET_CALLS_PER_SAMPLE=1` for a one-call scenario, and the variable removed for a calibrated
- *   one.
- */
-function repsetCommand(
-  scenario: Scenario,
-  outPath: string,
-  env: NodeJS.ProcessEnv,
-): { readonly args: readonly string[]; readonly env: NodeJS.ProcessEnv } {
-  const { [CALLS_PER_SAMPLE]: _inherited, ...rest } = env;
-  return {
-    args: [
-      CLI,
-      BENCH_FILE,
-      "--runtime",
-      scenario.runtime,
-      "--filter",
-      `^overhead/${scenario.body}$`,
-      "--node-import",
-      "tsx",
-      "--out",
-      outPath,
-    ],
-    env: scenario.countMode === "one-call" ? { ...rest, [CALLS_PER_SAMPLE]: "1" } : rest,
-  };
 }
 
 /**
@@ -193,27 +193,29 @@ function onlyResult(
  * Turns one run of the repset command into a reading, refusing one the check cannot trust.
  *
  * @param scenario - The scenario the run read.
- * @param status - The command's exit status, `null` when a signal ended it.
+ * @param end - The command's exit status and the signal that killed it.
  * @param reportPath - The file the command wrote its report to.
  * @returns The result's process: its median, counts, timer resolution and timing length, with the
  *   report's `minTime`.
- * @throws Error naming the scenario when the command exited non-zero; the report is missing,
- *   unreadable or not a report holding exactly one measured result; the result failed, naming its
- *   phase and message; or the process's count does not match the scenario's.
+ * @throws Error naming the scenario when the case failed, naming its phase and message: the
+ *   command exited 1 and its report holds a failed result, or exited 0 with a failed result.
+ * @throws Error naming the scenario and how the command ended when it ended otherwise than with
+ *   status 0.
+ * @throws Error naming the scenario when the report of a run that exited 0 is missing, unreadable
+ *   or not a report holding exactly one result, or the process's count does not match the
+ *   scenario's.
  */
-function repsetReading(
-  scenario: Scenario,
-  status: number | null,
-  reportPath: string,
-): RepsetReading {
+export function repsetReading(scenario: Scenario, end: RunEnd, reportPath: string): RepsetReading {
   const name = scenarioName(scenario);
-  if (status !== 0) throw new Error(`${name}: repset ${exitDescription(status)}`);
-  const { report, result } = onlyResult(name, reportPath);
-  if (result.status === "failed") {
+  if (end.status !== 0) {
+    // repset exits 1 when a case fails, and its report then says why.
+    const failed = end.status === 1 ? failedResult(reportPath) : undefined;
     throw new Error(
-      `${name}: the case failed in phase ${result.error.phase}: ${result.error.message}`,
+      failed === undefined ? howRunEnded(`${name}: repset`, end) : caseFailure(name, failed),
     );
   }
+  const { report, result } = onlyResult(name, reportPath);
+  if (result.status === "failed") throw new Error(caseFailure(name, result));
   const { stats, sampling } = result.processes[0];
   checkCount(name, scenario, sampling);
   return {
@@ -231,22 +233,24 @@ function repsetReading(
  * line.
  *
  * @param scenario - The scenario the run read.
- * @param status - The child's exit status, `null` when a signal ended it.
+ * @param end - The child's exit status and the signal that killed it.
  * @param stdout - What the child printed.
  * @returns The median the child printed, in nanoseconds per call.
- * @throws Error naming the scenario when the child exited non-zero, or printed something that is
- *   not JSON or holds no finite numeric median.
+ * @throws Error naming the scenario and how the child ended when it exited non-zero or a signal
+ *   killed it.
+ * @throws Error naming the scenario when the child printed something that is not JSON or holds no
+ *   finite numeric median.
  */
-function checkedBaselineMedian(scenario: Scenario, status: number | null, stdout: string): number {
+export function checkedBaselineMedian(scenario: Scenario, end: RunEnd, stdout: string): number {
   const name = scenarioName(scenario);
-  if (status !== 0) throw new Error(`${name}: the baseline child ${exitDescription(status)}`);
+  if (end.status !== 0) throw new Error(howRunEnded(`${name}: the baseline child`, end));
   let printed: unknown;
   try {
     printed = JSON.parse(stdout);
   } catch {
     printed = undefined;
   }
-  const median = isRecord(printed) ? printed["median"] : undefined;
+  const median = property(printed, "median");
   if (typeof median !== "number" || !Number.isFinite(median)) {
     throw new Error(`${name}: the baseline child printed no finite median`);
   }
@@ -268,18 +272,41 @@ function throwSpawnError(scenario: Scenario, error: Error | undefined): void {
   }
 }
 
+/**
+ * Runs the repset command once on `scenario` under the driver's own Node, with
+ * `REPSET_CALLS_PER_SAMPLE=1` for a one-call scenario and the variable removed for a calibrated one,
+ * and reads its report from a temporary directory it removes afterwards.
+ *
+ * @param scenario - The scenario to read.
+ * @returns The reading of the scenario's one result.
+ * @throws Error naming the scenario when the command cannot start or its run cannot be trusted
+ *   (see {@link repsetReading}).
+ * @throws The filesystem error from creating or removing the temporary directory.
+ */
 function readRepset(scenario: Scenario): RepsetReading {
   const dir = mkdtempSync(join(tmpdir(), "check-overhead-"));
   try {
     const outPath = join(dir, "report.json");
-    const command = repsetCommand(scenario, outPath, process.env);
-    const run = spawnSync(process.execPath, command.args, {
+    const { [CALLS_PER_SAMPLE]: _inherited, ...env } = process.env;
+    const args = [
+      CLI,
+      BENCH_FILE,
+      "--runtime",
+      scenario.runtime,
+      "--filter",
+      `^overhead/${scenario.body}$`,
+      "--node-import",
+      "tsx",
+      "--out",
+      outPath,
+    ];
+    const run = spawnSync(process.execPath, args, {
       cwd: ROOT,
-      env: command.env,
+      env: scenario.countMode === "one-call" ? { ...env, [CALLS_PER_SAMPLE]: "1" } : env,
       stdio: ["ignore", "ignore", "inherit"],
     });
     throwSpawnError(scenario, run.error);
-    return repsetReading(scenario, run.status, outPath);
+    return repsetReading(scenario, run, outPath);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -304,53 +331,35 @@ async function findExecutables(): Promise<Executables> {
 }
 
 /**
- * Builds the baseline child's command line for one reading of `scenario`.
+ * Runs the baseline child once on `scenario`'s runtime executable, started with the flags repset's
+ * own children start with (Node loading tsx to run TypeScript), and reads its median.
  *
  * @param executables - Each runtime's executable.
  * @param scenario - The scenario to read.
  * @param counts - The calls per sample and sample count to run at.
- * @returns The scenario's runtime executable, and the arguments: the flags repset's own children
- *   start with (Node loading tsx to run TypeScript), the baseline child, the body, then the two
- *   counts.
+ * @returns The median the child printed, in nanoseconds per call.
+ * @throws Error naming the scenario when the child cannot start, ends badly or prints no finite
+ *   median.
  */
-function baselineCommand(
-  executables: Executables,
-  scenario: Scenario,
-  counts: BaselineCounts,
-): { readonly executable: string; readonly args: readonly string[] } {
-  return {
-    executable: executables[scenario.runtime],
-    args: [
-      ...childRuntimeFlags(scenario.runtime, "tsx"),
-      BASELINE_CHILD,
-      scenario.body,
-      String(counts.callsPerSample),
-      String(counts.sampleCount),
-    ],
-  };
-}
-
 function readBaseline(
   executables: Executables,
   scenario: Scenario,
   counts: BaselineCounts,
 ): number {
-  const { executable, args } = baselineCommand(executables, scenario, counts);
-  const run = spawnSync(executable, args, {
+  const args = [
+    ...childRuntimeFlags(scenario.runtime, "tsx"),
+    BASELINE_CHILD,
+    scenario.body,
+    String(counts.callsPerSample),
+    String(counts.sampleCount),
+  ];
+  const run = spawnSync(executables[scenario.runtime], args, {
     cwd: ROOT,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "inherit"],
   });
   throwSpawnError(scenario, run.error);
-  return checkedBaselineMedian(scenario, run.status, run.stdout);
-}
-
-/** The readers that run `dist/cli.js` and the baseline child on `executables`. */
-function realReaders(executables: Executables): Readers {
-  return {
-    repset: readRepset,
-    baseline: (scenario, counts) => readBaseline(executables, scenario, counts),
-  };
+  return checkedBaselineMedian(scenario, run, run.stdout);
 }
 
 // ---------------------------------------------------------------------------
@@ -444,10 +453,7 @@ function roundLines(
   pairs: Pairs,
 ): string[] {
   const pairLines = pairs.baseline.map((baseline, pairIndex) => {
-    const repset = pairs.repset[pairIndex];
-    if (repset === undefined) {
-      throw new RangeError(`${pairPlace(name, roundIndex, pairIndex)} no repset median`);
-    }
+    const repset = valueAt(pairs.repset, pairIndex);
     return `${pairPlace(name, roundIndex, pairIndex)}  baseline ${String(baseline)}  repset ${String(repset)}`;
   });
   return [summaryLine(name, roundIndex, summary), ...pairLines];
@@ -547,5 +553,9 @@ export function runCheck(readers: Readers, print: (text: string) => void = conso
 }
 
 if (import.meta.main) {
-  process.exitCode = runCheck(realReaders(await findExecutables()));
+  const executables = await findExecutables();
+  process.exitCode = runCheck({
+    repset: readRepset,
+    baseline: (scenario, counts) => readBaseline(executables, scenario, counts),
+  });
 }

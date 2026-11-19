@@ -82,7 +82,7 @@ export interface FailedResult extends ResultBase {
   readonly status: "failed";
   readonly error: ResultError;
   readonly median: null;
-  readonly processes: readonly FailedProcess[];
+  readonly processes: readonly [FailedProcess];
 }
 
 /** One case's result on one runtime. */

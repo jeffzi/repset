@@ -6,6 +6,7 @@ import type { Colors, Output } from "./command.js";
 import { DEFAULT_MIN_SAMPLES, DEFAULT_MIN_TIME } from "./measure/measure.js";
 import { RUNTIMES, type Runtime } from "./measure/runtime.js";
 import {
+  CONFIG_NAMES,
   ConfigError,
   DEFAULT_INCLUDE,
   DEFAULT_RUNTIMES,
@@ -38,7 +39,6 @@ export const CALLS_PER_SAMPLE = "REPSET_CALLS_PER_SAMPLE";
 /** The `--output` value that sends the report to stdout instead of a file. */
 export const OUTPUT_STDOUT = "-";
 
-/** What the help says the command does, before its options. */
 const DESCRIPTION =
   "Benchmarks the cases in the given files, or in every file the config's include patterns " +
   `match (default: ${DEFAULT_INCLUDE.join(", ")}).`;
@@ -76,7 +76,7 @@ const OPTIONS: readonly (readonly [string, string])[] = [
   ],
   ["--list", "List the selected case ids without running them"],
   ["--once", "Run each selected case once on each runtime, without timing, to check it works"],
-  ["--config <file>", "Use this config file instead of looking for repset.config.ts"],
+  ["--config <file>", `Use this config file instead of looking for ${CONFIG_NAMES.join(", ")}`],
   ["--no-color", "Turn off color, even on a terminal"],
 ];
 
@@ -211,13 +211,16 @@ export function commandLine(version: string, stdout: Output, colors: Colors): Pa
 export function noColorGiven(args: readonly string[]): boolean {
   const options = commandLine("", { write: () => true }, { stdout: false, stderr: false }).options;
   const takesValue = new Set(
-    options.filter((option) => option.required).flatMap(({ short, long }) => [short, long]),
+    options
+      .filter((option) => option.required)
+      .flatMap(({ short, long }) => [short, long])
+      .filter((flag): flag is string => flag !== undefined),
   );
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
+  const remaining = args[Symbol.iterator]();
+  for (const arg of remaining) {
     if (arg === "--") return false;
     if (arg === "--no-color") return true;
-    if (takesValue.has(arg)) index += 1;
+    if (takesValue.has(arg)) remaining.next();
   }
   return false;
 }

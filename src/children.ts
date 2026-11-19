@@ -16,10 +16,9 @@ import type {
   ListedCase,
   Measured,
   Ran,
-  SamplingReport,
 } from "./child.js";
 import type { GcDuringTiming } from "./measure/collections.js";
-import type { Statistics } from "./measure/measure.js";
+import type { SamplingReport, Statistics } from "./measure/measure.js";
 import { type Runtime, runningRuntime } from "./measure/runtime.js";
 import { ConfigError, failedWith } from "./options.js";
 import { RESULT_FD } from "./result-fd.js";

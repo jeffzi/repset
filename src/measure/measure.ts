@@ -90,21 +90,28 @@ export interface Statistics {
   readonly sampleCount: number;
 }
 
-export interface Measurement extends Statistics {
+/** How the body's samples were taken, named and ordered as the report prints them. */
+export interface SamplingReport {
   readonly timerResolutionNs: number;
   readonly callsPerSample: number;
   /** Whether `callsPerSample` was given rather than calibrated by warmup. */
   readonly callsPerSampleFixed: boolean;
-  /** The body's mean per call divided by the empty body's. */
-  readonly ratioToEmptyBody: number;
-  /** Present only where the runtime delivers `gc` performance entries, as Node does. */
-  readonly gcDuringTiming?: GcDuringTiming;
-  /** How many timing attempts the body's sampler took, the kept one included. */
-  readonly timingAttempts: number;
   /** The body's samples before its kept run: warmup's, plus every discarded timing attempt's. */
   readonly warmupSamples: number;
+  /** How many timing attempts the body's sampler took, the kept one included. */
+  readonly timingAttempts: number;
   /** The body's kept timing attempt's length on the clock, in milliseconds. */
   readonly timingMs: number;
+}
+
+/** A measurement in the shape of the report's per-process fields. */
+export interface Measurement {
+  readonly stats: Statistics;
+  readonly sampling: SamplingReport;
+  /** The body's mean per call divided by the empty body's. */
+  readonly checks: { readonly ratioToEmptyBody: number };
+  /** The collections seen during timing, or `null` where the runtime delivers no `gc` entries. */
+  readonly gc: GcDuringTiming | null;
 }
 
 /**
@@ -175,7 +182,8 @@ function performanceNow(): number {
  *   `minSamples` the body's timing attempts must pass, {@link DEFAULT_MIN_TIME} and
  *   {@link DEFAULT_MIN_SAMPLES} when absent; the empty body always takes the fixed count of timed
  *   samples {@link sampleEmpty} runs.
- * @returns The body's per-call statistics in nanoseconds and how they were taken.
+ * @returns The measurement in the report's shape: the body's per-call statistics in nanoseconds,
+ *   how they were taken, its ratio to the empty body and the collections seen during timing.
  * @throws MeasureError in phase `child` when no garbage collector is exposed, or when Bun is
  *   running but `bun:jsc` cannot be loaded, with the loader's value as cause, before anything runs;
  *   and when the forced GC throws, with the collector's value as cause, after every state left
@@ -236,24 +244,26 @@ export async function measure<State>(
     observer?.disconnect();
   }
 
-  const statistics = summarize(run.spans, run.sampleCount, run.callsPerSample);
+  const stats = summarize(run.spans, run.sampleCount, run.callsPerSample);
   // The body's timing window has closed, so the empty run's collection only collects.
-  const ratioToEmptyBody = checkedRatioToEmptyBody(statistics.mean, benchmark.kind, {
+  const ratioToEmptyBody = checkedRatioToEmptyBody(stats.mean, benchmark.kind, {
     ...sampling,
     collect: () => {
       collectGarbage(gc);
     },
   });
   return {
-    ...statistics,
-    timerResolutionNs: resolutionMs * NS_PER_MS,
-    callsPerSample: run.callsPerSample,
-    callsPerSampleFixed: options.callsPerSample !== undefined,
-    ratioToEmptyBody,
-    ...(gcDuringTiming === undefined ? {} : { gcDuringTiming }),
-    timingAttempts: run.timingAttempts,
-    warmupSamples: run.warmupSamples,
-    timingMs: run.timingMs,
+    stats,
+    sampling: {
+      timerResolutionNs: resolutionMs * NS_PER_MS,
+      callsPerSample: run.callsPerSample,
+      callsPerSampleFixed: options.callsPerSample !== undefined,
+      warmupSamples: run.warmupSamples,
+      timingAttempts: run.timingAttempts,
+      timingMs: run.timingMs,
+    },
+    checks: { ratioToEmptyBody },
+    gc: gcDuringTiming ?? null,
   };
 }
 

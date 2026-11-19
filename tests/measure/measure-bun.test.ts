@@ -90,7 +90,7 @@ const { measure } = await import(${JSON.stringify(MEASURE_PATH)});
 ${SCRIPT_BENCH}
 const result = await measure({ kind: "sharedState", setup, fn });
 console.log(JSON.stringify({
-  observesGc: "gcDuringTiming" in result,
+  observesGc: result.gc !== null,
   sank: sink > 0,
 }));
 `;

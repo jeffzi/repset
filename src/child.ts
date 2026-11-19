@@ -12,14 +12,12 @@ import { isAbsolute } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { type RegisteredCase, registeredCases } from "./bench.js";
-import type { GcDuringTiming } from "./measure/collections.js";
 import {
   type Case,
   measure,
   MeasureError,
   type Measurement,
   type Phase,
-  type Statistics,
   withCaseState,
 } from "./measure/measure.js";
 import { RESULT_FD } from "./result-fd.js";
@@ -30,7 +28,7 @@ import { describe, errorStack, isInstance, thrownMessage } from "./utils.js";
 // ---------------------------------------------------------------------------
 
 /** Lists the cases a benchmark file registers. */
-export interface ListRequest {
+interface ListRequest {
   readonly mode: "list";
   readonly file: string;
 }
@@ -63,7 +61,7 @@ export type ChildPhase = Phase | "load";
  * A cleanup teardown's failure: its value's message, and its stack as {@link ChildError} encodes
  * one.
  */
-export interface TeardownFailure {
+interface TeardownFailure {
   readonly message: string;
   readonly stack: string | null;
 }
@@ -91,25 +89,9 @@ export interface Listed {
   readonly cases: ListedCase[];
 }
 
-/** How a measuring child's samples were taken, under the report's names. */
-export type SamplingReport = Pick<
-  Measurement,
-  | "timerResolutionNs"
-  | "callsPerSample"
-  | "callsPerSampleFixed"
-  | "warmupSamples"
-  | "timingAttempts"
-  | "timingMs"
->;
-
 /** A measuring child's result: the report's per-process fields the child knows. */
-export interface Measured {
+export interface Measured extends Measurement {
   readonly status: "ok";
-  readonly stats: Statistics;
-  readonly sampling: SamplingReport;
-  readonly checks: { readonly ratioToEmptyBody: number };
-  /** The collections seen during timing, or `null` where the runtime delivers no `gc` entries. */
-  readonly gc: GcDuringTiming | null;
 }
 
 /** A once child's result: the case ran, and nothing was timed. */
@@ -182,17 +164,17 @@ export function parseRequest(argument: string): ChildRequest {
     case "once":
       return { mode, file, id: stringField(request, "id") };
     case "measure": {
-      const callsPerSample =
+      const fixedCount =
         Reflect.get(request, "callsPerSample") === undefined
-          ? undefined
-          : numberField(request, "callsPerSample");
+          ? {}
+          : { callsPerSample: numberField(request, "callsPerSample") };
       return {
         mode,
         file,
         id: stringField(request, "id"),
         minTime: numberField(request, "minTime"),
         minSamples: numberField(request, "minSamples"),
-        ...(callsPerSample === undefined ? {} : { callsPerSample }),
+        ...fixedCount,
       };
     }
     default:
@@ -277,9 +259,10 @@ export async function measureCase(
   id: string,
   sampling: Pick<MeasureRequest, "minTime" | "minSamples" | "callsPerSample">,
 ): Promise<Measured | Failed> {
-  return withSelectedCase(file, id, async (selected) =>
-    measuredResult(await measure(selected, sampling)),
-  );
+  return withSelectedCase(file, id, async (selected) => ({
+    status: "ok",
+    ...(await measure(selected, sampling)),
+  }));
 }
 
 /**
@@ -358,33 +341,6 @@ async function withSelectedCase<T>(
     // MeasureErrors alone, whose own phase the result carries.
     return failedResult("child", error);
   }
-}
-
-/** Splits `measure`'s flat measurement into the report's per-process fields. */
-function measuredResult(measurement: Measurement): Measured {
-  return {
-    status: "ok",
-    stats: {
-      min: measurement.min,
-      p25: measurement.p25,
-      median: measurement.median,
-      p75: measurement.p75,
-      p99: measurement.p99,
-      max: measurement.max,
-      mean: measurement.mean,
-      sampleCount: measurement.sampleCount,
-    },
-    sampling: {
-      timerResolutionNs: measurement.timerResolutionNs,
-      callsPerSample: measurement.callsPerSample,
-      callsPerSampleFixed: measurement.callsPerSampleFixed,
-      warmupSamples: measurement.warmupSamples,
-      timingAttempts: measurement.timingAttempts,
-      timingMs: measurement.timingMs,
-    },
-    checks: { ratioToEmptyBody: measurement.ratioToEmptyBody },
-    gc: measurement.gcDuringTiming ?? null,
-  };
 }
 
 // ---------------------------------------------------------------------------

@@ -457,7 +457,7 @@ describe("measure", () => {
 
       const result = await run(fake);
 
-      expect(result.sampleCount).toBe(64);
+      expect(result.stats.sampleCount).toBe(64);
     });
   });
 
@@ -777,7 +777,7 @@ describe("measure", () => {
 
       const result = await measure(scripted.benchmark, { now: scripted.now, callsPerSample: 1 });
 
-      expect(result.ratioToEmptyBody).toBe(80);
+      expect(result.checks.ratioToEmptyBody).toBe(80);
     });
 
     // Two calls per sample: summed per-call spans read one resolution per empty call, a batched pair of
@@ -787,7 +787,7 @@ describe("measure", () => {
 
       const result = await measure(fake.benchmark, { now: fake.now, callsPerSample: 2 });
 
-      expect(result.ratioToEmptyBody).toBeCloseTo(800, 6);
+      expect(result.checks.ratioToEmptyBody).toBeCloseTo(800, 6);
     });
   });
 
@@ -802,7 +802,7 @@ describe("measure", () => {
         minSamples: 10,
       });
 
-      expect(result.sampleCount).toBe(30);
+      expect(result.stats.sampleCount).toBe(30);
     });
   });
 
@@ -813,22 +813,26 @@ describe("measure", () => {
       const result = await measure(fake.benchmark, { now: fake.now, callsPerSample: 2 });
 
       expect(result).toStrictEqual({
-        min: 100_000_000,
-        p25: 100_000_000,
-        median: 100_000_000,
-        p75: 100_000_000,
-        p99: 100_000_000,
-        max: 100_000_000,
-        mean: 100_000_000,
-        sampleCount: 64,
-        timerResolutionNs: 125_000,
-        callsPerSample: 2,
-        callsPerSampleFixed: true,
-        ratioToEmptyBody: 1600,
-        gcDuringTiming: expect.any(Object),
-        timingAttempts: 1,
-        warmupSamples: WARMUP_MIN_SAMPLES,
-        timingMs: expect.any(Number),
+        stats: {
+          min: 100_000_000,
+          p25: 100_000_000,
+          median: 100_000_000,
+          p75: 100_000_000,
+          p99: 100_000_000,
+          max: 100_000_000,
+          mean: 100_000_000,
+          sampleCount: 64,
+        },
+        sampling: {
+          timerResolutionNs: 125_000,
+          callsPerSample: 2,
+          callsPerSampleFixed: true,
+          warmupSamples: WARMUP_MIN_SAMPLES,
+          timingAttempts: 1,
+          timingMs: expect.any(Number),
+        },
+        checks: { ratioToEmptyBody: 1600 },
+        gc: expect.any(Object),
       });
     });
 
@@ -837,7 +841,7 @@ describe("measure", () => {
 
       const result = await measure(fake.benchmark, { now: fake.now });
 
-      expect(result.callsPerSampleFixed).toBe(false);
+      expect(result.sampling.callsPerSampleFixed).toBe(false);
     });
   });
 
@@ -849,7 +853,7 @@ describe("measure", () => {
 
       const result = await run(fake);
 
-      const observed = result.gcDuringTiming;
+      const observed = result.gc;
       expect(observed?.major).toBeGreaterThanOrEqual(1);
       expect(observed?.maxMs).toBeGreaterThan(0);
       expect(observed?.totalMs).toBeGreaterThanOrEqual(observed?.maxMs ?? Number.NaN);
@@ -860,7 +864,7 @@ describe("measure", () => {
 
       const result = await run(fake);
 
-      expect(result.gcDuringTiming?.minor).toBeGreaterThanOrEqual(1);
+      expect(result.gc?.minor).toBeGreaterThanOrEqual(1);
     });
 
     it("counts the forced GC a body forces during the kept timing attempt, leaving out those it forces during a discarded one", async () => {
@@ -876,7 +880,7 @@ describe("measure", () => {
 
       const result = await measure(fake.benchmark, { now: fake.now });
 
-      expect(result.gcDuringTiming?.count).toBe(1);
+      expect(result.gc?.count).toBe(1);
     });
 
     it("counts none for a body that allocates nothing, leaving out the forced GC before timing", async () => {
@@ -892,7 +896,7 @@ describe("measure", () => {
 
       const result = await measure(benchmark, { now: clock.now, callsPerSample: 1 });
 
-      expect(result.gcDuringTiming).toStrictEqual({
+      expect(result.gc).toStrictEqual({
         count: 0,
         minor: 0,
         major: 0,

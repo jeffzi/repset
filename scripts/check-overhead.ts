@@ -14,9 +14,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { SamplingReport } from "../src/child.js";
 import { childRuntimeFlags, findRuntime, howItEnded } from "../src/children.js";
 import { CALLS_PER_SAMPLE } from "../src/command-line.js";
+import type { SamplingReport } from "../src/measure/measure.js";
 import { RUNTIMES, type Runtime } from "../src/measure/runtime.js";
 import { DEFAULT_TIMEOUT } from "../src/options.js";
 import type { FailedResult, Report } from "../src/report.js";

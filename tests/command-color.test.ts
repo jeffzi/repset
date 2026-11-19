@@ -29,7 +29,7 @@ describe("main", () => {
 
       expect({ styled: styled(ended.stdout), stdout: ended.stdout }).toStrictEqual({
         styled: true,
-        stdout: formatTable(ended.report.results, { color: true }),
+        stdout: formatTable(ended.report.results, ended.report.contests, { color: true }),
       });
     });
 
@@ -39,7 +39,9 @@ describe("main", () => {
         stdout: terminal(),
       });
 
-      expect(ended.stdout).toBe(formatTable(ended.report.results, { color: false }));
+      expect(ended.stdout).toBe(
+        formatTable(ended.report.results, ended.report.contests, { color: false }),
+      );
     });
 
     it.each([
@@ -50,7 +52,9 @@ describe("main", () => {
 
       const ended = await runWithReport([], { startChild: failsParse, stdout: terminal() });
 
-      expect(ended.stdout).toBe(formatTable(ended.report.results, { color: false }));
+      expect(ended.stdout).toBe(
+        formatTable(ended.report.results, ended.report.contests, { color: false }),
+      );
     });
 
     it("prints the plain table on a terminal stdout that reports one bit of color", async () => {
@@ -58,7 +62,9 @@ describe("main", () => {
 
       const ended = await runWithReport([], { startChild: failsParse, stdout });
 
-      expect(ended.stdout).toBe(formatTable(ended.report.results, { color: false }));
+      expect(ended.stdout).toBe(
+        formatTable(ended.report.results, ended.report.contests, { color: false }),
+      );
     });
 
     it("prints the plain table on a stdout that is not a terminal while stderr is one", async () => {
@@ -68,7 +74,9 @@ describe("main", () => {
         stderr: terminal(),
       });
 
-      expect(ended.stdout).toBe(formatTable(ended.report.results, { color: false }));
+      expect(ended.stdout).toBe(
+        formatTable(ended.report.results, ended.report.contests, { color: false }),
+      );
     });
 
     it("colors the table on a terminal stderr under --output -, whatever stdout is", async () => {
@@ -80,7 +88,7 @@ describe("main", () => {
 
       expect({
         results: results.length,
-        tableEnd: stderr.endsWith(formatTable(results, { color: true })),
+        tableEnd: stderr.endsWith(formatTable(results, [], { color: true })),
       }).toStrictEqual({ results: 2, tableEnd: true });
     });
 
@@ -128,7 +136,9 @@ describe("main", () => {
 
       const ended = await runWithReport([], { startChild: failsParse, stdout: terminal() });
 
-      expect(ended.stdout).toBe(formatTable(ended.report.results, { color: true }));
+      expect(ended.stdout).toBe(
+        formatTable(ended.report.results, ended.report.contests, { color: true }),
+      );
     });
 
     it("aligns a colored multi-line --once failure as the plain one", async () => {

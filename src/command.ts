@@ -309,7 +309,9 @@ async function measure(command: Command, context: Context): Promise<number> {
   });
   progress.stop();
   const tableTo = toStdout ? "stderr" : "stdout";
-  context[tableTo].write(formatTable(report.results, { color: context.colors[tableTo] }));
+  context[tableTo].write(
+    formatTable(report.results, report.contests, { color: context.colors[tableTo] }),
+  );
   if (toStdout) stdout.write(reportText(report));
   let written = true;
   if (file !== undefined) {

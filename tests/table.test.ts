@@ -5,6 +5,9 @@ import { describe, expect, it } from "vitest";
 import type { ChildPhase } from "../src/child.js";
 import type { StrictOmit } from "../src/command-line.js";
 import type {
+  Contest,
+  ContestContender,
+  ContestPair,
   FailedResult,
   MeasuredProcess,
   MeasuredResult,
@@ -31,6 +34,9 @@ function flatStats(median: number): Stats {
     sampleCount: 64,
   };
 }
+
+/** Statistics whose max and sample count print wider than the rest. */
+const WIDE_STATS: Stats = { ...flatStats(4656), max: 2_340_000, sampleCount: 1200 };
 
 /** The one process of a measured case, holding `stats`. */
 function measuredProcess(stats: Stats): MeasuredProcess {
@@ -95,9 +101,108 @@ function failed(
   };
 }
 
-/** The lines of the table of `results`, the last one empty after the closing newline. */
-function tableLines(results: readonly Result[]): string[] {
-  return formatTable(results, { color: false }).split("\n");
+/** A result of contender `key` of contest `name` measured on `runtime` with every time `median`. */
+function contenderResult(
+  name: string,
+  key: string,
+  median: number,
+  runtime: Runtime = "node",
+): MeasuredResult {
+  return { ...measured(`${name}/${key}`, runtime, flatStats(median)), name, contender: key };
+}
+
+/** A result of the contender whose case id is `id` (`<contest>/<key>`) that failed on Node in `phase`. */
+function failedContender(
+  id: string,
+  phase: ChildPhase,
+  message: string,
+  teardownError: ResultError["teardownError"] = null,
+): FailedResult {
+  const slash = id.lastIndexOf("/");
+  return {
+    ...failed(id, phase, message, teardownError),
+    name: id.slice(0, slash),
+    contender: id.slice(slash + 1),
+  };
+}
+
+function contender(
+  id: string,
+  median: number | null,
+  ratio: number | null = null,
+  rank: number | null = null,
+): ContestContender {
+  return { id, median, ratio, rank };
+}
+
+/** The verdict of contenders `a` and `b` of contest `name`, `faster` the faster's key or null for a tie. */
+function pair(
+  name: string,
+  [a, b]: readonly [string, string],
+  [ratio, interval]: readonly [number, readonly [number, number]],
+  faster: string | null,
+): ContestPair {
+  return {
+    a: `${name}/${a}`,
+    b: `${name}/${b}`,
+    ratio,
+    interval,
+    p: 0.01,
+    pAdjusted: 0.01,
+    faster: faster === null ? null : `${name}/${faster}`,
+  };
+}
+
+/** The entry of contest `name` on Node over `rounds` rounds. */
+function contest(
+  name: string,
+  rounds: number,
+  contenders: readonly ContestContender[],
+  pairs: readonly ContestPair[],
+): Contest {
+  return {
+    name,
+    params: {},
+    runtime: { name: "node", version: found("node").version },
+    rounds,
+    contenders,
+    pairs,
+  };
+}
+
+/** `entry` as it would read on Bun. */
+function onBun(entry: Contest): Contest {
+  return { ...entry, runtime: { name: "bun", version: found("bun").version } };
+}
+
+/** The entry of contest `name` judged over `rounds` rounds, `fast` proven faster than `slow`. */
+function judgedContest(
+  name: string,
+  rounds: number,
+  [fast, slow]: readonly [string, string],
+): Contest {
+  return contest(
+    name,
+    rounds,
+    [contender(`${name}/${fast}`, 100, 1, 1), contender(`${name}/${slow}`, 200, 2, 2)],
+    [pair(name, [fast, slow], [2, [1.9, 2.1]], fast)],
+  );
+}
+
+/** The results of the two contenders of `judgedContest(name, …, [fast, slow])`. */
+function judgedResults(name: string, [fast, slow]: readonly [string, string]): MeasuredResult[] {
+  return [contenderResult(name, fast, 100), contenderResult(name, slow, 200)];
+}
+
+/** The lines of the table of `results` and `contests`, the last one empty after the closing newline. */
+function tableLines(results: readonly Result[], contests: readonly Contest[] = []): string[] {
+  return formatTable(results, contests, { color: false }).split("\n");
+}
+
+/** The footer of the table of `results` and `contests`: its lines after the last block, joined. */
+function footer(results: readonly Result[], contests: readonly Contest[]): string {
+  const lines = tableLines(results, contests);
+  return lines.slice(lines.lastIndexOf("", -2) + 1, -1).join("\n");
 }
 
 /** The index of the first line that starts with `id` and a space, or -1 when no row does. */
@@ -124,7 +229,7 @@ function rowTexts(results: readonly Result[], id: string): string[] {
 describe("formatTable", () => {
   describe("when there is no result", () => {
     it("returns the empty string", () => {
-      const table = formatTable([], { color: false });
+      const table = formatTable([], [], { color: false });
 
       expect(table).toBe("");
     });
@@ -176,7 +281,7 @@ describe("formatTable", () => {
     it("boxes the section with every row padded to that id", () => {
       const results = [
         measured("apple", "node", flatStats(812)),
-        measured("elderberry", "node", { ...flatStats(4656), max: 2_340_000, sampleCount: 1200 }),
+        measured("elderberry", "node", WIDE_STATS),
         failed("watermelons", "fn", "plum exploded"),
         failed("fig", "fn", "kiwi"),
       ];
@@ -228,7 +333,7 @@ describe("formatTable", () => {
 
     it("sizes each section's columns to its own rows", () => {
       const results = [
-        measured("elderberry", "node", { ...flatStats(4656), max: 2_340_000, sampleCount: 1200 }),
+        measured("elderberry", "node", WIDE_STATS),
         measured("banana", "bun", flatStats(812)),
       ];
 
@@ -306,25 +411,325 @@ describe("formatTable", () => {
     });
   });
 
+  describe("when a contest ran between plain cases", () => {
+    it("splits the plain cases around the contest's sub-table, its rows in the entry's order", () => {
+      const results = [
+        measured("apple", "node", flatStats(812)),
+        contenderResult("concat", "loop", 1900),
+        contenderResult("concat", "join", 812),
+        contenderResult("concat", "array-push", 941),
+        measured("cherry", "node", flatStats(812)),
+      ];
+      const contests = [
+        contest(
+          "concat",
+          8,
+          [
+            contender("concat/join", 812, 1, 1),
+            contender("concat/array-push", 941, 1.16, 2),
+            contender("concat/loop", 1900, 2.31, 3),
+          ],
+          [
+            pair("concat", ["join", "array-push"], [1.16, [1.12, 1.19]], "join"),
+            pair("concat", ["join", "loop"], [2.31, [2.18, 2.47]], "join"),
+            pair("concat", ["array-push", "loop"], [1.99, [1.9, 2.1]], "array-push"),
+          ],
+        ),
+      ];
+
+      const lines = tableLines(results, contests);
+
+      expect(lines.slice(0, 19)).toStrictEqual([
+        "node 24.1.0",
+        rule("┬", [6, 8, 8, 8, 8, 8]),
+        "case  │ median │   mean │    min │    max │ samples",
+        rule("┼", [6, 8, 8, 8, 8, 8]),
+        "apple │ 812 ns │ 812 ns │ 812 ns │ 812 ns │      64",
+        "",
+        "concat · 8 rounds",
+        rule("┬", [11, 9, 19, 5]),
+        "contender  │  median │ ratio             │ rank",
+        rule("┼", [11, 9, 19, 5]),
+        "join       │  812 ns │ 1.00×             │    1",
+        "array-push │  941 ns │ 1.16× (1.12–1.19) │    2",
+        "loop       │ 1.90 µs │ 2.31× (2.18–2.47) │    3",
+        "",
+        rule("┬", [7, 8, 8, 8, 8, 8]),
+        "case   │ median │   mean │    min │    max │ samples",
+        rule("┼", [7, 8, 8, 8, 8, 8]),
+        "cherry │ 812 ns │ 812 ns │ 812 ns │ 812 ns │      64",
+        "",
+      ]);
+    });
+  });
+
+  describe("when a contender was selected alone", () => {
+    it("rows it as a plain case under its case id", () => {
+      const results = [contenderResult("concat", "join", 812)];
+
+      const row = rowTexts(results, "concat/join");
+
+      expect(row).toStrictEqual(["concat/join", "812 ns", "812 ns", "812 ns", "812 ns", "64"]);
+    });
+  });
+
+  describe("when a contest ran on several runtimes", () => {
+    it("opens each runtime's sub-table with that runtime's rounds", () => {
+      const results = [
+        ...judgedResults("concat", ["join", "loop"]),
+        contenderResult("concat", "join", 100, "bun"),
+        contenderResult("concat", "loop", 200, "bun"),
+      ];
+      const contests = [
+        judgedContest("concat", 8, ["join", "loop"]),
+        onBun(judgedContest("concat", 9, ["join", "loop"])),
+      ];
+
+      const lines = tableLines(results, contests);
+
+      expect(lines.indexOf("concat · 9 rounds")).toBeGreaterThan(headingIndex(lines, "bun"));
+    });
+  });
+
+  describe("when a contender of a judged contest failed", () => {
+    it("rows its failure and teardown line after the measured rows", () => {
+      const results = [
+        failedContender("parse/wasm", "setup", "kiwi", {
+          message: "pool",
+          stack: "at teardown",
+        }),
+        contenderResult("parse", "regex", 3420),
+        contenderResult("parse", "split", 3450),
+      ];
+      const contests = [
+        contest(
+          "parse",
+          9,
+          [
+            contender("parse/regex", 3420, 1, 1),
+            contender("parse/split", 3450, 1.01, 1),
+            contender("parse/wasm", null),
+          ],
+          [pair("parse", ["regex", "split"], [1.01, [0.98, 1.03]], null)],
+        ),
+      ];
+
+      const lines = tableLines(results, contests);
+
+      const opening = lines.indexOf("parse · 9 rounds");
+      expect(lines.slice(opening, opening + 9)).toStrictEqual([
+        "parse · 9 rounds",
+        rule("┬", [10, 9, 19, 5]),
+        "contender │  median │ ratio             │ rank",
+        rule("┼", [10, 9, 19, 5]),
+        "regex     │ 3.42 µs │ 1.00×             │    1",
+        "split     │ 3.45 µs │ 1.01× (0.98–1.03) │    1",
+        expect.stringMatching(/^wasm {6}│ \S.*setup.* kiwi$/u),
+        expect.stringMatching(/^ {12}\S.* pool$/u),
+        "",
+      ]);
+    });
+  });
+
+  describe("when a contest was not judged", () => {
+    it.each([
+      { rounds: 1, text: "1 round" },
+      { rounds: 3, text: "3 rounds" },
+    ])("shows only contenders and medians, then not judged over $text", ({ rounds, text }) => {
+      const results = [
+        contenderResult("concat", "join", 806),
+        contenderResult("concat", "loop", 1880),
+      ];
+      const contests = [
+        contest(
+          "concat",
+          rounds,
+          [contender("concat/join", 806), contender("concat/loop", 1880)],
+          [],
+        ),
+      ];
+
+      const lines = tableLines(results, contests);
+
+      expect(lines.slice(0, 9)).toStrictEqual([
+        "node 24.1.0",
+        "",
+        `concat · ${text}`,
+        rule("┬", [10, 8]),
+        "contender │  median",
+        rule("┼", [10, 8]),
+        "join      │  806 ns",
+        "loop      │ 1.88 µs",
+        `not judged: ${text}`,
+      ]);
+    });
+
+    it("rows a failed contender before the not judged line", () => {
+      const results = [
+        failedContender("concat/plus", "fn", "kiwi"),
+        contenderResult("concat", "join", 806),
+        contenderResult("concat", "loop", 1880),
+      ];
+      const contests = [
+        contest(
+          "concat",
+          1,
+          [
+            contender("concat/join", 806),
+            contender("concat/loop", 1880),
+            contender("concat/plus", null),
+          ],
+          [],
+        ),
+      ];
+
+      const lines = tableLines(results, contests);
+
+      const loop = rowIndex(lines, "loop");
+      expect(lines.slice(loop, loop + 3)).toStrictEqual([
+        "loop      │ 1.88 µs",
+        expect.stringMatching(/^plus {6}│ \S.* kiwi$/u),
+        "not judged: 1 round",
+      ]);
+    });
+  });
+
+  describe("the footer when a contest ran", () => {
+    it("counts no contest and no rounds when none was judged", () => {
+      const results = [
+        contenderResult("concat", "join", 806),
+        contenderResult("concat", "loop", 1880),
+      ];
+      const contests = [
+        contest("concat", 1, [contender("concat/join", 806), contender("concat/loop", 1880)], []),
+      ];
+
+      const text = footer(results, contests);
+
+      expect(/\d/u.test(text)).toBe(false);
+    });
+
+    it("counts only the judged contests", () => {
+      const results = [
+        ...judgedResults("concat", ["join", "loop"]),
+        ...judgedResults("parse", ["regex", "split"]),
+        contenderResult("sort", "quick", 100),
+        contenderResult("sort", "merge", 200),
+      ];
+      const contests = [
+        judgedContest("concat", 9, ["join", "loop"]),
+        judgedContest("parse", 9, ["regex", "split"]),
+        contest("sort", 9, [contender("sort/quick", 100), contender("sort/merge", 200)], []),
+      ];
+
+      const text = footer(results, contests);
+
+      expect(text).toMatch(/\b2\b/u);
+      expect(text).not.toMatch(/\b3\b/u);
+      expect(text).toMatch(/\b9\b/u);
+    });
+
+    it("states each round count when contests ran different counts", () => {
+      const results = [
+        ...judgedResults("concat", ["join", "loop"]),
+        ...judgedResults("parse", ["regex", "split"]),
+      ];
+      const contests = [
+        judgedContest("concat", 7, ["join", "loop"]),
+        judgedContest("parse", 8, ["regex", "split"]),
+      ];
+
+      const text = footer(results, contests);
+
+      expect(text).toMatch(/\b7\b/u);
+      expect(text).toMatch(/\b8\b/u);
+    });
+
+    it("recommends twice a tied contest's rounds", () => {
+      const results = [
+        ...judgedResults("concat", ["join", "loop"]),
+        ...judgedResults("parse", ["regex", "split"]),
+      ];
+      const contests = [
+        judgedContest("concat", 7, ["join", "loop"]),
+        contest(
+          "parse",
+          9,
+          [contender("parse/regex", 100, 1, 1), contender("parse/split", 101, 1.01, 1)],
+          [pair("parse", ["regex", "split"], [1.01, [0.98, 1.03]], null)],
+        ),
+      ];
+
+      const text = footer(results, contests);
+
+      expect(text).toContain("--rounds 18");
+      expect(text).not.toContain("--rounds 14");
+    });
+
+    it("recommends no rounds when every pair was told apart", () => {
+      const results = judgedResults("concat", ["join", "loop"]);
+      const contests = [judgedContest("concat", 7, ["join", "loop"])];
+
+      const text = footer(results, contests);
+
+      expect(text).not.toContain("--rounds");
+    });
+
+    it("adds the plain-case sentence only when a plain case ran", () => {
+      const contestResults = judgedResults("concat", ["join", "loop"]);
+      const contests = [judgedContest("concat", 7, ["join", "loop"])];
+      const contestFooter = footer(contestResults, contests);
+
+      const withPlain = footer(
+        [measured("apple", "node", flatStats(812)), ...contestResults],
+        contests,
+      );
+
+      const added = withPlain.slice(contestFooter.length).trim();
+      expect({
+        extendsContestFooter: withPlain.startsWith(contestFooter),
+        addsText: added.length > 0,
+        contestFooterHasIt: contestFooter.includes(added),
+      }).toStrictEqual({ extendsContestFooter: true, addsText: true, contestFooterHasIt: false });
+    });
+  });
+
   describe("when colored", () => {
     const results = [
-      measured("elderberry", "node", { ...flatStats(4656), max: 2_340_000, sampleCount: 1200 }),
+      measured("elderberry", "node", WIDE_STATS),
       failed("fig", "fn", "kiwi\nplum", { message: "melon split", stack: "at teardown" }),
+      failedContender("concat/plus", "setup", "pear"),
+      ...judgedResults("concat", ["join", "loop"]),
+      contenderResult("parse", "regex", 100),
+      contenderResult("parse", "split", 200),
       measured("banana", "bun", flatStats(812)),
+    ];
+    const contests = [
+      contest(
+        "concat",
+        8,
+        [
+          contender("concat/join", 100, 1, 1),
+          contender("concat/loop", 200, 2, 2),
+          contender("concat/plus", null),
+        ],
+        [pair("concat", ["join", "loop"], [2, [1.9, 2.1]], null)],
+      ),
+      contest("parse", 1, [contender("parse/regex", 100), contender("parse/split", 200)], []),
     ];
 
     it("styles the table", () => {
-      const plain = formatTable(results, { color: false });
+      const plain = formatTable(results, contests, { color: false });
 
-      const colored = formatTable(results, { color: true });
+      const colored = formatTable(results, contests, { color: true });
 
       expect(colored).not.toBe(plain);
     });
 
     it("keeps the visible text equal to the plain table", () => {
-      const plain = formatTable(results, { color: false });
+      const plain = formatTable(results, contests, { color: false });
 
-      const colored = formatTable(results, { color: true });
+      const colored = formatTable(results, contests, { color: true });
 
       expect(stripVTControlCharacters(colored)).toBe(plain);
     });

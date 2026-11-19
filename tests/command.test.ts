@@ -239,7 +239,7 @@ describe("main", () => {
 
       expect({ printedDuringRun, stdout: stdout.text }).toStrictEqual({
         printedDuringRun: ["", ""],
-        stdout: formatTable(report.results, { color: false }),
+        stdout: formatTable(report.results, report.contests, { color: false }),
       });
     });
   });
@@ -665,7 +665,7 @@ describe("main", () => {
 
       const { results } = await runToStdout({ startChild: failsParse, stderr });
 
-      expect(screen(stderr.text)).toStrictEqual(screen(formatTable(results, { color: false })));
+      expect(screen(stderr.text)).toStrictEqual(screen(formatTable(results, [], { color: false })));
     });
 
     it("clears the live line before printing a failed listing's error", async () => {
@@ -725,7 +725,7 @@ describe("main", () => {
         code: 143,
         interrupted: true,
         ran: ["sort/fast"],
-        stdout: formatTable(report.results, { color: false }),
+        stdout: formatTable(report.results, report.contests, { color: false }),
       });
     });
 

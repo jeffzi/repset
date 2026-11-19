@@ -24,8 +24,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
-- Remove `--metric-lines`. A tool that compares runs reads the JSON report instead, from
-  `--output -`.
+- Remove `--metric-lines`; read the JSON report from `--output -` instead.
 
 ### Fixed
 

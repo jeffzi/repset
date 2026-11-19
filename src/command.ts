@@ -305,8 +305,7 @@ async function measure(command: Command, context: Context): Promise<number> {
     ...command.input,
     ...childInput(context),
     callsPerSample: command.callsPerSample,
-    onSelected: writes?.onSelected,
-    onResult: writes?.onResult,
+    ...writes,
   });
   progress.stop();
   const tableTo = toStdout ? "stderr" : "stdout";

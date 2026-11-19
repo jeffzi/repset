@@ -152,7 +152,7 @@ export function workspace(): string {
   return dir;
 }
 
-export interface Ended {
+interface Ended {
   readonly code: number;
   readonly stdout: string;
   readonly stderr: string;

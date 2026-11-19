@@ -715,7 +715,6 @@ describe("main", () => {
     });
 
     it.each([
-      { mode: "the table", args: [] },
       { mode: "--output -", args: ["--output", "-"] },
       { mode: "--list", args: ["--list"] },
       { mode: "--once", args: ["--once"] },

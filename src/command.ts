@@ -3,7 +3,6 @@
  * prints what a person or a tool reads, returning the exit code.
  */
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { constants } from "node:os";
 import { dirname, resolve } from "node:path";
 import { Writable } from "node:stream";
 import { styleText } from "node:util";
@@ -511,6 +510,15 @@ function guardStdout(stdout: Stdout, onFailure: (error: Error) => void): Guarded
 /** What stopped the command first: a signal, or a write to stdout that failed. */
 type Stop = { readonly signal: Signal } | { readonly error: Error };
 
+/**
+ * The POSIX numbers of the signals the exit code reports, the same on every platform. Node's
+ * `os.constants.signals` has no `SIGPIPE` on Windows, so the codes cannot come from it.
+ */
+const SIGNAL_NUMBERS = { SIGHUP: 1, SIGINT: 2, SIGPIPE: 13, SIGTERM: 15 } as const satisfies Record<
+  Signal | "SIGPIPE",
+  number
+>;
+
 /** Whether `error` says the reader of the stream went away. */
 function closedPipe(error: Error): boolean {
   return "code" in error && error.code === "EPIPE";
@@ -527,8 +535,8 @@ function closedPipe(error: Error): boolean {
  */
 function stoppedCode(stop: Stop | undefined, code: number): number {
   if (stop === undefined) return code;
-  if ("signal" in stop) return 128 + constants.signals[stop.signal];
-  return closedPipe(stop.error) ? 128 + constants.signals.SIGPIPE : 1;
+  if ("signal" in stop) return 128 + SIGNAL_NUMBERS[stop.signal];
+  return closedPipe(stop.error) ? 128 + SIGNAL_NUMBERS.SIGPIPE : 1;
 }
 
 /**

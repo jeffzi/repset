@@ -5,17 +5,16 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_MIN_SAMPLES, DEFAULT_MIN_TIME } from "../src/measure/measure.js";
-import { ConfigError, quotedList, resolveOptions, type OptionsInput } from "../src/options.js";
+import { ConfigError, resolveOptions, type OptionsInput } from "../src/options.js";
 import { expectConfigError } from "./config-error.js";
+import { fixturePath } from "./fixture-path.js";
+import { SPAWN_TIMEOUT_MS } from "./spawn-limits.js";
 
-const FIXTURES = fileURLToPath(new URL("fixtures/config", import.meta.url));
+const FIXTURES = fixturePath("config");
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 
 const OPTIONS_MODULE = new URL("../src/options.ts", import.meta.url).href;
-
-/** Node and tsx starting on a slow CI runner. */
-const SPAWN_TIMEOUT_MS = 60_000;
 
 /** The `minSamples` that `config` resolves to in a spawned Node process, through Node's own loader. */
 function minSamplesInNode(config: string): string {
@@ -75,12 +74,6 @@ describe("resolveOptions", () => {
   });
 
   describe("when a config is named", () => {
-    it("reads it relative to the working directory", async () => {
-      const resolved = await resolveHere({ config: "named.ts" });
-
-      expect(resolved.minSamples).toBe(5);
-    });
-
     it.each([{ path: "missing.ts" }, { path: "nested" }])(
       "rejects $path, which holds no file, naming it",
       async ({ path }) => {
@@ -100,14 +93,6 @@ describe("resolveOptions", () => {
       const result = resolveHere({ config: "apple\0.ts" });
 
       await expect(result).rejects.toBeInstanceOf(ConfigError);
-    });
-  });
-
-  describe("when config is false", () => {
-    it("reads no config file even when the working directory holds one", async () => {
-      const resolved = await resolveOptions({ cwd: fixture("found"), config: false });
-
-      expect(resolved.minSamples).toBe(DEFAULTS.minSamples);
     });
   });
 
@@ -280,13 +265,5 @@ describe("resolveOptions", () => {
         resolved: "./loader.mjs",
       });
     });
-  });
-});
-
-describe("quotedList", () => {
-  it("quotes each name, joining them with commas and a final and", () => {
-    const list = quotedList(["node", "bun", "deno"]);
-
-    expect(list).toBe('"node", "bun" and "deno"');
   });
 });

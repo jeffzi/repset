@@ -7,6 +7,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Reword the error for two flags that cannot be given together, such as `--list` with `--once`.
+
 ## [0.2.0] - 2026-11-19
 
 ### Added

@@ -1,6 +1,6 @@
 /** The `repset` command line: its flags, its help, and what it asks the command for. */
 import { createHelpConfig } from "@jeffzi/epaulettes";
-import { Command as Parser } from "commander";
+import { Option, Command as Parser } from "commander";
 
 import type { Colors, Output } from "./command.js";
 import { DEFAULT_MIN_SAMPLES, DEFAULT_MIN_TIME } from "./measure/measure.js";
@@ -21,13 +21,6 @@ import { describe } from "./utils.js";
 /** Like `Omit`, but `K` must be a key of `T`, so a misspelled or removed key fails to compile. */
 export type StrictOmit<T, K extends keyof T> = Omit<T, K>;
 
-/** Flags that cannot be given together, by name without the leading dashes. */
-const EXCLUSIVE: readonly (readonly [string, string])[] = [
-  ["list", "once"],
-  ["list", "output"],
-  ["once", "output"],
-];
-
 /** Decimal digits with an optional fraction: `Number` alone reads `""` as 0 and accepts `1e3`. */
 const DECIMAL = /^\d+(?:\.\d+)?$/;
 
@@ -41,38 +34,46 @@ const DESCRIPTION =
   "Benchmarks the cases in the given files, or in every file the config's include patterns " +
   `match (default: ${DEFAULT_INCLUDE.join(", ")}).`;
 
-/** Every flag but help and version, with its help line, in the order the help lists them. */
-const OPTIONS: readonly (readonly [string, string])[] = [
-  ["--filter <regex>", "Run only the cases whose id matches this regular expression"],
+/**
+ * Every flag but help and version, with its help line and the flags it cannot be given with, by
+ * name without the leading dashes, in the order the help lists them.
+ */
+const OPTIONS: readonly (readonly [flags: string, help: string, conflicts?: readonly string[]])[] =
   [
-    "--runtime <list>",
-    `Runtimes to run on, comma-separated, in this order: ${RUNTIMES.join(", ")} ` +
-      `(default: ${DEFAULT_RUNTIMES.join(",")})`,
-  ],
-  [
-    "--min-time <ms>",
-    `Time each case for at least this many milliseconds (default: ${DEFAULT_MIN_TIME})`,
-  ],
-  [
-    "--min-samples <n>",
-    `Take at least this many samples of each case (default: ${DEFAULT_MIN_SAMPLES})`,
-  ],
-  ["--rounds <n>", "Run each contest in this many rounds (default: by contest size)"],
-  [
-    "--timeout <ms>",
-    "Fail a case that takes longer than this many milliseconds on one runtime " +
-      `(default: ${DEFAULT_TIMEOUT})`,
-  ],
-  ["--node-import <module>", "Load this module before each benchmark file on Node, such as tsx"],
-  [
-    "-o, --output <file>",
-    `Write the JSON report to <file>; "${OUTPUT_STDOUT}" writes it to stdout and the table to stderr`,
-  ],
-  ["--list", "List the selected case ids without running them"],
-  ["--once", "Run each selected case once on each runtime, without timing, to check it works"],
-  ["--config <file>", `Use this config file instead of looking for ${CONFIG_NAMES.join(", ")}`],
-  ["--no-color", "Turn off color, even on a terminal"],
-];
+    ["--filter <regex>", "Run only the cases whose id matches this regular expression"],
+    [
+      "--runtime <list>",
+      `Runtimes to run on, comma-separated, in this order: ${RUNTIMES.join(", ")} ` +
+        `(default: ${DEFAULT_RUNTIMES.join(",")})`,
+    ],
+    [
+      "--min-time <ms>",
+      `Time each case for at least this many milliseconds (default: ${DEFAULT_MIN_TIME})`,
+    ],
+    [
+      "--min-samples <n>",
+      `Take at least this many samples of each case (default: ${DEFAULT_MIN_SAMPLES})`,
+    ],
+    ["--rounds <n>", "Run each contest in this many rounds (default: by contest size)"],
+    [
+      "--timeout <ms>",
+      "Fail a case that takes longer than this many milliseconds on one runtime " +
+        `(default: ${DEFAULT_TIMEOUT})`,
+    ],
+    ["--node-import <module>", "Load this module before each benchmark file on Node, such as tsx"],
+    [
+      "-o, --output <file>",
+      `Write the JSON report to <file>; "${OUTPUT_STDOUT}" writes it to stdout and the table to stderr`,
+    ],
+    ["--list", "List the selected case ids without running them", ["once", "output"]],
+    [
+      "--once",
+      "Run each selected case once on each runtime, without timing, to check it works",
+      ["output"],
+    ],
+    ["--config <file>", `Use this config file instead of looking for ${CONFIG_NAMES.join(", ")}`],
+    ["--no-color", "Turn off color, even on a terminal"],
+  ];
 
 /** The README's common commands; keep them in step with it. */
 const EXAMPLES: readonly (readonly [string, string])[] = [
@@ -173,7 +174,9 @@ function helpEpilogue(color: boolean): string {
  */
 export function commandLine(version: string, stdout: Output, colors: Colors): Parser {
   const parser = new Parser("repset").description(DESCRIPTION).argument("[file...]");
-  for (const [flags, description] of OPTIONS) parser.option(flags, description);
+  for (const [flags, description, conflicts = []] of OPTIONS) {
+    parser.addOption(new Option(flags, description).conflicts([...conflicts]));
+  }
   return parser
     .helpOption("-h, --help", "Print this help")
     .version(version, "--version", "Print the version")
@@ -242,10 +245,6 @@ export function parseCommand(args: readonly string[], parser: Parser): Command {
       .filter((option) => parser.getOptionValueSource(option.attributeName()) === "cli")
       .map((option) => option.name()),
   );
-  const conflict = EXCLUSIVE.find(([one, other]) => given.has(one) && given.has(other));
-  if (conflict !== undefined) {
-    throw new ConfigError(`--${conflict[0]} cannot be used with --${conflict[1]}`);
-  }
   let mode: Command["mode"] = "run";
   if (given.has("list")) mode = "list";
   if (given.has("once")) mode = "once";

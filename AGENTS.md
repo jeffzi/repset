@@ -21,6 +21,8 @@ this file. It is gitignored for personal, machine-specific preferences and never
   `--` narrow them. Security candidates never fail the run: verify each before reporting it.
 - `task fix` — auto-fix, then delete unused exports, dependencies and enum members. Review the diff.
 - `task build` — compile `src/` to `dist/`
+- `task fixtures` — regenerate `tests/fixtures/signed-rank.json` from
+  `scripts/signed-rank-fixtures.py`, with the Python and scipy that `mise.lock` and `uv.lock` pin
 - `task check-package` — pack the package, install it in an empty app, import every entry and run
   the installed `repset --version` once, which loads the command's static imports. CI runs it.
 - `task check-overhead` — build, then compare repset's timings with a baseline loop. It exits 1 when

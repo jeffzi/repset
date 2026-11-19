@@ -54,6 +54,9 @@ Thumbs.db
 # Task checksums and timestamps
 .task/
 
+# uv environment
+.venv/
+
 # StrykerJS sandbox
 .stryker-tmp/
 

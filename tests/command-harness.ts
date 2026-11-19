@@ -7,6 +7,7 @@ import { expect, vi } from "vitest";
 
 import type { StrictOmit } from "../src/command-line.js";
 import { main } from "../src/command.js";
+import type { Report, Result } from "../src/report.js";
 import {
   failedOutcome,
   findAny,
@@ -15,6 +16,7 @@ import {
   starter as fakeStarter,
   type StartChild,
 } from "./fake-children.js";
+import { parseReport, reportAt } from "./report-file.js";
 import { temporaryDir } from "./temporary-dir.js";
 
 type Io = NonNullable<Parameters<typeof main>[1]>;
@@ -181,6 +183,24 @@ export async function command(
   });
 
   return { code, stdout: stdout.text, stderr: stderr.text };
+}
+
+/** Runs the two workspace files with `args` and `--output report.json`, returning what ended and the report. */
+export async function runWithReport(
+  args: readonly string[],
+  io: CommandIo = {},
+): Promise<Ended & { readonly report: Report }> {
+  const dir = workspace();
+  const ended = await command(dir, [...FILES, ...args, "--output", "report.json"], io);
+  return { ...ended, report: reportAt(join(dir, "report.json")) };
+}
+
+/** Runs the two workspace files with `--output -`, returning what ended and the results stdout holds. */
+export async function runToStdout(
+  io: CommandIo = {},
+): Promise<Ended & { readonly results: readonly Result[] }> {
+  const ended = await command(workspace(), [...FILES, "--output", "-"], io);
+  return { ...ended, results: parseReport(ended.stdout, "stdout").results };
 }
 
 /** Puts a non-empty directory at `path`, so renaming a file over it fails. */

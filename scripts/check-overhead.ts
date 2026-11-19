@@ -297,7 +297,7 @@ function readRepset(scenario: Scenario): RepsetReading {
       `^overhead/${scenario.body}$`,
       "--node-import",
       "tsx",
-      "--out",
+      "--output",
       outPath,
     ];
     const run = spawnSync(process.execPath, args, {

@@ -37,15 +37,15 @@ wherever this page writes `node ../dist/cli.js`.
 A case's id is the name its `bench()` call gives it, such as `dedupe/set`.
 `node ../dist/cli.js --help` lists every option.
 
-| Command                                   | What it does                                            |
-| ----------------------------------------- | ------------------------------------------------------- |
-| `node ../dist/cli.js --once`              | Runs every case once, without timing, to check it works |
-| `node ../dist/cli.js --list`              | Prints the id of every case and exits                   |
-| `node ../dist/cli.js compare.bench.ts`    | Runs the cases of that file only                        |
-| `node ../dist/cli.js --filter '^dedupe/'` | Runs the cases whose id matches the regular expression  |
-| `node ../dist/cli.js --filter '/10000$'`  | Runs the largest input of every search                  |
-| `node ../dist/cli.js --runtime node`      | Runs on Node alone, overriding the config's `runtimes`  |
-| `node ../dist/cli.js --out report.json`   | Also writes the JSON report to `report.json`            |
+| Command                                   | Purpose                                                |
+| ----------------------------------------- | ------------------------------------------------------ |
+| `node ../dist/cli.js --once`              | Run every case once, without timing, to check it works |
+| `node ../dist/cli.js --list`              | List the id of every case without running it           |
+| `node ../dist/cli.js compare.bench.ts`    | Run only the cases in that file                        |
+| `node ../dist/cli.js --filter '^dedupe/'` | Run the cases whose id starts with `dedupe/`           |
+| `node ../dist/cli.js --filter '/10000$'`  | Run the cases whose id ends with `/10000`              |
+| `node ../dist/cli.js --runtime node`      | Run on Node alone, overriding the config's `runtimes`  |
+| `node ../dist/cli.js -o report.json`      | Also write the JSON report to `report.json`            |
 
 [compare.bench.ts]: compare.bench.ts
 [input-sizes.bench.ts]: input-sizes.bench.ts

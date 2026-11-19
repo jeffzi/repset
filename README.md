@@ -151,13 +151,13 @@ Each case was measured once, in its own process. A verdict between revisions tak
 
 Common options:
 
-| Command                               | What it does                                            |
-| ------------------------------------- | ------------------------------------------------------- |
-| `npx repset benchmarks/sort.bench.ts` | Runs the benchmarks of that file only                   |
-| `npx repset --filter '^sort/'`        | Runs the cases whose id matches the regular expression  |
-| `npx repset --runtime node,bun`       | Runs every case on Node, then on Bun                    |
-| `npx repset --out report.json`        | Writes the JSON report to `report.json`                 |
-| `npx repset --once`                   | Runs every case once, without timing, to check it works |
+| Command                               | Purpose                                                |
+| ------------------------------------- | ------------------------------------------------------ |
+| `npx repset benchmarks/sort.bench.ts` | Run only the cases in that file                        |
+| `npx repset --filter '^sort/'`        | Run the cases whose id starts with `sort/`             |
+| `npx repset --runtime node,bun`       | Run every case on Node, then on Bun                    |
+| `npx repset -o report.json`           | Also write the JSON report to `report.json`            |
+| `npx repset --once`                   | Run every case once, without timing, to check it works |
 
 Node runs TypeScript files by stripping their types, but it does not map an import of `./foo.js` to
 `foo.ts`. If your benchmarks import TypeScript files that way, give Node a loader such as

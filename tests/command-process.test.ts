@@ -32,7 +32,7 @@ describe("the command started as a process", { timeout: SPAWN_TIMEOUT_MS }, () =
         "tsx",
         "--min-time",
         "1",
-        "--out",
+        "--output",
         out,
       ]);
 
@@ -55,7 +55,7 @@ describe("the command started as a process", { timeout: SPAWN_TIMEOUT_MS }, () =
           "tsx",
           "--min-time",
           "600000",
-          "--out",
+          "--output",
           out,
         ],
         (stderr, stop) => {

@@ -93,7 +93,8 @@ export interface ResolvedOptions {
 
 type OptionName = keyof Config;
 
-const CONFIG_NAMES = [
+/** The config files repset looks for in the directory it starts in, when no option names one. */
+export const CONFIG_NAMES: readonly string[] = [
   "repset.config.ts",
   "repset.config.mts",
   "repset.config.js",
@@ -113,8 +114,10 @@ const OPTION_KEYS: Readonly<Record<OptionName, true>> = {
 /** The largest delay a Node timer keeps; a larger one fires after 1 ms. */
 const MAX_TIMEOUT = 2_147_483_647;
 
-const DEFAULT_INCLUDE = ["**/*.bench.{ts,mts,js,mjs}"];
-const DEFAULT_RUNTIMES: readonly Runtime[] = ["node"];
+/** The patterns that pick the benchmark files when no option sets `include`. */
+export const DEFAULT_INCLUDE: readonly string[] = ["**/*.bench.{ts,mts,js,mjs}"];
+/** The runtimes a run uses when no option sets `runtimes`. */
+export const DEFAULT_RUNTIMES: readonly Runtime[] = ["node"];
 /** How many milliseconds a child may run when no option sets `timeout`. */
 export const DEFAULT_TIMEOUT = 600_000;
 

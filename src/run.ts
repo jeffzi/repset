@@ -11,7 +11,6 @@ import { fileURLToPath } from "node:url";
 
 import type { ChildError, ChildRequest } from "./child.js";
 import {
-  childFailure,
   findRuntime as realFindRuntime,
   type FoundRuntime,
   type Outcome,
@@ -68,6 +67,11 @@ export interface SelectInput extends ChildFunctionOverrides {
   readonly cwd: string;
   /** Ends the selection as stopped when it fires during runtime discovery or listing. */
   readonly signal?: AbortSignal | undefined;
+  /**
+   * Receives the number of benchmark files to list once every runtime is found, before the first
+   * listing child starts.
+   */
+  readonly onPlanned?: ((total: number) => void) | undefined;
 }
 
 /** A benchmark file whose listing child failed, with what the child left to print before it. */
@@ -158,20 +162,17 @@ function benchmarkFiles(options: ResolvedOptions, files: readonly string[], cwd:
  * @throws {@link ConfigError} Naming the first id two cases share and the files that register it.
  */
 function checkUniqueIds(cases: readonly SelectedCase[]): void {
-  const filesById = new Map<string, Set<string>>();
-  let firstRepeated: string | undefined;
-  for (const selected of cases) {
-    const files = filesById.get(selected.id);
-    if (files === undefined) {
-      filesById.set(selected.id, new Set([selected.file]));
-    } else {
-      files.add(selected.file);
-      firstRepeated ??= selected.id;
-    }
-  }
-  if (firstRepeated === undefined) return;
-  const files = [...(filesById.get(firstRepeated) ?? [])].join(", ");
-  throw new ConfigError(`more than one case has the id ${firstRepeated}, in ${files}`);
+  const seen = new Set<string>();
+  const repeated = cases.find(({ id }) => {
+    if (seen.has(id)) return true;
+    seen.add(id);
+    return false;
+  });
+  if (repeated === undefined) return;
+  const files = new Set(cases.filter(({ id }) => id === repeated.id).map(({ file }) => file));
+  throw new ConfigError(
+    `more than one case has the id ${repeated.id}, in ${[...files].join(", ")}`,
+  );
 }
 
 /**
@@ -196,10 +197,11 @@ export function shownPath(cwd: string, path: string): string {
  *
  * @param files - The benchmark files, as absolute paths.
  * @param runtime - The runtime the listing children run on.
- * @param input - The options, the working directory, the stop signal and the child starter.
+ * @param input - The options, the working directory, the stop signal, the plan callback and the
+ *   child starter.
  * @returns The cases in file order, or `undefined` when the stop signal fired.
- * @throws {@link ListingError} When a listing child fails or gives no listing.
- * @throws {@link Error} What starting a listing child throws.
+ * @throws {@link ListingError} When a listing child fails.
+ * @throws {@link Error} What `onPlanned` or starting a listing child throws.
  */
 async function listFiles(
   files: readonly string[],
@@ -208,6 +210,7 @@ async function listFiles(
 ): Promise<SelectedCase[] | undefined> {
   const { options, cwd, signal, startChild = realStartChild } = input;
   const childOptions = startOptions(options, signal);
+  input.onPlanned?.(files.length);
   const cases: SelectedCase[] = [];
   for (const path of files) {
     if (signal?.aborted === true) return undefined;
@@ -215,9 +218,6 @@ async function listFiles(
     const outcome = await startChild(runtime, { mode: "list", file: path }, childOptions);
     if (outcome.status === "stopped") return undefined;
     if (outcome.status === "failed") throw new ListingError(file, outcome.error, outcome.output);
-    if (!("cases" in outcome.result)) {
-      throw new ListingError(file, childFailure("the child gave no listing"), outcome.output);
-    }
     for (const listed of outcome.result.cases) cases.push({ ...listed, path, file });
   }
   return cases;
@@ -226,14 +226,16 @@ async function listFiles(
 /**
  * Selects the cases a run measures. Every runtime is looked up before any listing child starts.
  *
- * @param input - The options, the positional files, the working directory, the stop signal, and
- *   the functions that look a runtime up and start a child, the real ones by default.
+ * @param input - The options, the positional files, the working directory, the stop signal, the
+ *   plan callback, and the functions that look a runtime up and start a child, the real ones by
+ *   default.
  * @returns The runtimes with their versions and the selected cases, or a stop when the signal fired
  *   during runtime discovery or listing.
  * @throws {@link ConfigError} When an argument matches no file, a runtime cannot be found, a
  *   listing child fails (a {@link ListingError}), two cases share an id, or no case is selected.
- * @throws {@link Error} What starting a listing child throws, and the plain `Error` that finding the
- *   runtime this process runs on throws when `process.versions` holds no version for it.
+ * @throws {@link Error} What `onPlanned` or starting a listing child throws, and the plain `Error`
+ *   that finding the runtime this process runs on throws when `process.versions` holds no version
+ *   for it.
  */
 export async function selectCases(input: SelectInput): Promise<Selection> {
   const { options, files, cwd, signal, findRuntime = realFindRuntime } = input;
@@ -274,6 +276,11 @@ export interface OnceInput extends OptionsInput, ChildFunctionOverrides {
   readonly files?: readonly string[] | undefined;
   /** Kills the running child and starts no further one when it fires. */
   readonly signal?: AbortSignal | undefined;
+  /**
+   * Receives the number of children each phase will start, before that phase's first child starts:
+   * the benchmark files to list, then the cases times the runtimes to measure or run once.
+   */
+  readonly onPlanned?: ((total: number) => void) | undefined;
 }
 
 export interface RunInput extends OnceInput {
@@ -307,13 +314,11 @@ export interface OnceRun {
   readonly results: readonly OnceResult[];
 }
 
-type Finished = Exclude<Outcome, { status: "stopped" }>;
-
-/** The failure of a measuring child that answered with something other than a measurement. */
-const NO_MEASUREMENT = childFailure("the child gave no measurement");
+/** How a child asked for `M` ended when the caller did not stop it. */
+type Finished<M extends ChildRequest["mode"]> = Exclude<Outcome<M>, { status: "stopped" }>;
 
 /** The processes of a case whose child failed: one, holding `null` for what it did not reach. */
-const FAILED_PROCESSES: readonly FailedProcess[] = [
+const FAILED_PROCESSES: readonly [FailedProcess] = [
   {
     round: 1,
     orderInRound: 1,
@@ -348,23 +353,24 @@ export async function packageVersion(path: string = PACKAGE_JSON): Promise<strin
  * Resolves the caller's options, selects the cases, then starts one child per selected case per
  * runtime, one at a time: runtime by runtime in the selection's order, cases in selection order.
  *
- * @param input - The caller's options, the positional files, the stop signal and the child
- *   functions.
+ * @param input - The caller's options, the positional files, the stop signal, the plan callback
+ *   and the child functions.
  * @param request - The request of one case's child, from the resolved options.
  * @param finished - Receives each child's outcome before the next child starts.
- * @param passed - Called with the resolved options once the selection passed, before the first
- *   child of a case starts.
+ * @param passed - Called with the resolved options and the number of children the cases will
+ *   start once the selection passed, before the first child of a case starts.
  * @returns The resolved options, and whether the stop signal ended the run before every child ran:
  *   during listing, before the next child, or by stopping the running one.
  * @throws {@link ConfigError} When the options are invalid or the selection fails, before any child
  *   but the listing children starts.
- * @throws {@link Error} What `passed` or `finished` throws, or what starting a child throws.
+ * @throws {@link Error} What the plan callback, `passed` or `finished` throws, or what starting a
+ *   child throws.
  */
-async function startEach(
+async function startEach<R extends ChildRequest>(
   input: OnceInput,
-  request: (options: ResolvedOptions, selected: SelectedCase) => ChildRequest,
-  finished: (runtime: FoundRuntime, selected: SelectedCase, outcome: Finished) => void,
-  passed?: (options: ResolvedOptions) => void,
+  request: (options: ResolvedOptions, selected: SelectedCase) => R,
+  finished: (runtime: FoundRuntime, selected: SelectedCase, outcome: Finished<R["mode"]>) => void,
+  passed: (options: ResolvedOptions, total: number) => void,
 ): Promise<{ options: ResolvedOptions; interrupted: boolean }> {
   const options = await resolveOptions(input);
   const { signal, startChild = realStartChild } = input;
@@ -375,9 +381,10 @@ async function startEach(
     signal,
     findRuntime: input.findRuntime,
     startChild,
+    onPlanned: input.onPlanned,
   });
   if (selection.status === "stopped") return { options, interrupted: true };
-  passed?.(options);
+  passed(options, selection.runtimes.length * selection.cases.length);
   const childOptions = startOptions(options, signal);
   for (const runtime of selection.runtimes) {
     for (const selected of selection.cases) {
@@ -391,15 +398,18 @@ async function startEach(
 }
 
 /**
- * Turns a child's outcome into the case's report result; any outcome without statistics, not only
- * a failure, becomes a failed result.
+ * Turns a measuring child's outcome into the case's report result.
  *
  * @param selected - The case.
  * @param runtime - The runtime its child ran on.
  * @param outcome - How its measuring child ended.
  * @returns A measured result when the child measured the case, a failed one otherwise.
  */
-function resultOf(selected: SelectedCase, runtime: FoundRuntime, outcome: Finished): Result {
+function resultOf(
+  selected: SelectedCase,
+  runtime: FoundRuntime,
+  outcome: Finished<"measure">,
+): Result {
   const base = {
     id: selected.id,
     name: selected.id,
@@ -409,13 +419,12 @@ function resultOf(selected: SelectedCase, runtime: FoundRuntime, outcome: Finish
     runtime: { name: runtime.runtime, version: runtime.version },
     setupPerCall: selected.setupPerCall,
   };
-  if (outcome.status === "ok" && "stats" in outcome.result) {
+  if (outcome.status === "ok") {
     const { stats, sampling, checks, gc } = outcome.result;
     const measuring = { round: 1, orderInRound: 1, stats, sampling, checks, gc, rawSamples: null };
     return { ...base, status: "ok", error: null, median: stats.median, processes: [measuring] };
   }
-  const { phase, message, stack, teardownError } =
-    outcome.status === "failed" ? outcome.error : NO_MEASUREMENT;
+  const { phase, message, stack, teardownError } = outcome.error;
   const error = { phase, message, stack, teardownError, output: outcome.output };
   return { ...base, status: "failed", error, median: null, processes: FAILED_PROCESSES };
 }
@@ -467,15 +476,15 @@ function reportOptions(input: OnceInput, options: ResolvedOptions): ReportOption
  * stop signal fires, the running child is killed, its case gets no result, and no further child
  * starts.
  *
- * @param input - The caller's options, the positional files, the stop signal, the result and
- *   selection callbacks, the calls per sample to fix, and the functions that look a runtime up,
- *   start a child, list the CPUs and name the `package.json` to read the version from, the real
- *   ones by default.
+ * @param input - The caller's options, the positional files, the stop signal, the result,
+ *   selection and plan callbacks, the calls per sample to fix, and the functions that look a
+ *   runtime up, start a child, list the CPUs and name the `package.json` to read the version from,
+ *   the real ones by default.
  * @returns The report of the results that finished, with `interrupted` set when the stop signal
  *   ended the run.
  * @throws {@link Error} The error reading the package's `package.json`, before any child starts;
- *   what `onSelected` throws, before any measuring child starts; what `onResult` throws, once a
- *   child has finished; or what starting a child throws.
+ *   what `onSelected` or `onPlanned` throws, before the first child of its phase starts; what
+ *   `onResult` throws, once a child has finished; or what starting a child throws.
  * @throws {@link ConfigError} When the options are invalid or the selection fails, before any
  *   measuring child starts.
  */
@@ -510,7 +519,10 @@ export async function run(input: RunInput): Promise<Report> {
       results.push(result);
       input.onResult?.(result);
     },
-    (resolved) => input.onSelected?.(reportOf(resolved, false)),
+    (resolved, total) => {
+      input.onSelected?.(reportOf(resolved, false));
+      input.onPlanned?.(total);
+    },
   );
   return reportOf(options, interrupted);
 }
@@ -519,13 +531,14 @@ export async function run(input: RunInput): Promise<Report> {
  * Runs every selected case once per runtime, each in its own child, with no timing, one at a time
  * in the order a run measures them. A failed case does not stop it.
  *
- * @param input - The caller's options, the positional files, the stop signal, and the functions
- *   that look a runtime up and start a child, the real ones by default.
+ * @param input - The caller's options, the positional files, the stop signal, the plan callback,
+ *   and the functions that look a runtime up and start a child, the real ones by default.
  * @returns Per case and runtime, that it ran or how it failed, with `interrupted` set when the stop
  *   signal ended it.
  * @throws {@link ConfigError} When the options are invalid or the selection fails, before any once
  *   child starts.
- * @throws {@link Error} What starting a child throws.
+ * @throws {@link Error} What `onPlanned` throws, before the first child of its phase starts, or
+ *   what starting a child throws.
  */
 export async function runOnce(input: OnceInput): Promise<OnceRun> {
   const results: OnceResult[] = [];
@@ -541,6 +554,7 @@ export async function runOnce(input: OnceInput): Promise<OnceRun> {
         results.push({ ...ran, status: "failed", error: { phase, message, teardownError } });
       }
     },
+    (_options, total) => input.onPlanned?.(total),
   );
   return { interrupted, results };
 }

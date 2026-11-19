@@ -11,7 +11,6 @@ import type {
   ChildError,
   ChildPhase,
   ChildRequest,
-  ChildResult,
   Failed,
   Listed,
   ListedCase,
@@ -68,9 +67,19 @@ interface Captured {
   readonly output: string;
 }
 
-interface Succeeded extends Captured {
+/** The mode of a child's request. */
+type Mode = ChildRequest["mode"];
+
+/** The result a child that succeeded gives, by the mode of its request. */
+interface ResultByMode {
+  readonly list: Listed;
+  readonly measure: Measured;
+  readonly once: Ran;
+}
+
+interface Succeeded<M extends Mode> extends Captured {
   readonly status: "ok";
-  readonly result: Exclude<ChildResult, Failed>;
+  readonly result: ResultByMode[M];
 }
 
 interface ChildFailed extends Captured {
@@ -82,16 +91,20 @@ interface Stopped extends Captured {
   readonly status: "stopped";
 }
 
-/** How a child's call ended: its result, a failure, or a stop the caller asked for. */
-export type Outcome = Succeeded | ChildFailed | Stopped;
+/**
+ * How a child's call ended: the result its request's mode `M` asks for, a failure, or a stop the
+ * caller asked for.
+ */
+export type Outcome<M extends Mode = Mode> = Succeeded<M> | ChildFailed | Stopped;
 
 /**
- * How the child process ended: stopped by the caller's signal, killed at its timeout, or exited on
- * its own, with `code` `null` when a signal ended it and `signal` `null` otherwise.
+ * How the child process ended: stopped by the caller's signal, killed at its `timeout` in
+ * milliseconds, or exited on its own, with `code` `null` when a signal ended it and `signal` `null`
+ * otherwise.
  */
 type Ending =
   | { readonly kind: "stopped" }
-  | { readonly kind: "timeout" }
+  | { readonly kind: "timeout"; readonly timeout: number }
   | { readonly kind: "exit"; readonly code: number | null; readonly signal: string | null };
 
 /** How a spawned process ended, or the error that kept it from starting. */
@@ -193,7 +206,12 @@ export async function findRuntime(
   return version === undefined ? undefined : { runtime, executable, version };
 }
 
-/** The first executable file named `name` in a `PATH` directory, or `undefined` when none is. */
+/**
+ * Finds the first executable file named `name` in a `PATH` directory, in `PATH` order.
+ *
+ * @param name - The executable's name, without an extension.
+ * @returns The executable's path, or `undefined` when no `PATH` directory holds one.
+ */
 function onPath(name: string): string | undefined {
   // Without a shell, Windows starts only these, so a `.cmd` on PATH would be found but not run.
   const extensions = process.platform === "win32" ? [".com", ".exe"] : [""];
@@ -242,16 +260,8 @@ async function probeVersion(
   const ended = await processEnded(probe, options);
   if (ended.kind === "error") throw failedWith(`cannot run ${executable} --version`, ended.error);
   if (ended.kind === "stopped") return undefined;
-  if (ended.kind === "timeout") {
-    throw new ConfigError(
-      `${executable} --version was killed after its ${options.timeout} ms timeout`,
-    );
-  }
-  if (ended.signal !== null) {
-    throw new ConfigError(`${executable} --version was killed by ${ended.signal}`);
-  }
-  if (ended.code !== 0) {
-    throw new ConfigError(`${executable} --version exited with status ${ended.code ?? "unknown"}`);
+  if (ended.kind === "timeout" || ended.signal !== null || ended.code !== 0) {
+    throw new ConfigError(howItEnded(`${executable} --version`, ended));
   }
   const version = printed.trim().replace(/^v/, "");
   if (version === "") throw new ConfigError(`${executable} --version printed nothing`);
@@ -314,17 +324,17 @@ class OutputTail {
  *   wrote stands however the child then ended, unless the caller's signal stopped it.
  * @throws Error What starting the process throws, such as an argument `spawn` rejects.
  */
-export async function startChild(
+export async function startChild<R extends ChildRequest>(
   runtime: FoundRuntime,
-  request: ChildRequest,
+  request: R,
   options: StartOptions,
-): Promise<Outcome> {
+): Promise<Outcome<R["mode"]>> {
   const { child, tail, written } = spawnChild(runtime, request, options);
   const ended = await processEnded(child, options);
   if (ended.kind === "error") {
     return noResult(`could not start the child: ${ended.error.message}`, tail.text());
   }
-  return outcomeOf(ended, readResult(written(), request.mode), options.timeout, tail.text());
+  return outcomeOf(ended, readResult<R["mode"]>(written(), request.mode), tail.text());
 }
 
 /**
@@ -342,14 +352,14 @@ async function processEnded(child: ChildProcess, options: LookupOptions): Promis
   return new Promise((resolve) => {
     let ending: Ending | undefined;
     let settled = false;
-    const kill = (kind: "stopped" | "timeout"): void => {
-      ending ??= { kind };
+    const kill = (killed: Exclude<Ending, { kind: "exit" }>): void => {
+      ending ??= killed;
       child.kill("SIGKILL");
     };
     const stop = (): void => {
-      kill("stopped");
+      kill({ kind: "stopped" });
     };
-    const timer = setTimeout(kill, timeout, "timeout");
+    const timer = setTimeout(kill, timeout, { kind: "timeout", timeout });
     if (signal?.aborted === true) stop();
     signal?.addEventListener("abort", stop, { once: true });
 
@@ -440,24 +450,22 @@ function spawnChild(
  *
  * @param ending - How the child ended.
  * @param read - The result the child wrote, or what was wrong with what it wrote.
- * @param timeout - The child's timeout, which a timed-out child's failure names.
  * @param output - The tail of the child's stdout and stderr.
  * @returns A stop when the caller stopped the child; otherwise the result or the child's own
  *   failure when it wrote one, or a failure in phase `child` saying how it ended.
  */
-function outcomeOf(
+function outcomeOf<M extends Mode>(
   ending: Ending,
-  read: ChildResult | string,
-  timeout: number,
+  read: ResultByMode[M] | Failed | string,
   output: string,
-): Outcome {
+): Outcome<M> {
   if (ending.kind === "stopped") return { status: "stopped", output };
   if (typeof read !== "string") {
-    return read.status === "failed"
+    return isFailed(read)
       ? { status: "failed", error: read.error, output }
       : { status: "ok", result: read, output };
   }
-  return noResult(`${howItEnded(ending, timeout)}: ${read}`, output);
+  return noResult(`${howItEnded("the child", ending)}: ${read}`, output);
 }
 
 /** A failure in phase `child`, which has no stack. */
@@ -470,11 +478,20 @@ function noResult(message: string, output: string): ChildFailed {
   return { status: "failed", error: childFailure(message), output };
 }
 
-/** The timeout, the signal or the exit status (`unknown` when null) a failure message opens with. */
-function howItEnded(ending: Exclude<Ending, { kind: "stopped" }>, timeout: number): string {
-  if (ending.kind === "timeout") return `the child was killed after its ${timeout} ms timeout`;
-  if (ending.signal !== null) return `the child was killed by ${ending.signal}`;
-  return `the child exited with status ${ending.code ?? "unknown"}`;
+/**
+ * Says how a process that did not end cleanly ended, for the start of a failure message.
+ *
+ * @param subject - What ran, as the sentence's subject, such as `the child`.
+ * @param ending - How it ended: at its timeout, or on its own.
+ * @returns `<subject> was killed after its <timeout> ms timeout`, `<subject> was killed by
+ *   <signal>`, or `<subject> exited with status <code>`, with `unknown` for a null code.
+ */
+export function howItEnded(subject: string, ending: Exclude<Ending, { kind: "stopped" }>): string {
+  if (ending.kind === "timeout") {
+    return `${subject} was killed after its ${ending.timeout} ms timeout`;
+  }
+  if (ending.signal !== null) return `${subject} was killed by ${ending.signal}`;
+  return `${subject} exited with status ${ending.code ?? "unknown"}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -488,7 +505,7 @@ function howItEnded(ending: Exclude<Ending, { kind: "stopped" }>, timeout: numbe
  * @param mode - The mode of the child's request, whose result shape the line must have.
  * @returns The result, or what was wrong with what the child wrote.
  */
-function readResult(written: string, mode: ChildRequest["mode"]): ChildResult | string {
+function readResult<M extends Mode>(written: string, mode: M): ResultByMode[M] | Failed | string {
   if (written === "") return "it wrote no result";
   if (!written.endsWith("\n")) return "its result line has no newline";
   const line = written.slice(0, -1);
@@ -502,8 +519,13 @@ function readResult(written: string, mode: ChildRequest["mode"]): ChildResult | 
     return `its result line is not JSON: ${thrownMessage(error)}`;
   }
   if (isFailed(value)) return value;
-  const answers = { list: isListed, measure: isMeasured, once: isRan }[mode];
-  if (answers(value)) return value;
+  const answers: { readonly [K in Mode]: (value: unknown) => value is ResultByMode[K] } = {
+    list: isListed,
+    measure: isMeasured,
+    once: isRan,
+  };
+  const answer = answers[mode];
+  if (answer(value)) return value;
   return `its result line does not answer a ${mode} request: ${line.slice(0, QUOTED_LINE_CHARS)}`;
 }
 

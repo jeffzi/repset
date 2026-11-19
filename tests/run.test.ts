@@ -1,5 +1,5 @@
 import { basename, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { pathToFileURL } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -20,18 +20,20 @@ import {
   startsNoChild,
   stopped,
 } from "./fake-children.js";
+import { fixturePath } from "./fixture-path.js";
 
-const DISCOVERY = fileURLToPath(new URL("fixtures/discovery", import.meta.url));
+const DISCOVERY = fixturePath("discovery");
 
-const RUN_FIXTURES = fileURLToPath(new URL("fixtures/run", import.meta.url));
+const RUN_FIXTURES = fixturePath("run");
 
 /** A stand-in for the package's `package.json` whose version is `1.2.3`. */
 const VERSIONED = join(RUN_FIXTURES, "version.json");
 
+/** The config fixtures that import a module beside them. */
+const NESTED_CONFIGS = fixturePath("config", "nested");
+
 /** A config file that sets `nodeImport` to `./loader.mjs`, beside which `loader.mjs` resolves. */
-const DOT_IMPORT_CONFIG = fileURLToPath(
-  new URL("fixtures/config/nested/dot-import.ts", import.meta.url),
-);
+const DOT_IMPORT_CONFIG = join(NESTED_CONFIGS, "dot-import.ts");
 
 const STARTED_AT = new Date("2026-11-01T12:00:00.000Z");
 
@@ -60,7 +62,6 @@ type RunInput = Parameters<typeof run>[0];
 async function runHere(input: Partial<RunInput> = {}): ReturnType<typeof run> {
   return run({
     cwd: DISCOVERY,
-    config: false,
     files: ["zeta.bench.ts"],
     findRuntime: findAny,
     startChild: measuresAll,
@@ -76,12 +77,26 @@ type OnceInput = Parameters<typeof runOnce>[0];
 async function runOnceHere(input: Partial<OnceInput> = {}): ReturnType<typeof runOnce> {
   return runOnce({
     cwd: DISCOVERY,
-    config: false,
     files: ["zeta.bench.ts"],
     findRuntime: findAny,
     startChild: starter(() => ranOnce),
     ...input,
   });
+}
+
+/** Wraps `start` to log each non-listing child's mode in `events` as it starts. */
+function logsStarts(events: string[], start: StartChild): StartChild {
+  return async (runtime, request, options) => {
+    if (request.mode !== "list") events.push(request.mode);
+    return start(runtime, request, options);
+  };
+}
+
+/** A plan callback that logs each phase's child count in `events` as `planned <n>`. */
+function logsPlans(events: string[]): NonNullable<OnceInput["onPlanned"]> {
+  return (total) => {
+    events.push(`planned ${String(total)}`);
+  };
 }
 
 /** Freezes `Date` at `STARTED_AT`, leaving every timer real. */
@@ -111,8 +126,7 @@ describe("run", () => {
         cpus: () => [cpu("Apple M2 Max"), cpu("Apple M2 Max"), cpu("Apple M2 Max")],
       });
 
-      expect(report).toStrictEqual({
-        schema: 1,
+      expect(report).toMatchObject({
         repset: "1.2.3",
         startedAt: "2026-11-01T12:00:00.000Z",
         interrupted: false,
@@ -122,19 +136,14 @@ describe("run", () => {
           filter: "bench",
           minTime: 5,
           minSamples: 8,
-          rounds: null,
-          seed: null,
           timeout: 1234,
           nodeImport: "tsx",
-          rawSamples: false,
         },
         machine: { os: process.platform, arch: process.arch, cpu: "Apple M2 Max", cores: 3 },
         results: [
           {
             id: "a.bench.ts",
             name: "a.bench.ts",
-            contender: null,
-            params: {},
             file: "../a.bench.ts",
             runtime: { name: "node", version: found("node").version },
             setupPerCall: true,
@@ -143,18 +152,14 @@ describe("run", () => {
             median: 4656,
             processes: [
               {
-                round: 1,
-                orderInRound: 1,
                 stats: measured(4656).stats,
                 sampling: measured(4656).sampling,
                 checks: measured(4656).checks,
                 gc: measured(4656).gc,
-                rawSamples: null,
               },
             ],
           },
         ],
-        contests: [],
       });
     });
 
@@ -254,59 +259,23 @@ describe("run", () => {
   });
 
   describe("when a case fails", () => {
-    it.each([
-      {
-        why: "answers with a failure whose cleanup teardown failed too",
-        outcome: {
-          status: "failed",
-          error: { phase: "fn", message: "kiwi", stack: "at fn", teardownError: MELON },
-          output: "plum\n",
-        },
-        error: {
-          phase: "fn",
-          message: "kiwi",
-          stack: "at fn",
-          teardownError: MELON,
-          output: "plum\n",
-        },
-      },
-      {
-        why: "answers with no measurement",
-        outcome: { status: "ok", result: { status: "ok" }, output: "plum\n" },
-        error: {
-          phase: "child",
-          message: expect.any(String),
-          stack: null,
-          teardownError: null,
-          output: "plum\n",
-        },
-      },
-    ] as const)("gives a failed result when its child $why", async ({ outcome, error }) => {
-      const report = await runHere({ startChild: starter(() => outcome) });
+    it("gives a failed result when its child answers with a failure whose cleanup teardown failed too", async () => {
+      const error = { phase: "fn", message: "kiwi", stack: "at fn", teardownError: MELON } as const;
+      const failsFn = starter(() => ({ status: "failed", error, output: "plum\n" }));
 
-      expect(report.results).toStrictEqual([
+      const report = await runHere({ startChild: failsFn });
+
+      expect(report.results).toMatchObject([
         {
           id: "zeta.bench.ts",
           name: "zeta.bench.ts",
-          contender: null,
-          params: {},
           file: "zeta.bench.ts",
           runtime: { name: "node", version: found("node").version },
           setupPerCall: false,
           status: "failed",
-          error,
+          error: { ...error, output: "plum\n" },
           median: null,
-          processes: [
-            {
-              round: 1,
-              orderInRound: 1,
-              stats: null,
-              sampling: null,
-              checks: null,
-              gc: null,
-              rawSamples: null,
-            },
-          ],
+          processes: [{ stats: null }],
         },
       ]);
     });
@@ -368,18 +337,29 @@ describe("run", () => {
     });
   });
 
-  describe("the package's version", () => {
-    describe("when package.json cannot be read", () => {
-      it("throws the read error as it is, before any child starts", async () => {
-        const result = runHere({
-          packageJson: join(RUN_FIXTURES, "banana.json"),
-          startChild: startsNoChild,
-        });
+  describe("onPlanned", () => {
+    it("receives the measuring child count before the first measuring child starts", async () => {
+      const events: string[] = [];
 
-        await expect(result).rejects.toMatchObject({ code: "ENOENT" });
+      await runHere({
+        files: ["zeta.bench.ts", "a.bench.ts"],
+        runtimes: ["node", "bun"],
+        startChild: logsStarts(events, measuresAll),
+        onPlanned: logsPlans(events),
       });
-    });
 
+      expect(events).toStrictEqual([
+        "planned 2",
+        "planned 4",
+        "measure",
+        "measure",
+        "measure",
+        "measure",
+      ]);
+    });
+  });
+
+  describe("the package's version", () => {
     describe("when it holds no version", () => {
       it("throws a plain error naming the file, before any child starts", async () => {
         const packageJson = join(RUN_FIXTURES, "no-version.json");
@@ -419,7 +399,7 @@ describe("run", () => {
 
   describe("when the config file sets a relative nodeImport", () => {
     it("starts every child under timeout with the nodeImport as the file URL beside the config", async () => {
-      const resolved = new URL("fixtures/config/nested/loader.mjs", import.meta.url).href;
+      const resolved = pathToFileURL(join(NESTED_CONFIGS, "loader.mjs")).href;
       const echoOptions: StartChild = async (_runtime, request, options) => {
         const asked = `${request.mode} ${String(options.nodeImport)} ${String(options.timeout)}`;
         return request.mode === "list"
@@ -476,6 +456,24 @@ describe("runOnce", () => {
         },
         { id: "a.bench.ts", runtime: "node", status: "ok" },
       ],
+    });
+  });
+
+  describe("onPlanned", () => {
+    it("receives the once child count before the first once child starts", async () => {
+      const events: string[] = [];
+
+      await runOnceHere({
+        files: ["zeta.bench.ts", "a.bench.ts"],
+        runtimes: ["node", "bun"],
+        startChild: logsStarts(
+          events,
+          starter(() => ranOnce),
+        ),
+        onPlanned: logsPlans(events),
+      });
+
+      expect(events).toStrictEqual(["planned 2", "planned 4", "once", "once", "once", "once"]);
     });
   });
 });

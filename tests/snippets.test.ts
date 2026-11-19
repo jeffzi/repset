@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { runtimesHere } from "./real-bun.js";
 import { spawnCommand, TSX } from "./spawn-command.js";
+import { SPAWN_TIMEOUT_MS } from "./spawn-limits.js";
 
 /** The files the README embeds; each imports `repset`, which resolves to the built `dist/`. */
 const SNIPPETS = fileURLToPath(new URL("../docs/snippets/", import.meta.url));
@@ -12,14 +13,11 @@ const SNIPPETS = fileURLToPath(new URL("../docs/snippets/", import.meta.url));
 /** Every snippet file, by name. */
 const SNIPPET_FILES = readdirSync(SNIPPETS).filter((name) => name.endsWith(".bench.ts"));
 
-/** Node, tsx and a snippet's listing and `--once` children starting, on a slow CI runner. */
-const SPAWN_TIMEOUT_MS = 60_000;
-
 describe("the README's snippet files", () => {
   describe.each(runtimesHere())("on $runtime", ({ runtime, here }) => {
     describe.runIf(here)("when each runs alone", () => {
       it.each(SNIPPET_FILES)(
-        "runs %s once, registering a case and every case ok",
+        "runs %s once with every case ok",
         { timeout: SPAWN_TIMEOUT_MS },
         async (snippet) => {
           const { code, stderr } = await spawnCommand(SNIPPETS, [
@@ -31,7 +29,8 @@ describe("the README's snippet files", () => {
             snippet,
           ]);
 
-          expect({ code, stderr }).toStrictEqual({ code: 0, stderr: expect.any(String) });
+          // oxlint-disable-next-line vitest/valid-expect -- Vitest takes a failure message as expect's second argument
+          expect(code, stderr).toBe(0);
         },
       );
     });

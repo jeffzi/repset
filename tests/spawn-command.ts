@@ -5,14 +5,13 @@ import { fileURLToPath } from "node:url";
 
 import { onTestFinished } from "vitest";
 
+import { POSIX } from "./spawn-limits.js";
+
 /** The command's source entry. */
 const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 
 /** The `tsx` loader as a URL, which `--import` resolves from any working directory. */
 export const TSX = import.meta.resolve("tsx");
-
-/** Windows has no process groups a signal can be sent to. */
-const POSIX = process.platform !== "win32";
 
 /** How long a command left running at a test's end has to stop on SIGTERM, inside Vitest's hook limit. */
 const STOP_GRACE_MS = 5000;

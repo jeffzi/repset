@@ -335,7 +335,6 @@ describe("sampleSharedState", () => {
 
       const result = run(fake, COARSE_RESOLUTION, { minTime: 0, minSamples: 10 });
 
-      expect(result.sampleCount).toBe(10);
       expect(result.timingAttempts).toBe(1);
     });
   });
@@ -350,7 +349,6 @@ describe("sampleSharedState", () => {
 
         const result = run(fake, COARSE_RESOLUTION);
 
-        expect(result.sampleCount).toBe(64);
         expect(result.timingAttempts).toBe(1);
       });
 

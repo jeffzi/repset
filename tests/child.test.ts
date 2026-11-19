@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { join } from "node:path";
 import { Readable } from "node:stream";
 import { text } from "node:stream/consumers";
 import { fileURLToPath } from "node:url";
@@ -8,17 +7,17 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { listCases, measureCase, parseRequest, runOnce, type ChildResult } from "../src/child.js";
+import { fixturePath } from "./fixture-path.js";
 import { enabledGc } from "./measure/fixtures.js";
 import { resetRegistry } from "./registry.js";
+import { KILL_AFTER_MS, SPAWN_TIMEOUT_MS } from "./spawn-limits.js";
 
 /** The slot where the `lifecycle.ts` fixture records each callback it runs. */
 const CALLS = Symbol.for("repset.child-calls");
 
-const FIXTURES = fileURLToPath(new URL("fixtures/child/", import.meta.url));
-
 /** The absolute path of the child fixture `name`. */
 function fixture(name: string): string {
-  return join(FIXTURES, name);
+  return fixturePath("child", name);
 }
 
 const FILE = fixture("three-cases.ts");
@@ -43,6 +42,20 @@ const MEASURE_REQUEST = { mode: "measure", file: FILE, id: "alpha", ...SHORT_RUN
 
 const LIFECYCLE = fixture("lifecycle.ts");
 
+/** The `lifecycle.ts` cases whose thrown value yields no stack, with the message they report. */
+const NO_STACK_CASES = [
+  {
+    id: "fn-throws-unreadable-stack",
+    thrown: "an Error whose stack getter throws",
+    message: "fig",
+  },
+  {
+    id: "fn-throws-trapped-proxy",
+    thrown: "a value whose instanceof check throws",
+    message: "a value with no string form",
+  },
+];
+
 /** The callbacks the `lifecycle.ts` fixture recorded since the test began. */
 function calls(): unknown[] {
   const recorded: unknown = Reflect.get(globalThis, CALLS);
@@ -62,7 +75,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  vi.unstubAllGlobals();
   Reflect.deleteProperty(globalThis, CALLS);
 });
 
@@ -149,6 +161,34 @@ describe("listCases", () => {
         },
       });
     });
+
+    it.each([
+      {
+        name: "top-level-numeric-message.ts",
+        thrown: "an Error whose message is a number",
+        message: "42",
+        stack: expect.any(String),
+      },
+      {
+        name: "top-level-unreadable-stack.ts",
+        thrown: "an Error whose stack getter throws",
+        message: "fig",
+        stack: null,
+      },
+      {
+        name: "top-level-trapped-proxy.ts",
+        thrown: "a value whose instanceof check throws",
+        message: "a value with no string form",
+        stack: null,
+      },
+    ])("fails in phase load when the file throws $thrown", async ({ name, message, stack }) => {
+      const result = await listCases(fixture(name));
+
+      expect(result).toStrictEqual({
+        status: "failed",
+        error: { phase: "load", message, stack, teardownError: null },
+      });
+    });
   });
 });
 
@@ -217,6 +257,18 @@ describe("measureCase", () => {
 
       expect(result).toMatchObject({ status: "failed", error: { phase: "fn" } });
     });
+
+    it.each(NO_STACK_CASES)(
+      "fails in phase fn with a null stack when the case throws $thrown",
+      async ({ id, message }) => {
+        const result = await measureShort(LIFECYCLE, id);
+
+        expect(result).toStrictEqual({
+          status: "failed",
+          error: { phase: "fn", message, stack: null, teardownError: null },
+        });
+      },
+    );
   });
 });
 
@@ -263,6 +315,7 @@ describe("runOnce", () => {
         thrown: "an Error whose stack is not a string",
         message: "plum",
       },
+      ...NO_STACK_CASES,
     ])("carries a null stack when the case throws $thrown", async ({ id, message }) => {
       const result = await runOnce(LIFECYCLE, id);
 
@@ -294,12 +347,6 @@ describe("runOnce", () => {
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 
 const CHILD = fileURLToPath(new URL("../src/child.ts", import.meta.url));
-
-/** A runtime and tsx starting, then a list or once request, on a slow CI runner. */
-const SPAWN_TIMEOUT_MS = 60_000;
-
-/** How long a child may run before it is killed, so one that never exits fails instead of hanging. */
-const KILL_AFTER_MS = 30_000;
 
 /** The bytes the `loud.ts` fixture prints to each stream, its newline included. */
 const LOUD_STREAM_BYTES = 1024 * 1024;
@@ -385,6 +432,17 @@ describe("the child started on node", { timeout: SPAWN_TIMEOUT_MS }, () => {
       expect(resultLine(run.fd3)).toStrictEqual({
         status: "ok",
         cases: [{ id: "found", setupPerCall: false }],
+      });
+    });
+  });
+
+  describe("when the file throws an Error whose message is a bigint", () => {
+    it("writes the failed result of a list request in phase load, the message in its string form", async () => {
+      const run = await spawnChild({ mode: "list", file: fixture("top-level-bigint-message.ts") });
+
+      expect(resultLine(run.fd3)).toMatchObject({
+        status: "failed",
+        error: { phase: "load", message: "1" },
       });
     });
   });

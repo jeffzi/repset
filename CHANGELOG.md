@@ -7,6 +7,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Add `--no-color` to print without color on a terminal.
+- Show live progress on stderr when it is a terminal.
+- Add examples and a link to the README to `--help`.
+- Suggest the closest flag after an unknown one.
+- Add the version, the platform and a link to a prefilled GitHub issue to the output of a crash.
+
+### Changed
+
+- Read flags as most command-line tools do: a repeated flag takes its last value, a flag's value may
+  start with `-`, and `--version` wins over `--help`.
+
+### Fixed
+
+- Write the final report and exit 129 on `SIGHUP`, as on `SIGINT` and `SIGTERM`.
+- Name a bigint with its `n` suffix in error messages, so it no longer reads as a number.
+- Stop the run and exit 141 instead of crashing when stdout's reader closes early.
+- Report a benchmark that throws an unusual value, such as an error whose stack cannot be read, as
+  failing with that value's message.
+
 ## [0.1.0] - 2026-11-17
 
 ### Added

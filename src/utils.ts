@@ -7,17 +7,6 @@
 const TRANSITIONS_PER_PASS = 2000;
 
 /**
- * The default clock.
- *
- * Called on `performance`, since an unbound `now` throws on Node.
- *
- * @returns The current high-resolution time, in milliseconds.
- */
-export function performanceNow(): number {
-  return performance.now();
-}
-
-/**
  * Reads `now` until it has seen {@link TRANSITIONS_PER_PASS} transitions, reads that differ from
  * the previous one, and measures the smallest change between them.
  *
@@ -64,6 +53,8 @@ export function describe(value: unknown): string {
       return "a function";
     case "string":
       return JSON.stringify(value);
+    case "bigint":
+      return `${value}n`;
     default:
       return String(value);
   }
@@ -90,14 +81,53 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
  * failure it describes.
  *
  * @param value - The thrown value.
- * @returns The value's own `message` when it is an `Error`; otherwise `String(value)`. Either is
+ * @returns The string form of the value's `message` when it is an `Error`, so a `message` that is
+ *   not a string still reads as one; otherwise `String(value)`. Either is
  *   `"a value with no string form"` when it throws, as the conversion does for a null-prototype
- *   object and the read does for a `message` getter that throws.
+ *   object, the read does for a `message` getter that throws, and the `Error` check does for a
+ *   Proxy whose `getPrototypeOf` trap throws.
  */
 export function thrownMessage(value: unknown): string {
   try {
-    return value instanceof Error ? value.message : String(value);
+    if (!(value instanceof Error)) return String(value);
+    const message: unknown = value.message;
+    return String(message);
   } catch {
     return "a value with no string form";
   }
+}
+
+/**
+ * Whether `value` is an instance of `type`, without letting the check throw.
+ *
+ * @param value - The value to check.
+ * @param type - The constructor to check against.
+ * @returns `value instanceof type`, or `false` when the check throws, as a Proxy's `getPrototypeOf`
+ *   trap can.
+ */
+export function isInstance<T>(
+  value: unknown,
+  type: abstract new (...args: never[]) => T,
+): value is T {
+  try {
+    return value instanceof type;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Reads the value at `index`, refusing an index that holds none.
+ *
+ * @param values - The values to read from.
+ * @param index - The zero-based index to read.
+ * @returns The value at `index`.
+ * @throws RangeError when no value is at `index`, as when it is outside the values.
+ */
+export function valueAt<T>(values: ArrayLike<T>, index: number): T {
+  const value = values[index];
+  if (value === undefined) {
+    throw new RangeError(`no value at index ${index}: ${values.length} values`);
+  }
+  return value;
 }

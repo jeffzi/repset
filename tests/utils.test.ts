@@ -5,6 +5,7 @@ import {
   isRecord,
   thrownMessage,
   timerResolutionMs,
+  valueAt,
 } from "../src/utils.js";
 
 const RESOLUTION = 0.125;
@@ -136,5 +137,19 @@ describe("thrownMessage", () => {
 
       expect(read).toBe(expected);
     });
+  });
+});
+
+describe("valueAt", () => {
+  it("returns the value at an index that holds one", () => {
+    const value = valueAt([10, 20], 1);
+
+    expect(value).toBe(20);
+  });
+
+  it("throws a RangeError at an index past the values", () => {
+    const read = (): number => valueAt([10, 20], 2);
+
+    expect(read).toThrow(RangeError);
   });
 });

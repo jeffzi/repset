@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { fixturePath } from "./fixture-path.js";
 import { reportAt } from "./report-file.js";
 import { spawnCommand } from "./spawn-command.js";
 import { POSIX, SPAWN_TIMEOUT_MS } from "./spawn-limits.js";
@@ -10,9 +11,9 @@ import { temporaryDir } from "./temporary-dir.js";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 
-/** The fixture `name`, relative to the repository root the command starts in. */
+/** The absolute path of the command fixture `name`. */
 function commandFixture(name: string): string {
-  return `tests/fixtures/command/${name}`;
+  return fixturePath("command", name);
 }
 
 /** A fresh directory for a spawned command's report, removed when the test ends. */

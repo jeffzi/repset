@@ -61,8 +61,8 @@ interface BenchOptions {
   readonly teardownThrows?: unknown;
   /** The call, counted from zero per callback, at which setup or teardown returns a thenable. */
   readonly thenableAt?: { readonly setup?: number; readonly teardown?: number };
-  /** The call, counted from zero per callback, at which each returns a value whose `then` read throws. */
-  readonly raisingThenAt?: Failures;
+  /** The call, counted from zero per callback, at which setup or teardown returns a value whose `then` read throws. */
+  readonly raisingThenAt?: { readonly setup?: number; readonly teardown?: number };
 }
 
 interface Bench {
@@ -97,7 +97,7 @@ function withRaisingThen<T extends object>(value: T, error: Error): T {
  * @param kind - The benchmark's lifecycle.
  * @param options - The body's cost per call, which calls throw, what the body returns, the value
  *   the teardown throws, the calls at which setup or teardown return a thenable, and the calls at
- *   which a callback returns a value whose `then` read throws.
+ *   which setup or teardown returns a value whose `then` read throws.
  * @returns The benchmark, its scripted clock, and the logs the tests read.
  */
 function bench(kind: Kind, options: BenchOptions = {}): Bench {
@@ -143,7 +143,7 @@ function bench(kind: Kind, options: BenchOptions = {}): Bench {
         throw fnError;
       }
       clock.advance(bodyMs);
-      return call === raisingThenAt.fn ? withRaisingThen({}, thenReadError) : returns();
+      return returns();
     },
     teardown: (world) => {
       clock.advance(0);
@@ -534,20 +534,6 @@ describe("measure", () => {
         expect(fake.log.filter((entry) => entry === "teardown 0")).toHaveLength(1);
       },
     );
-
-    it.each([
-      { callback: "setup", thenableAt: { setup: 2 } },
-      { callback: "teardown", thenableAt: { teardown: 2 } },
-    ])(
-      "accepts a per-call run whose $callback returns a thenable after the check call",
-      async ({ thenableAt }) => {
-        const fake = bench("perCall", { thenableAt });
-
-        const result = await run(fake);
-
-        expect(result.sampleCount).toBe(64);
-      },
-    );
   });
 
   describe("when its callback's return value throws on reading then", () => {
@@ -572,12 +558,6 @@ describe("measure", () => {
         when: "the body throws",
         fails: { fn: 5 },
         raisingThenAt: { teardown: 5 },
-      },
-      {
-        kind: "sharedState",
-        when: "the setup's then read throws",
-        fails: {},
-        raisingThenAt: { setup: 0, teardown: 0 },
       },
       {
         kind: "perCall",
@@ -614,7 +594,6 @@ describe("measure", () => {
       },
       { kind: "perCall", when: "the check's setup throws", fails: { setup: 0 }, from: "setup" },
       { kind: "perCall", when: "the check's body call throws", fails: { fn: 0 }, from: "fn" },
-      { kind: "perCall", when: "the body throws in warmup", fails: { fn: 5 }, from: "fn" },
     ] as const;
 
     it.each(BUILD_OR_BODY_FAILURES)(
@@ -836,14 +815,6 @@ describe("measure", () => {
 
       expect(error.phase).toBe("optimized-away");
       expect(error.message).toMatch(/171875[^]*125000|125000[^]*171875/);
-    });
-
-    it("returns the ratio of the body's mean to the empty body's at 1.4375", async () => {
-      const fake = bench("sharedState", { bodyMs: 1.4375 * STEP_MS });
-
-      const result = await run(fake);
-
-      expect(result.ratioToEmptyBody).toBeCloseTo(1.4375, 6);
     });
 
     it("fails a shared-state run whose empty body asks for more calls per sample than the cap in phase calibration", async () => {

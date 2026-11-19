@@ -140,14 +140,10 @@ describe("bench", () => {
   });
 
   describe("when given a second argument that is not a function or an object", () => {
-    it.each([
-      { benchmark: 42, why: "a number", fragments: ["sort", "42"] },
-      { benchmark: null, why: "null", fragments: ["sort", "null"] },
-      { benchmark: [sync], why: "an array", fragments: ["sort", "an array"] },
-    ])("throws a TypeError for $why", ({ benchmark, fragments }) => {
-      const error = rejectionOf("sort", benchmark);
+    it("throws a TypeError naming the value", () => {
+      const error = rejectionOf("sort", 42);
 
-      expectTypeErrorHolding(error, fragments);
+      expectTypeErrorHolding(error, ["sort", "42"]);
     });
   });
 

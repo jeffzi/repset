@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { describe as describeValue, thrownMessage, timerResolutionMs } from "../src/utils.js";
+import {
+  describe as describeValue,
+  isRecord,
+  thrownMessage,
+  timerResolutionMs,
+} from "../src/utils.js";
 
 const RESOLUTION = 0.125;
 
@@ -58,6 +63,15 @@ describe("timerResolutionMs", () => {
 });
 
 describe("the describe function", () => {
+  it.each([
+    { value: null, text: "null" },
+    { value: [1], text: "an array" },
+  ])("names the value as $text", ({ value, text }) => {
+    const described = describeValue(value);
+
+    expect(described).toBe(text);
+  });
+
   describe("when given a function", () => {
     it("does not print its source", () => {
       const value = (): number => 1;
@@ -66,6 +80,18 @@ describe("the describe function", () => {
 
       expect(described).not.toContain(String(value));
     });
+  });
+});
+
+describe("isRecord", () => {
+  it.each([
+    { value: null, why: "null", expected: false },
+    { value: [1], why: "an array", expected: false },
+    { value: { apple: 1 }, why: "a plain object", expected: true },
+  ])("answers $expected for $why", ({ value, expected }) => {
+    const answer = isRecord(value);
+
+    expect(answer).toBe(expected);
   });
 });
 

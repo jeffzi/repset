@@ -1,4 +1,5 @@
 import { quantile } from "../../src/measure/measure.js";
+import { valueAt } from "../../src/utils.js";
 
 /**
  * Per-process medians (ns) from one round of back-to-back pairs; `baseline[i]` pairs with
@@ -44,14 +45,6 @@ const TIE_TOLERANCE = 1e-9;
 // of the per-call resolution while c2 stays under 500,000 calls. A pair within a millionth of its
 // per-call resolution is a tie.
 const RESOLUTION_TIE_FRACTION = 1e-6;
-
-function at(values: readonly number[], index: number): number {
-  const value = values[index];
-  if (value === undefined) {
-    throw new RangeError(`index ${index} is outside ${values.length} values`);
-  }
-  return value;
-}
 
 /**
  * The paired difference, with near-ties counted as 0.
@@ -105,7 +98,7 @@ function summarizeRound(pairs: Pairs): RoundSummary {
   const baselineMedian = median(baseline);
   const repsetMedian = median(repset);
   const differences = repset.map((repsetValue, index) =>
-    pairedDifference(at(baseline, index), repsetValue, at(perCallResolutions, index)),
+    pairedDifference(valueAt(baseline, index), repsetValue, valueAt(perCallResolutions, index)),
   );
   const observedSum = differences.reduce((sum, difference) => sum + difference, 0);
   return {

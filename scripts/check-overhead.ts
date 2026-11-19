@@ -20,7 +20,7 @@ import { CALLS_PER_SAMPLE } from "../src/command-line.js";
 import { RUNTIMES, type Runtime } from "../src/measure/runtime.js";
 import { DEFAULT_TIMEOUT } from "../src/options.js";
 import type { FailedResult, Report } from "../src/report.js";
-import { isRecord, property, thrownMessage } from "../src/utils.js";
+import { isRecord, property, thrownMessage, valueAt } from "../src/utils.js";
 import { BODY_NAMES, type BodyName } from "./check-overhead/bodies.js";
 import {
   judgeScenario,
@@ -453,10 +453,7 @@ function roundLines(
   pairs: Pairs,
 ): string[] {
   const pairLines = pairs.baseline.map((baseline, pairIndex) => {
-    const repset = pairs.repset[pairIndex];
-    if (repset === undefined) {
-      throw new RangeError(`${pairPlace(name, roundIndex, pairIndex)} no repset median`);
-    }
+    const repset = valueAt(pairs.repset, pairIndex);
     return `${pairPlace(name, roundIndex, pairIndex)}  baseline ${String(baseline)}  repset ${String(repset)}`;
   });
   return [summaryLine(name, roundIndex, summary), ...pairLines];

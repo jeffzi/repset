@@ -103,3 +103,19 @@ export function thrownMessage(value: unknown): string {
     return "a value with no string form";
   }
 }
+
+/**
+ * Reads the value at `index`, refusing an index that holds none.
+ *
+ * @param values - The values to read from.
+ * @param index - The zero-based index to read.
+ * @returns The value at `index`.
+ * @throws RangeError when no value is at `index`, as when it is outside the values.
+ */
+export function valueAt<T>(values: ArrayLike<T>, index: number): T {
+  const value = values[index];
+  if (value === undefined) {
+    throw new RangeError(`no value at index ${index}: ${values.length} values`);
+  }
+  return value;
+}

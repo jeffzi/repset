@@ -10,7 +10,7 @@
  * under Bun.
  */
 
-import { performanceNow, thrownMessage, timerResolutionMs } from "../utils.js";
+import { performanceNow, thrownMessage, timerResolutionMs, valueAt } from "../utils.js";
 import { type GcDuringTiming, observeCollections, type TimingWindow } from "./collections.js";
 import { runningRuntime } from "./runtime.js";
 import {
@@ -725,22 +725,6 @@ function sampleEmpty(options: EmptyOptions): EmptyResult {
 // ---------------------------------------------------------------------------
 
 /**
- * Reads one rank of the ascending per-call times.
- *
- * @param sorted - The per-call times, ascending.
- * @param rank - The zero-based rank to read.
- * @returns The time at that rank.
- * @throws RangeError when no time is stored at that rank, as when no span was stored at all.
- */
-function timeAt(sorted: ArrayLike<number>, rank: number): number {
-  const time = sorted[rank];
-  if (time === undefined) {
-    throw new RangeError(`no stored span at rank ${rank}: ${sorted.length} spans stored`);
-  }
-  return time;
-}
-
-/**
  * Reads quantile `q` of the ascending per-call times, linearly interpolated between the two
  * nearest ranks.
  *
@@ -752,8 +736,8 @@ function timeAt(sorted: ArrayLike<number>, rank: number): number {
 export function quantile(sorted: ArrayLike<number>, q: number): number {
   const position = (sorted.length - 1) * q;
   const lowerRank = Math.floor(position);
-  const lowTime = timeAt(sorted, lowerRank);
-  const highTime = timeAt(sorted, Math.ceil(position));
+  const lowTime = valueAt(sorted, lowerRank);
+  const highTime = valueAt(sorted, Math.ceil(position));
   return lowTime + (highTime - lowTime) * (position - lowerRank);
 }
 

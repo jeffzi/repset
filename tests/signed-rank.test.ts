@@ -99,9 +99,9 @@ describe("signedRankP", () => {
   });
 
   it("drops zero differences before ranking", () => {
-    const p = signedRankP([0, 1, 2, 3]);
+    const p = signedRankP([0, -1, 2, 3]);
 
-    expect(p).toBe(0.25);
+    expect(p).toBe(0.5);
   });
 
   it("gives 1 when no difference is nonzero", () => {

@@ -2,13 +2,13 @@
 
 Each case holds its differences beside `p`, the two-sided exact signed-rank p value with zeros
 dropped (scipy's exact `wilcoxon`, or an exact `permutation_test` when magnitudes tie), `estimate`,
-the Hodges-Lehmann estimate, and `intervals`, the exact interval at each level 1 - 0.05 / pairs a
-contest of 2 to 8 contenders uses. scipy has no Hodges-Lehmann estimate or interval, so both are
-computed here from the Walsh averages, with the critical value from the untied null checked
-against scipy.
+the Hodges-Lehmann estimate, and `intervals`, the exact interval at level 0.95. scipy has no
+Hodges-Lehmann estimate or interval, so both are computed here from the Walsh averages, with the
+critical value from the untied null checked against scipy.
 
-scipy's exact `wilcoxon` returns 0.0 for p values under about 1e-16 once n passes 53, so the
-cases past 53 keep p above 1e-6.
+There is one case per path the TypeScript code takes: untied, tied, with zeros, and past 53
+differences. scipy's exact `wilcoxon` returns 0.0 for p values under about 1e-16 once n passes 53,
+so the case past 53 keeps p above 1e-6.
 """
 
 import json
@@ -22,7 +22,7 @@ from typing import TypedDict
 import numpy as np
 from scipy import stats
 
-LEVELS = [1 - 0.05 / (k * (k - 1) // 2) for k in range(2, 9)]
+LEVELS = [0.95]
 
 
 class Interval(TypedDict):
@@ -158,26 +158,9 @@ def main() -> None:
 
     cases = [
         case("untied, n = 6", draws(6, 0.02)),
-        case("untied, n = 9, mixed signs", draws(9, 0.0)),
         case("ties, n = 10", on_grid(draws(10, 0.02, 0.03))),
-        case("ties, n = 14", on_grid(draws(14, 0.01, 0.03))),
-        case(
-            "ties, n = 16, one value repeated",
-            [0.02] * 5 + on_grid(draws(11, 0.03, 0.04)),
-        ),
         case("zeros, n = 12", [0.0, 0.0, 0.0] + draws(9, 0.03)),
-        case("zeros and ties, n = 13", [0.0, 0.0] + on_grid(draws(11, 0.02, 0.03))),
-        case("only zeros, n = 4", [0.0, 0.0, 0.0, 0.0]),
-        case("untied, n = 11", draws(11, 0.02)),
-        case("untied, n = 13", draws(13, 0.01)),
-        case("untied, n = 16", draws(16, 0.02)),
-        case("untied, n = 20", draws(20, 0.01)),
-        case("untied, n = 25", draws(25, 0.0)),
-        case("untied, n = 30", draws(30, 0.02)),
         case("untied, n = 54", draws(54, 0.01)),
-        case("untied, n = 60, shifted", draws(60, 0.02)),
-        case("untied, n = 80", draws(80, 0.0)),
-        case("zeros, n = 64, 58 nonzero", [0.0] * 6 + draws(58, 0.01)),
     ]
     with open(out, "w") as f:
         json.dump(

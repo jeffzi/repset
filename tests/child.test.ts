@@ -42,6 +42,20 @@ const MEASURE_REQUEST = { mode: "measure", file: FILE, id: "alpha", ...SHORT_RUN
 
 const LIFECYCLE = fixture("lifecycle.ts");
 
+/** The `lifecycle.ts` cases whose thrown value yields no stack, with the message they report. */
+const NO_STACK_CASES = [
+  {
+    id: "fn-throws-unreadable-stack",
+    thrown: "an Error whose stack getter throws",
+    message: "fig",
+  },
+  {
+    id: "fn-throws-trapped-proxy",
+    thrown: "a value whose instanceof check throws",
+    message: "a value with no string form",
+  },
+];
+
 /** The callbacks the `lifecycle.ts` fixture recorded since the test began. */
 function calls(): unknown[] {
   const recorded: unknown = Reflect.get(globalThis, CALLS);
@@ -147,6 +161,34 @@ describe("listCases", () => {
         },
       });
     });
+
+    it.each([
+      {
+        name: "top-level-numeric-message.ts",
+        thrown: "an Error whose message is a number",
+        message: "42",
+        stack: expect.any(String),
+      },
+      {
+        name: "top-level-unreadable-stack.ts",
+        thrown: "an Error whose stack getter throws",
+        message: "fig",
+        stack: null,
+      },
+      {
+        name: "top-level-trapped-proxy.ts",
+        thrown: "a value whose instanceof check throws",
+        message: "a value with no string form",
+        stack: null,
+      },
+    ])("fails in phase load when the file throws $thrown", async ({ name, message, stack }) => {
+      const result = await listCases(fixture(name));
+
+      expect(result).toStrictEqual({
+        status: "failed",
+        error: { phase: "load", message, stack, teardownError: null },
+      });
+    });
   });
 });
 
@@ -215,6 +257,18 @@ describe("measureCase", () => {
 
       expect(result).toMatchObject({ status: "failed", error: { phase: "fn" } });
     });
+
+    it.each(NO_STACK_CASES)(
+      "fails in phase fn with a null stack when the case throws $thrown",
+      async ({ id, message }) => {
+        const result = await measureShort(LIFECYCLE, id);
+
+        expect(result).toStrictEqual({
+          status: "failed",
+          error: { phase: "fn", message, stack: null, teardownError: null },
+        });
+      },
+    );
   });
 });
 
@@ -261,6 +315,7 @@ describe("runOnce", () => {
         thrown: "an Error whose stack is not a string",
         message: "plum",
       },
+      ...NO_STACK_CASES,
     ])("carries a null stack when the case throws $thrown", async ({ id, message }) => {
       const result = await runOnce(LIFECYCLE, id);
 
@@ -377,6 +432,17 @@ describe("the child started on node", { timeout: SPAWN_TIMEOUT_MS }, () => {
       expect(resultLine(run.fd3)).toStrictEqual({
         status: "ok",
         cases: [{ id: "found", setupPerCall: false }],
+      });
+    });
+  });
+
+  describe("when the file throws an Error whose message is a bigint", () => {
+    it("writes the failed result of a list request in phase load, the message in its string form", async () => {
+      const run = await spawnChild({ mode: "list", file: fixture("top-level-bigint-message.ts") });
+
+      expect(resultLine(run.fd3)).toMatchObject({
+        status: "failed",
+        error: { phase: "load", message: "1" },
       });
     });
   });

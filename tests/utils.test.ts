@@ -120,4 +120,21 @@ describe("thrownMessage", () => {
       expect(message).not.toThrow();
     });
   });
+
+  describe("when the value is an Error whose message is not a string", () => {
+    it.each([
+      { why: "a number", message: 42, expected: "42" },
+      {
+        why: "a value with no string form",
+        message: Object.create(null),
+        expected: "a value with no string form",
+      },
+    ])("returns the string form of a message that is $why", ({ message, expected }) => {
+      const error = Object.defineProperty(new Error("cherry"), "message", { value: message });
+
+      const read = thrownMessage(error);
+
+      expect(read).toBe(expected);
+    });
+  });
 });

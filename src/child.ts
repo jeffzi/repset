@@ -27,7 +27,7 @@ import {
   withCaseState,
 } from "./measure/measure.js";
 import { RESULT_FD } from "./result-fd.js";
-import { describe, isRecord, thrownMessage } from "./utils.js";
+import { describe, isInstance, isRecord, thrownMessage } from "./utils.js";
 
 // ---------------------------------------------------------------------------
 // Benchmark registration
@@ -307,7 +307,10 @@ export type ChildRequest = ListRequest | MeasureRequest | OnceRequest;
 /** Where a child's work failed: a phase of `measure`, or `load` for the benchmark file. */
 export type ChildPhase = Phase | "load";
 
-/** A cleanup teardown's failure: its value's message, and its stack as {@link ChildError} encodes one. */
+/**
+ * A cleanup teardown's failure: its value's message, and its stack as {@link ChildError} encodes
+ * one.
+ */
 export interface TeardownFailure {
   readonly message: string;
   readonly stack: string | null;
@@ -448,13 +451,25 @@ export function parseRequest(argument: string): ChildRequest {
   }
 }
 
+/**
+ * Reads the stack of a thrown value without letting the check or the read throw.
+ *
+ * @param value - The thrown value.
+ * @returns The stack when `value` is an `Error` with a string stack; `null` when it is not, or when
+ *   the check or the read throws.
+ */
+function errorStack(value: unknown): string | null {
+  try {
+    return value instanceof Error && typeof value.stack === "string" ? value.stack : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The message and stack of `thrown`, the stack taken from a `MeasureError`'s cause. */
 function encodeThrown(thrown: unknown): TeardownFailure {
-  const cause: unknown = thrown instanceof MeasureError ? thrown.cause : thrown;
-  return {
-    message: thrownMessage(thrown),
-    stack: cause instanceof Error && typeof cause.stack === "string" ? cause.stack : null,
-  };
+  const cause: unknown = isInstance(thrown, MeasureError) ? thrown.cause : thrown;
+  return { message: thrownMessage(thrown), stack: errorStack(cause) };
 }
 
 /**
@@ -464,12 +479,13 @@ function encodeThrown(thrown: unknown): TeardownFailure {
  * @param thrown - The thrown value. For a `MeasureError`, the result takes its phase and message
  *   and the stack of its cause, since its own stack names only repset's frames, and its
  *   `teardownError` encoded the same way.
- * @returns The failed result: the message is an `Error`'s own or another value's string form, the
- *   stack `null` unless the cause is an `Error` with a string stack, and the teardown error `null`
- *   unless a cleanup teardown threw.
+ * @returns The failed result: the message is the string form of an `Error`'s own message or of
+ *   another value, or a placeholder for a value that has none; the stack `null` unless the cause
+ *   is an `Error` whose stack reads as a string; and the teardown error `null` unless a cleanup
+ *   teardown threw.
  */
 function failedResult(phase: ChildPhase, thrown: unknown): Failed {
-  const isMeasureError = thrown instanceof MeasureError;
+  const isMeasureError = isInstance(thrown, MeasureError);
   const teardownError = isMeasureError ? thrown.teardownError : null;
   return {
     status: "failed",

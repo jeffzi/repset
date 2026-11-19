@@ -10,7 +10,7 @@
  * under Bun.
  */
 
-import { thrownMessage, timerResolutionMs, valueAt } from "../utils.js";
+import { isInstance, thrownMessage, timerResolutionMs, valueAt } from "../utils.js";
 import { type GcDuringTiming, observeCollections, type TimingWindow } from "./collections.js";
 import { runningRuntime } from "./runtime.js";
 import {
@@ -130,8 +130,8 @@ export class MeasureError extends Error {
   readonly teardownError: MeasureError | null;
 
   /**
-   * Builds the error, its message the cause's own when the cause is an `Error`, its string form
-   * otherwise, or a placeholder for a value that has none.
+   * Builds the error, its message the string form of the cause's own when the cause is an `Error`,
+   * the cause's string form otherwise, or a placeholder for a value that has none.
    *
    * @param phase - Where the case failed.
    * @param cause - The value that was thrown, or the `Error` built for a failure of `measure`'s own;
@@ -322,13 +322,13 @@ function failedIn(
   error: unknown,
   teardownError: MeasureError | null = null,
 ): MeasureError {
-  if (error instanceof MeasureError) {
+  if (isInstance(error, MeasureError)) {
     return teardownError === null
       ? error
       : new MeasureError(error.phase, error.cause, teardownError);
   }
   return new MeasureError(
-    error instanceof CalibrationError ? "calibration" : phase,
+    isInstance(error, CalibrationError) ? "calibration" : phase,
     error,
     teardownError,
   );

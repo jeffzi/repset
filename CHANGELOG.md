@@ -32,6 +32,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Name a bigint with its `n` suffix in error messages, so it no longer reads as a number.
 - Stop the run and exit 141 when stdout's reader goes away, such as `repset | head`, instead of
   crashing with a stack, still writing the report file `--out` names.
+- Fail a benchmark that throws an unusual value, such as an error whose stack cannot be read, in its
+  own phase instead of as "it wrote no result".
 
 ## [0.1.0] - 2026-11-17
 

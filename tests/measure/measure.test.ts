@@ -2,6 +2,7 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 
 import { type Case, measure, MeasureError, summarize } from "../../src/measure/measure.js";
 import { CalibrationError, WARMUP_MIN_SAMPLES } from "../../src/measure/sampler.js";
+import { trappedProxy } from "../thrown-values.js";
 import { enabledGc } from "./fixtures.js";
 
 // ---------------------------------------------------------------------------
@@ -770,6 +771,24 @@ describe("measure", () => {
 
       expect(error.phase).toBe("fn");
       expect(error.cause).toBe(own);
+    });
+
+    it("rejects a run whose body throws a value whose instanceof check throws in phase fn, that value as cause", async () => {
+      const trapped = trappedProxy();
+      vi.stubGlobal("gc", () => undefined);
+      const benchmark: Case<number> = {
+        kind: "sharedState",
+        setup: () => 0,
+        fn: () => {
+          // oxlint-disable-next-line typescript/only-throw-error -- a thrown value whose instanceof check throws is the input under test
+          throw trapped;
+        },
+      };
+
+      const error = await failure(measure(benchmark, { now: steppedClock().now }));
+
+      expect(error.phase).toBe("fn");
+      expect(error.cause).toBe(trapped);
     });
 
     it("rejects a shared-state run whose third timing attempt is discarded too in phase calibration", async () => {

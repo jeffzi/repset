@@ -81,15 +81,38 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
  * failure it describes.
  *
  * @param value - The thrown value.
- * @returns The value's own `message` when it is an `Error`; otherwise `String(value)`. Either is
+ * @returns The string form of the value's `message` when it is an `Error`, so a `message` that is
+ *   not a string still reads as one; otherwise `String(value)`. Either is
  *   `"a value with no string form"` when it throws, as the conversion does for a null-prototype
- *   object and the read does for a `message` getter that throws.
+ *   object, the read does for a `message` getter that throws, and the `Error` check does for a
+ *   Proxy whose `getPrototypeOf` trap throws.
  */
 export function thrownMessage(value: unknown): string {
   try {
-    return value instanceof Error ? value.message : String(value);
+    if (!(value instanceof Error)) return String(value);
+    const message: unknown = value.message;
+    return String(message);
   } catch {
     return "a value with no string form";
+  }
+}
+
+/**
+ * Whether `value` is an instance of `type`, without letting the check throw.
+ *
+ * @param value - The value to check.
+ * @param type - The constructor to check against.
+ * @returns `value instanceof type`, or `false` when the check throws, as a Proxy's `getPrototypeOf`
+ *   trap can.
+ */
+export function isInstance<T>(
+  value: unknown,
+  type: abstract new (...args: never[]) => T,
+): value is T {
+  try {
+    return value instanceof type;
+  } catch {
+    return false;
   }
 }
 

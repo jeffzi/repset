@@ -113,6 +113,17 @@ describe("main", () => {
       }).toStrictEqual({ code: 2, named: true });
     });
 
+    it("exits 2 on a --rounds that is not a whole number, naming rounds and the value", async () => {
+      const { code, stderr } = await command(workspace(), ["--rounds", "1.5"], {
+        startChild: startsNoChild,
+      });
+
+      expect({
+        code,
+        named: stderr.includes("rounds") && stderr.includes("1.5"),
+      }).toStrictEqual({ code: 2, named: true });
+    });
+
     it("prints a Commander error behind the repset: prefix alone", async () => {
       const { code, stderr } = await command(workspace(), ["--banana"], {
         startChild: startsNoChild,

@@ -57,6 +57,7 @@ const OPTIONS: readonly (readonly [string, string])[] = [
     "--min-samples <n>",
     `Take at least this many samples of each case (default: ${DEFAULT_MIN_SAMPLES})`,
   ],
+  ["--rounds <n>", "Run each contest in this many rounds (default: by contest size)"],
   [
     "--timeout <ms>",
     "Fail a case that takes longer than this many milliseconds on one runtime " +
@@ -256,6 +257,7 @@ export function parseCommand(args: readonly string[], parser: Parser): Command {
       runtimes: runtimeList(text("runtime")),
       minTime: decimal("min-time", text("minTime")),
       minSamples: decimal("min-samples", text("minSamples")),
+      rounds: decimal("rounds", text("rounds")),
       timeout: decimal("timeout", text("timeout")),
       nodeImport: text("nodeImport"),
       config: text("config"),

@@ -86,12 +86,13 @@ interface Stopped extends Captured {
 export type Outcome = Succeeded | ChildFailed | Stopped;
 
 /**
- * How the child process ended: stopped by the caller's signal, killed at its timeout, or exited on
- * its own, with `code` `null` when a signal ended it and `signal` `null` otherwise.
+ * How the child process ended: stopped by the caller's signal, killed at its `timeout` in
+ * milliseconds, or exited on its own, with `code` `null` when a signal ended it and `signal` `null`
+ * otherwise.
  */
 type Ending =
   | { readonly kind: "stopped" }
-  | { readonly kind: "timeout" }
+  | { readonly kind: "timeout"; readonly timeout: number }
   | { readonly kind: "exit"; readonly code: number | null; readonly signal: string | null };
 
 /** How a spawned process ended, or the error that kept it from starting. */
@@ -248,7 +249,7 @@ async function probeVersion(
   if (ended.kind === "error") throw failedWith(`cannot run ${executable} --version`, ended.error);
   if (ended.kind === "stopped") return undefined;
   if (ended.kind === "timeout" || ended.signal !== null || ended.code !== 0) {
-    throw new ConfigError(howItEnded(`${executable} --version`, ended, options.timeout));
+    throw new ConfigError(howItEnded(`${executable} --version`, ended));
   }
   const version = printed.trim().replace(/^v/, "");
   if (version === "") throw new ConfigError(`${executable} --version printed nothing`);
@@ -321,7 +322,7 @@ export async function startChild(
   if (ended.kind === "error") {
     return noResult(`could not start the child: ${ended.error.message}`, tail.text());
   }
-  return outcomeOf(ended, readResult(written(), request.mode), options.timeout, tail.text());
+  return outcomeOf(ended, readResult(written(), request.mode), tail.text());
 }
 
 /**
@@ -339,14 +340,14 @@ async function processEnded(child: ChildProcess, options: LookupOptions): Promis
   return new Promise((resolve) => {
     let ending: Ending | undefined;
     let settled = false;
-    const kill = (kind: "stopped" | "timeout"): void => {
-      ending ??= { kind };
+    const kill = (killed: Exclude<Ending, { kind: "exit" }>): void => {
+      ending ??= killed;
       child.kill("SIGKILL");
     };
     const stop = (): void => {
-      kill("stopped");
+      kill({ kind: "stopped" });
     };
-    const timer = setTimeout(kill, timeout, "timeout");
+    const timer = setTimeout(kill, timeout, { kind: "timeout", timeout });
     if (signal?.aborted === true) stop();
     signal?.addEventListener("abort", stop, { once: true });
 
@@ -437,24 +438,18 @@ function spawnChild(
  *
  * @param ending - How the child ended.
  * @param read - The result the child wrote, or what was wrong with what it wrote.
- * @param timeout - The child's timeout, which a timed-out child's failure names.
  * @param output - The tail of the child's stdout and stderr.
  * @returns A stop when the caller stopped the child; otherwise the result or the child's own
  *   failure when it wrote one, or a failure in phase `child` saying how it ended.
  */
-function outcomeOf(
-  ending: Ending,
-  read: ChildResult | string,
-  timeout: number,
-  output: string,
-): Outcome {
+function outcomeOf(ending: Ending, read: ChildResult | string, output: string): Outcome {
   if (ending.kind === "stopped") return { status: "stopped", output };
   if (typeof read !== "string") {
     return read.status === "failed"
       ? { status: "failed", error: read.error, output }
       : { status: "ok", result: read, output };
   }
-  return noResult(`${howItEnded("the child", ending, timeout)}: ${read}`, output);
+  return noResult(`${howItEnded("the child", ending)}: ${read}`, output);
 }
 
 /** A failure in phase `child`, which has no stack. */
@@ -472,16 +467,13 @@ function noResult(message: string, output: string): ChildFailed {
  *
  * @param subject - What ran, as the sentence's subject, such as `the child`.
  * @param ending - How it ended: at its timeout, or on its own.
- * @param timeout - The timeout it ran under, in milliseconds.
  * @returns `<subject> was killed after its <timeout> ms timeout`, `<subject> was killed by
  *   <signal>`, or `<subject> exited with status <code>`, with `unknown` for a null code.
  */
-function howItEnded(
-  subject: string,
-  ending: Exclude<Ending, { kind: "stopped" }>,
-  timeout: number,
-): string {
-  if (ending.kind === "timeout") return `${subject} was killed after its ${timeout} ms timeout`;
+export function howItEnded(subject: string, ending: Exclude<Ending, { kind: "stopped" }>): string {
+  if (ending.kind === "timeout") {
+    return `${subject} was killed after its ${ending.timeout} ms timeout`;
+  }
   if (ending.signal !== null) return `${subject} was killed by ${ending.signal}`;
   return `${subject} exited with status ${ending.code ?? "unknown"}`;
 }

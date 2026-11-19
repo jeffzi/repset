@@ -30,6 +30,7 @@ import {
   APPLE,
   contender,
   failedOutcome,
+  failsLoopInRoundTwo,
   listingStarter,
   measuredOutcome,
   ranOnce,
@@ -505,19 +506,14 @@ describe("main", () => {
     it("lowers the live line's total by the rounds a failed contender will not run, keeping its started count", async () => {
       const stderr = terminalOf(80);
       const seen: string[][] = [];
-      let loopCalls = 0;
-      const failsLoopInRoundTwo = listingStarter(
+      const loopFailsInRoundTwo = listingStarter(
         [contender("join"), contender("loop"), contender("plus")],
-        (request) => {
-          if (request.id !== "concat/loop") return measuredOutcome(4656);
-          loopCalls += 1;
-          return loopCalls === 2 ? failedOutcome("fn", "kiwi") : measuredOutcome(17);
-        },
+        failsLoopInRoundTwo(),
       );
 
       await command(workspace(), ["--rounds", "4", "sort.bench.ts"], {
         stderr,
-        startChild: watching(stderr, seen, failsLoopInRoundTwo),
+        startChild: watching(stderr, seen, loopFailsInRoundTwo),
       });
 
       const counts = seen.slice(1).map((rows) =>

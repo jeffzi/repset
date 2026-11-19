@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { basename, join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 
@@ -17,7 +17,7 @@ import {
   type StartChild,
 } from "./fake-children.js";
 import { parseReport, reportAt } from "./report-file.js";
-import { temporaryDir } from "./temporary-dir.js";
+import { temporaryProject } from "./temporary-dir.js";
 
 type Io = NonNullable<Parameters<typeof main>[1]>;
 
@@ -147,9 +147,7 @@ export function styled(text: string): boolean {
 
 /** A fresh working directory holding the empty benchmark files, removed when the test ends. */
 export function workspace(): string {
-  const dir = temporaryDir("repset-command-");
-  for (const file of FILES) writeFileSync(join(dir, file), "");
-  return dir;
+  return temporaryProject("repset-command-", Object.fromEntries(FILES.map((file) => [file, ""])));
 }
 
 interface Ended {

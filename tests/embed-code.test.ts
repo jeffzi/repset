@@ -1,22 +1,16 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
 import { embedCode } from "../scripts/embed-code.js";
-import { temporaryDir } from "./temporary-dir.js";
+import { temporaryProject } from "./temporary-dir.js";
 
 const FENCE = "```";
 
-/** Writes each file under a fresh directory, creating parent directories, and returns the directory. */
+/** A fresh directory holding each of `files`, removed when the test ends. */
 function createProject(files: Record<string, string>): string {
-  const dir = temporaryDir("embed-code-");
-  for (const [path, content] of Object.entries(files)) {
-    const target = join(dir, path);
-    mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(target, content);
-  }
-  return dir;
+  return temporaryProject("embed-code-", files);
 }
 
 /** A `CODE` block embedding `src`, holding `content` between its markers. */

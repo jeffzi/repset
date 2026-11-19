@@ -1,28 +1,23 @@
-import { mkdirSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readdirSync, utimesSync } from "node:fs";
+import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
 import { checkCoverageFresh } from "../scripts/check-coverage-fresh.js";
-import { temporaryDir } from "./temporary-dir.js";
+import { temporaryProject } from "./temporary-dir.js";
 
 const COVERAGE_MTIME = 1_700_000_000;
 const OLDER = COVERAGE_MTIME - 100;
 
-/** Writes a file, creating parent directories, and sets its mtime (seconds). */
-function writeFileWithMtime(path: string, content: string, mtime: number): void {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, content);
-  utimesSync(path, mtime, mtime);
-}
-
 /** A throwaway project holding each file at its mtime and a coverage report at `coverageMtime`. */
 function createProject(files: Record<string, number>, coverageMtime: number): string {
-  const dir = temporaryDir("coverage-fresh-");
-  for (const [path, mtime] of Object.entries(files)) {
-    writeFileWithMtime(join(dir, path), "", mtime);
-  }
-  writeFileWithMtime(join(dir, "coverage", "coverage-final.json"), "{}", coverageMtime);
+  const report = join("coverage", "coverage-final.json");
+  const timeOf = { ...files, [report]: coverageMtime };
+  const dir = temporaryProject("coverage-fresh-", {
+    ...Object.fromEntries(Object.keys(files).map((path) => [path, ""])),
+    [report]: "{}",
+  });
+  for (const [path, mtime] of Object.entries(timeOf)) utimesSync(join(dir, path), mtime, mtime);
   // Last, because writing a child bumps its directory's mtime.
   for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
     if (entry.isDirectory()) utimesSync(join(entry.parentPath, entry.name), OLDER, OLDER);

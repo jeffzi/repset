@@ -105,6 +105,16 @@ export function failedOutcome(
 /** The failure of a cleanup teardown that threw an `Error`, as the child encodes it. */
 export const MELON = { message: "melon", stack: "at teardown" } as const;
 
+/** An answer that measures every request, and fails `concat/loop`'s second call in phase `fn` with `kiwi`. */
+export function failsLoopInRoundTwo(): (request: Asked) => Outcome {
+  let loopCalls = 0;
+  return (request) => {
+    if (request.id !== "concat/loop") return measuredOutcome(4656);
+    loopCalls += 1;
+    return loopCalls === 2 ? failedOutcome("fn", "kiwi") : measuredOutcome(17);
+  };
+}
+
 /** A child starter that lists the one case `listCase` gives per file and answers the rest with `answer`. */
 export function starter(
   listCase: (file: string) => CaseToList,

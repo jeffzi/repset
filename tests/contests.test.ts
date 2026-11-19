@@ -10,6 +10,7 @@ import {
   type CaseToList,
   contender,
   failedOutcome,
+  failsLoopInRoundTwo,
   found,
   listingStarter,
   measured,
@@ -312,7 +313,7 @@ describe("run", () => {
         events: string[];
       }> {
         const events: string[] = [];
-        let loopCalls = 0;
+        const answer = failsLoopInRoundTwo();
         const { report, started } = await runCases(
           [JOIN, LOOP, PLUS],
           {
@@ -324,9 +325,7 @@ describe("run", () => {
           },
           (request) => {
             events.push(`start ${request.id}`);
-            if (request.id !== "concat/loop") return measuredOutcome(4656);
-            loopCalls += 1;
-            return loopCalls === 2 ? failedOutcome("fn", "kiwi") : measuredOutcome(17);
+            return answer(request);
           },
         );
         return { report, started, events };

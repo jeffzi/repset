@@ -17,6 +17,7 @@ import statistics
 import sys
 from fractions import Fraction
 from functools import cache
+from typing import TypedDict
 
 import numpy as np
 from scipy import stats
@@ -24,12 +25,26 @@ from scipy import stats
 LEVELS = [1 - 0.05 / (k * (k - 1) // 2) for k in range(2, 9)]
 
 
-def walsh(d):
+class Interval(TypedDict):
+    level: float
+    low: float
+    high: float
+
+
+class Case(TypedDict):
+    name: str
+    differences: list[float]
+    p: float
+    estimate: float
+    intervals: list[Interval]
+
+
+def walsh(d: list[float]) -> list[float]:
     return sorted((d[i] + d[j]) / 2 for i in range(len(d)) for j in range(i, len(d)))
 
 
 @cache
-def untied_counts(n):
+def untied_counts(n: int) -> list[int]:
     """counts[t] = number of sign assignments of ranks 1..n whose positive rank sum is t."""
     counts = [1]
     for r in range(1, n + 1):
@@ -40,12 +55,12 @@ def untied_counts(n):
     return counts
 
 
-def untied_cdf(n, c):
+def untied_cdf(n: int, c: int) -> Fraction:
     counts = untied_counts(n)
     return Fraction(sum(counts[: c + 1]), 2**n)
 
 
-def scipy_untied_p(n, c):
+def scipy_untied_p(n: int, c: int) -> float:
     """scipy's exact two-sided p for ranks 1..n whose negative rank sum is c."""
     values = list(range(1, n + 1))
     remaining = c
@@ -54,10 +69,26 @@ def scipy_untied_p(n, c):
             values[r - 1] = -r
             remaining -= r
     assert remaining == 0
-    return stats.wilcoxon(values, method="exact").pvalue
+    return float(stats.wilcoxon(values, method="exact").pvalue)
 
 
-def critical(n, level):
+def critical(n: int, level: float) -> int:
+    """Finds the exact Hodges-Lehmann interval's critical value from the untied null.
+
+    Checks the untied tail at the critical value and the one below it against scipy's exact
+    `wilcoxon`.
+
+    Args:
+        n: The number of differences.
+        level: The confidence level, such as 0.95.
+
+    Returns:
+        The largest c whose two-sided untied tail stays within 1 - level, or 0 when no exact
+        interval exists at this n and level.
+
+    Raises:
+        AssertionError: When scipy's exact p value disagrees with the untied tail.
+    """
     alpha = 1 - level
     found = 0
     for c in range(1, n * (n + 1) // 2 + 1):
@@ -73,7 +104,7 @@ def critical(n, level):
     return found
 
 
-def p_value(d):
+def p_value(d: list[float]) -> float:
     nonzero = np.array([x for x in d if x != 0])
     if len(nonzero) == 0:
         return 1.0
@@ -84,7 +115,7 @@ def p_value(d):
         return p
     ranks = stats.rankdata(magnitudes)
 
-    def statistic(x, axis):
+    def statistic(x: np.ndarray, axis: int) -> np.ndarray:
         return np.sum(np.where(x > 0, ranks, 0), axis=axis)
 
     result = stats.permutation_test(
@@ -98,10 +129,10 @@ def p_value(d):
     return float(result.pvalue)
 
 
-def case(name, d):
+def case(name: str, d: list[float]) -> Case:
     w = walsh(d)
     m = len(w)
-    intervals = []
+    intervals: list[Interval] = []
     for level in LEVELS:
         c = critical(len(d), level)
         if c:
@@ -115,14 +146,14 @@ def case(name, d):
     }
 
 
-def main():
+def main() -> None:
     out = sys.argv[1]
     rng = random.Random(20261119)
 
-    def draws(n, mean, sd=0.05):
+    def draws(n: int, mean: float, sd: float = 0.05) -> list[float]:
         return [rng.gauss(mean, sd) for _ in range(n)]
 
-    def on_grid(values, step=0.01):
+    def on_grid(values: list[float], step: float = 0.01) -> list[float]:
         return [round(round(v / step) * step, 2) for v in values]
 
     cases = [
@@ -130,7 +161,10 @@ def main():
         case("untied, n = 9, mixed signs", draws(9, 0.0)),
         case("ties, n = 10", on_grid(draws(10, 0.02, 0.03))),
         case("ties, n = 14", on_grid(draws(14, 0.01, 0.03))),
-        case("ties, n = 16, one value repeated", [0.02] * 5 + on_grid(draws(11, 0.03, 0.04))),
+        case(
+            "ties, n = 16, one value repeated",
+            [0.02] * 5 + on_grid(draws(11, 0.03, 0.04)),
+        ),
         case("zeros, n = 12", [0.0, 0.0, 0.0] + draws(9, 0.03)),
         case("zeros and ties, n = 13", [0.0, 0.0] + on_grid(draws(11, 0.02, 0.03))),
         case("only zeros, n = 4", [0.0, 0.0, 0.0, 0.0]),
@@ -155,4 +189,5 @@ def main():
         )
 
 
-main()
+if __name__ == "__main__":
+    main()

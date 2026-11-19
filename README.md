@@ -14,8 +14,9 @@ the harness around it. That choice sets its limits:
 - It times synchronous functions only. `bench()` rejects an `async` function.
 - Each case runs in its own process, so one case cannot slow the next. A run with many cases takes
   longer than an in-process tool.
-- It gives no verdict between two cases, and none between two revisions of your code. It reports
-  each case's numbers; a separate tool compares reports.
+- It gives no verdict between two revisions of your code. It reports each run's numbers; a separate
+  tool compares reports. Between functions in one file, a [contest](#compare-functions-in-a-contest)
+  gives the verdict.
 
 ## Install
 
@@ -163,6 +164,77 @@ Node runs TypeScript files by stripping their types, but it does not map an impo
 `foo.ts`. If your benchmarks import TypeScript files that way, give Node a loader such as
 [tsx](https://github.com/privatenumber/tsx): `npx repset --node-import tsx`. Bun needs none.
 
+## Compare functions in a contest
+
+To find which of several functions is faster, pass `fn` a record instead of a function. Each entry
+is a contender, and its case id is the benchmark's name and its key: `concat/loop` and
+`concat/join`. The contenders share `setup`, `teardown` and `setupPerCall`, so they time the same
+work on the same state.
+
+<!-- docs CODE
+  src="./docs/snippets/concat.bench.ts"
+  header="// benchmarks/concat.bench.ts"
+-->
+
+```ts
+// benchmarks/concat.bench.ts
+import { bench } from "repset";
+
+/** `count` short words, the same in every process, as each process runs `setup` on its own. */
+function words(count: number): string[] {
+  return Array.from({ length: count }, (_, index) => `word${String(index % 100)}`);
+}
+
+bench("concat", {
+  setup: () => words(1000),
+  fn: {
+    loop: (list) => {
+      let text = "";
+      for (const word of list) text += word;
+      return text;
+    },
+    join: (list) => list.join(""),
+  },
+});
+```
+
+<!-- /docs -->
+
+One process per contender cannot order them: two processes of the same code can read several percent
+apart. So repset runs a contest in rounds. Each round starts one fresh process per contender, in an
+order drawn at random from a seed the report records. Then repset tests every pair of contenders
+over the rounds, with an exact signed-rank test and Holm's correction across the contest's pairs:
+
+```text
+node 26.13.1
+
+concat · 7 rounds
+──────────┬─────────┬───────────────────┬─────
+contender │  median │ ratio             │ rank
+──────────┼─────────┼───────────────────┼─────
+loop      │ 2.73 µs │ 1.00×             │    1
+join      │ 8.46 µs │ 3.10× (3.09–3.11) │    2
+
+1 contest judged over 7 rounds. A shared rank means the rounds did not tell those contenders
+apart, and a lower rank alone is not a verdict. A verdict made at a later Holm step can show an
+interval that touches 1.
+```
+
+- **Ratio** is each contender's time over the first row's, with its 95 % interval in parentheses.
+  With more than two contenders the level rises to cover every pair, so each interval widens.
+- **Rank** is 1 plus the number of contenders proven faster. Two contenders share a rank when the
+  rounds did not tell them apart. A pair is also tied when its gap is within 1.25 times the timer's
+  resolution per call.
+- **Rounds** default to the fewest at which one round may disagree and the pair still be called: 7
+  for two contenders, 8 for three, 12 for eight. When a contest ends with a tie, the footer suggests
+  twice as many: `npx repset --rounds 14`. Each round costs one process per contender, as long as
+  one plain case takes. Judging is exact at every count, and its cost grows with the cube of the
+  rounds: 38 ms per pair at 200 rounds, about 2 seconds at 800.
+
+Each process runs `setup` on its own, so `setup` must build the same state every time: random data
+needs a fixed seed. Only a contest is judged. Two plain benchmarks under one prefix, such as
+`sort/copy` and `sort/in-place`, each run once with no verdict between them.
+
 ## Configure a project
 
 repset reads `repset.config.ts` (or `.mts`, `.js`, `.mjs`) from the directory it starts in, or the
@@ -179,8 +251,9 @@ export default defineConfig({
 });
 ```
 
-The options are `include`, `runtimes`, `minTime`, `minSamples`, `timeout` and `nodeImport`. A flag
-on the command line overrides the file: `npx repset --runtime node` runs Node alone.
+The options are `include`, `runtimes`, `minTime`, `minSamples`, `rounds`, `timeout` and
+`nodeImport`. A flag on the command line overrides the file: `npx repset --runtime node` runs Node
+alone.
 
 ## Learn more
 

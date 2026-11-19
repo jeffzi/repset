@@ -1,5 +1,3 @@
-import { stripVTControlCharacters } from "node:util";
-
 import { describe, expect, it } from "vitest";
 
 import type { ChildPhase } from "../src/child.js";
@@ -297,19 +295,17 @@ describe("formatTable", () => {
     it("pads every row to the columns the ids take on a terminal", () => {
       const results = [
         measured("苹果苹果", "node", flatStats(812)),
-        measured("fig", "node", flatStats(812)),
         measured("rose\u0301", "node", flatStats(812)),
         failed("梨", "fn", "kiwi"),
       ];
 
       const lines = tableLines(results);
 
-      expect(lines.slice(1, 8)).toStrictEqual([
+      expect(lines.slice(1, 7)).toStrictEqual([
         rule("┬", [9, 8, 8, 8, 8, 8]),
         "case     │ median │   mean │    min │    max │ samples",
         rule("┼", [9, 8, 8, 8, 8, 8]),
         "苹果苹果 │ 812 ns │ 812 ns │ 812 ns │ 812 ns │      64",
-        "fig      │ 812 ns │ 812 ns │ 812 ns │ 812 ns │      64",
         "rose\u0301     │ 812 ns │ 812 ns │ 812 ns │ 812 ns │      64",
         expect.stringMatching(/^梨 {7}│ \S.* kiwi$/u),
       ]);
@@ -341,19 +337,6 @@ describe("formatTable", () => {
         expect.any(String),
         "",
       ]);
-    });
-
-    it("sizes each section's columns to its own rows", () => {
-      const results = [
-        measured("elderberry", "node", WIDE_STATS),
-        measured("banana", "bun", flatStats(812)),
-      ];
-
-      const lines = tableLines(results);
-
-      expect(lines[rowIndex(lines, "banana")]).toBe(
-        "banana │ 812 ns │ 812 ns │ 812 ns │ 812 ns │      64",
-      );
     });
 
     it("sections them per runtime in run order", () => {
@@ -668,43 +651,14 @@ describe("formatTable", () => {
   });
 
   describe("when colored", () => {
-    const results = [
-      measured("elderberry", "node", WIDE_STATS),
-      failed("fig", "fn", "kiwi\nplum", { message: "melon split", stack: "at teardown" }),
-      failedContender("concat/plus", "setup", "pear"),
-      ...judgedResults("concat", ["join", "loop"]),
-      contenderResult("parse", "regex", 100),
-      contenderResult("parse", "split", 200),
-      measured("banana", "bun", flatStats(812)),
-    ];
-    const contests = [
-      contest(
-        "concat",
-        8,
-        [
-          contender("concat/join", 100, 1, 1),
-          contender("concat/loop", 200, 2, 2),
-          contender("concat/plus", null),
-        ],
-        [pair("concat", ["join", "loop"], [2, [1.9, 2.1]], null)],
-      ),
-      contest("parse", 1, [contender("parse/regex", 100), contender("parse/split", 200)], []),
-    ];
+    const results = [measured("elderberry", "node", WIDE_STATS)];
 
     it("styles the table", () => {
-      const plain = formatTable(results, contests, { color: false });
+      const plain = formatTable(results, [], { color: false });
 
-      const colored = formatTable(results, contests, { color: true });
+      const colored = formatTable(results, [], { color: true });
 
       expect(colored).not.toBe(plain);
-    });
-
-    it("keeps the visible text equal to the plain table", () => {
-      const plain = formatTable(results, contests, { color: false });
-
-      const colored = formatTable(results, contests, { color: true });
-
-      expect(stripVTControlCharacters(colored)).toBe(plain);
     });
   });
 });

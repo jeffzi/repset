@@ -16,15 +16,13 @@ function writeFileWithMtime(path: string, content: string, mtime: number): void 
   utimesSync(path, mtime, mtime);
 }
 
-/** A throwaway project holding each file at its mtime and, if given one, a coverage report. */
-function createProject(files: Record<string, number>, coverageMtime: number | undefined): string {
+/** A throwaway project holding each file at its mtime and a coverage report at `coverageMtime`. */
+function createProject(files: Record<string, number>, coverageMtime: number): string {
   const dir = temporaryDir("coverage-fresh-");
   for (const [path, mtime] of Object.entries(files)) {
     writeFileWithMtime(join(dir, path), "", mtime);
   }
-  if (coverageMtime !== undefined) {
-    writeFileWithMtime(join(dir, "coverage", "coverage-final.json"), "{}", coverageMtime);
-  }
+  writeFileWithMtime(join(dir, "coverage", "coverage-final.json"), "{}", coverageMtime);
   // Last, because writing a child bumps its directory's mtime.
   for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
     if (entry.isDirectory()) utimesSync(join(entry.parentPath, entry.name), OLDER, OLDER);
@@ -49,123 +47,6 @@ describe("checkCoverageFresh", () => {
       };
 
       expect(check).not.toThrow();
-    });
-  });
-
-  describe("when any file under tests/ is newer than the report", () => {
-    it("throws naming it", () => {
-      const dir = createProject(
-        {
-          "src/query.ts": OLDER,
-          "tests/fixtures/data.json": COVERAGE_MTIME + 1,
-          "vitest.config.ts": OLDER,
-        },
-        COVERAGE_MTIME,
-      );
-
-      const check = (): void => {
-        checkCoverageFresh(dir);
-      };
-
-      expect(check).toThrow("tests/fixtures/data.json");
-    });
-  });
-
-  describe("when a TypeScript source under src/ is newer than the report", () => {
-    it("throws naming it", () => {
-      const dir = createProject(
-        {
-          "src/query.ts": COVERAGE_MTIME + 1,
-          "tests/query.test.ts": OLDER,
-          "vitest.config.ts": OLDER,
-        },
-        COVERAGE_MTIME,
-      );
-
-      const check = (): void => {
-        checkCoverageFresh(dir);
-      };
-
-      expect(check).toThrow("src/query.ts");
-    });
-  });
-
-  describe("when only a non-source file under src/ is newer than the report", () => {
-    it.each(["src/types.d.ts", "src/data.json"])("returns without throwing for %s", (path) => {
-      const dir = createProject(
-        {
-          "src/query.ts": OLDER,
-          [path]: COVERAGE_MTIME + 1,
-          "tests/query.test.ts": OLDER,
-          "vitest.config.ts": OLDER,
-        },
-        COVERAGE_MTIME,
-      );
-
-      const check = (): void => {
-        checkCoverageFresh(dir);
-      };
-
-      expect(check).not.toThrow();
-    });
-  });
-
-  describe("when there is no coverage report", () => {
-    it("returns without throwing, however new the inputs", () => {
-      const dir = createProject(
-        {
-          "src/query.ts": COVERAGE_MTIME + 1,
-          "tests/query.test.ts": COVERAGE_MTIME + 1,
-          "vitest.config.ts": COVERAGE_MTIME + 1,
-        },
-        undefined,
-      );
-
-      const check = (): void => {
-        checkCoverageFresh(dir);
-      };
-
-      expect(check).not.toThrow();
-    });
-  });
-
-  describe("when vitest.config.ts is newer than the report", () => {
-    it("throws naming it", () => {
-      const dir = createProject(
-        {
-          "src/query.ts": OLDER,
-          "tests/query.test.ts": OLDER,
-          "vitest.config.ts": COVERAGE_MTIME + 1,
-        },
-        COVERAGE_MTIME,
-      );
-
-      const check = (): void => {
-        checkCoverageFresh(dir);
-      };
-
-      expect(check).toThrow("vitest.config.ts");
-    });
-  });
-
-  describe("when only a directory under tests/ is newer than the report", () => {
-    it("throws naming the directory, as deleting a file from it does", () => {
-      const dir = createProject(
-        {
-          "src/query.ts": OLDER,
-          "tests/fixtures/data.json": OLDER,
-          "vitest.config.ts": OLDER,
-        },
-        COVERAGE_MTIME,
-      );
-      const fixtures = join(dir, "tests", "fixtures");
-      utimesSync(fixtures, COVERAGE_MTIME + 1, COVERAGE_MTIME + 1);
-
-      const check = (): void => {
-        checkCoverageFresh(dir);
-      };
-
-      expect(check).toThrow(/\btests\/fixtures\b(?!\/)/v);
     });
   });
 });

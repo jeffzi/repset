@@ -4,6 +4,7 @@ import {
   describe as describeValue,
   errorStack,
   isRecord,
+  property,
   thrownMessage,
   timerResolutionMs,
   valueAt,
@@ -92,6 +93,18 @@ describe("the describe function", () => {
 
       expect(described).not.toContain(String(value));
     });
+  });
+});
+
+describe("property", () => {
+  it.each([
+    { what: "an object", value: { version: "1.2.3" }, expected: "1.2.3" },
+    { what: "null", value: null, expected: undefined },
+    { what: "a string", value: "1.2.3", expected: undefined },
+  ])("reads the key of $what as $expected", ({ value, expected }) => {
+    const read = property(value, "version");
+
+    expect(read).toBe(expected);
   });
 });
 

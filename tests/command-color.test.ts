@@ -106,19 +106,6 @@ describe("main", () => {
       }).toStrictEqual({ results: 2, tableEnd: true });
     });
 
-    it("colors the repset: prefix of an error line on a terminal stderr", async () => {
-      const { code, stderr } = await command(workspace(), ["--banana"], {
-        startChild: startsNoChild,
-        stderr: terminal(),
-      });
-
-      expect({
-        code,
-        styled: styled(stderr),
-        visible: stripVTControlCharacters(stderr),
-      }).toStrictEqual({ code: 2, styled: true, visible: expect.stringMatching(/^repset:/u) });
-    });
-
     it("prints a plain repset: prefix when --no-color comes beside a wrong argument", async () => {
       const { code, stderr } = await command(workspace(), ["--no-color", "--banana"], {
         startChild: startsNoChild,

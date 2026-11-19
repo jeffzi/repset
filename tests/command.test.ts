@@ -300,23 +300,22 @@ describe("main", () => {
       const dir = workspace();
       const report = join(dir, "report.json");
       const written: number[][] = [];
-      const readsReport = listingStarter([contender("join"), contender("loop"), APPLE], () => {
-        const { results, contests } = reportAt(report);
-        written.push([results.length, contests.length]);
-        return measuredOutcome(4656);
-      });
+      const readsReport = listingStarter(
+        [contender("join"), contender("loop"), APPLE],
+        (request) => {
+          if (request.id === APPLE.id) {
+            const { results, contests } = reportAt(report);
+            written.push([results.length, contests.length]);
+          }
+          return measuredOutcome(4656);
+        },
+      );
 
       await command(dir, ["sort.bench.ts", "--rounds", "2", "--output", "report.json"], {
         startChild: readsReport,
       });
 
-      expect(written).toStrictEqual([
-        [0, 0],
-        [0, 0],
-        [0, 0],
-        [0, 0],
-        [2, 1],
-      ]);
+      expect(written).toStrictEqual([[2, 1]]);
     });
 
     it("exits 2 with no case run, leaving no temporary file, when the first write fails", async () => {

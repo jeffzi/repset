@@ -140,18 +140,12 @@ describe("embedCode", () => {
       });
     }
 
-    it("rejects naming the later file that failed", async () => {
-      const dir = laterFails();
-
-      const run = embedCode([join(dir, "a.md"), join(dir, "b.md")]);
-
-      await expect(run).rejects.toThrow(join(dir, "b.md"));
-    });
-
     it("leaves the earlier file unchanged", async () => {
       const dir = laterFails();
 
-      await expect(embedCode([join(dir, "a.md"), join(dir, "b.md")])).rejects.toBeInstanceOf(Error);
+      await expect(embedCode([join(dir, "a.md"), join(dir, "b.md")])).rejects.toThrow(
+        join(dir, "b.md"),
+      );
 
       expect(read(dir, "a.md")).toBe(VALID);
     });

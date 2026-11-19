@@ -223,7 +223,7 @@ function onlyResult(
  *   or not a report holding exactly one result, or the process's count does not match the
  *   scenario's.
  */
-export function repsetReading(scenario: Scenario, end: RunEnd, reportPath: string): RepsetReading {
+function repsetReading(scenario: Scenario, end: RunEnd, reportPath: string): RepsetReading {
   const name = scenarioName(scenario);
   if (end.status !== 0) {
     // repset exits 1 when a case fails, and its report then says why.
@@ -259,7 +259,7 @@ export function repsetReading(scenario: Scenario, end: RunEnd, reportPath: strin
  * @throws Error naming the scenario when the child printed something that is not JSON or holds no
  *   finite numeric median.
  */
-export function checkedBaselineMedian(scenario: Scenario, end: RunEnd, stdout: string): number {
+function checkedBaselineMedian(scenario: Scenario, end: RunEnd, stdout: string): number {
   const name = scenarioName(scenario);
   if (end.status !== 0) throw new Error(howRunEnded(`${name}: the baseline child`, end));
   let printed: unknown;

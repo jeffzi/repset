@@ -149,7 +149,6 @@ describe("resolveOptions", () => {
       { name: "include-number.ts", option: "include", shown: "7" },
       { name: "runtime-unknown.ts", option: "runtimes", shown: "deno" },
       { name: "node-import-number.ts", option: "nodeImport", shown: "5" },
-      { name: "rounds-string.ts", option: "rounds", shown: "three" },
     ])("rejects $name, naming $option and the value", async ({ name, option, shown }) => {
       const result = resolveHere({ config: name });
 

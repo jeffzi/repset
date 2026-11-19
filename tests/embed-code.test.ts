@@ -117,7 +117,7 @@ describe("embedCode", () => {
   });
 
   describe("when a CODE block's src does not start with ./ or ../", () => {
-    it("rejects naming the markdown file and the src", async () => {
+    it("rejects, naming where the src is written", async () => {
       const src = "https://example.invalid/x.ts";
       const dir = createProject({ "b.md": `${codeBlock(src, "stale")}\n` });
 

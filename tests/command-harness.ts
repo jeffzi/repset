@@ -75,10 +75,7 @@ function writeError(code: string): NodeJS.ErrnoException {
   return Object.assign(new Error(`write ${code}`), { code, syscall: "write" });
 }
 
-/**
- * A stream stand-in whose writes fail with `failure` until told otherwise; when `held`, a failed
- * write's `error` event waits for `emitHeld`.
- */
+/** A stream stand-in whose writes fail with `failure`, holding each `error` event when `held`. */
 function standIn(failure: Error | undefined, held = false): Captured {
   let error = failure;
   let reported = false;
@@ -120,10 +117,7 @@ export function closed(code: string): Captured {
   return standIn(writeError(code));
 }
 
-/**
- * A stream stand-in whose reader went away before the run, whose failed writes report `code` to
- * their callbacks and hold their `error` event until `emitHeld`.
- */
+/** A stream stand-in like {@link closed} whose failed writes hold `error` until `emitHeld`. */
 export function closedHeld(code: string): Captured {
   return standIn(writeError(code), true);
 }

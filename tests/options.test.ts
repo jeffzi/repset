@@ -110,6 +110,12 @@ describe("resolveOptions", () => {
 
       await expectConfigError(result, ["top-level-throw.ts", "banana"]);
     });
+
+    it("rejects a default export whose getter throws, naming the file and carrying its message", async () => {
+      const result = resolveHere({ config: "getter-throws.ts" });
+
+      await expectConfigError(result, ["getter-throws.ts", "pear"]);
+    });
   });
 
   describe("when the default export is not a plain object", () => {
@@ -123,23 +129,17 @@ describe("resolveOptions", () => {
     );
   });
 
-  describe("when checking keys", () => {
-    it("rejects a key that is not an option, naming it", async () => {
+  describe("when the config file holds a key that is not an option", () => {
+    it("rejects the key, naming it", async () => {
       const result = resolveHere({ config: "unknown-key.ts" });
 
       await expectConfigError(result, ["banana"]);
     });
 
-    it("treats a key that is not an option and holds undefined as absent", async () => {
+    it("treats the key as absent when it holds undefined", async () => {
       const resolved = await resolveHere({ config: "unknown-undefined.ts" });
 
       expect(resolved).toStrictEqual(DEFAULTS);
-    });
-
-    it("rejects a default export whose getter throws, naming the file and carrying its message", async () => {
-      const result = resolveHere({ config: "getter-throws.ts" });
-
-      await expectConfigError(result, ["getter-throws.ts", "pear"]);
     });
   });
 
@@ -193,7 +193,7 @@ describe("resolveOptions", () => {
     });
   });
 
-  describe("when merging", () => {
+  describe("when an option is given in more than one place", () => {
     it("takes every option the config file gives over the default", async () => {
       const resolved = await resolveHere({ config: "all-options.ts" });
 
@@ -237,7 +237,7 @@ describe("resolveOptions", () => {
     });
   });
 
-  describe("when resolving bases", () => {
+  describe("when a path option is relative", () => {
     it("bases include on the config file's directory", async () => {
       const resolved = await resolveHere({ config: "nested/include.ts" });
 

@@ -309,7 +309,7 @@ describe("sampleSharedState", () => {
           expected: 15,
         },
       ])(
-        "stops at the store's size, `time` in samples of $rule, rounded up, plus `samples`",
+        "stops at the store's size, `minTime` in samples of $rule, rounded up, plus `minSamples`",
         ({ resolutionMs, warmupMs, expected }) => {
           const fake = harness((sample, timed) => (timed ? 0.75 : warmupMs(sample)));
 
@@ -322,7 +322,7 @@ describe("sampleSharedState", () => {
   });
 
   describe("when calibrating the count", () => {
-    it("sizes the store to `time` in samples of 200 times the resolution, rounded up, plus `samples`", () => {
+    it("sizes the store to `minTime` in samples of 200 times the resolution, rounded up, plus `minSamples`", () => {
       const fake = harness(() => 100);
 
       const result = run(fake, FINE_RESOLUTION, { minTime: 100.1, minSamples: 10 });
@@ -330,7 +330,7 @@ describe("sampleSharedState", () => {
       expect(result.spans).toHaveLength(523);
     });
 
-    it("keeps a run of exactly `samples` samples at `time` 0 whose median spans 200 times the resolution", () => {
+    it("keeps a run of exactly `minSamples` samples at `minTime` 0 whose median spans 200 times the resolution", () => {
       const fake = harness(() => coarse(40));
 
       const result = run(fake, COARSE_RESOLUTION, { minTime: 0, minSamples: 10 });
@@ -745,7 +745,7 @@ describe("samplePerCall", () => {
         expect(fake.collectsAt).toStrictEqual([1000]);
       });
 
-      it("stops timing a calibrated count at the store's size, `time` in samples of 200 times the resolution, rounded up, plus `samples`", () => {
+      it("stops timing a calibrated count at the store's size, `minTime` in samples of 200 times the resolution, rounded up, plus `minSamples`", () => {
         const fake = perCallHarness({ bodyMs: (_sample, timed) => (timed ? 0.125 : 1) });
 
         const result = runPerCall(fake, {
@@ -798,10 +798,11 @@ describe("samplePerCall", () => {
         const fake = perCallHarness({ bodyMs: () => 200, ...throws });
         const inFlight: InFlight<PerCallWorld> = { held: false, state: undefined };
 
-        expect(() =>
+        const error = errorOf(() =>
           runPerCall(fake, { resolutionMs: FINE_RESOLUTION, callsPerSample: 3, inFlight }),
-        ).toThrow(fake.failure);
+        );
 
+        expect(error).toBe(fake.failure);
         expect(fake.sampleCalls).toHaveLength(samplesBefore);
         expect(inFlight.held).toBe(liveCount === 1);
         expect(fake.live).toStrictEqual(new Set(inFlight.held ? [inFlight.state] : []));

@@ -566,94 +566,104 @@ describe("formatTable", () => {
     });
   });
 
-  describe("the footer when a contest ran", () => {
-    it("counts no contest and no rounds when none was judged", () => {
-      const results = [
-        contenderResult("concat", "join", 806),
-        contenderResult("concat", "loop", 1880),
-      ];
-      const contests = [
-        contest("concat", 1, [contender("concat/join", 806), contender("concat/loop", 1880)], []),
-      ];
+  describe("when a contest ran", () => {
+    describe("when no contest was judged", () => {
+      it("counts no contest and no rounds in the footer", () => {
+        const results = [
+          contenderResult("concat", "join", 806),
+          contenderResult("concat", "loop", 1880),
+        ];
+        const contests = [
+          contest("concat", 1, [contender("concat/join", 806), contender("concat/loop", 1880)], []),
+        ];
 
-      const text = footer(results, contests);
+        const text = footer(results, contests);
 
-      expect(text).not.toMatch(/\d/u);
+        expect(text).not.toMatch(/\d/u);
+      });
     });
 
-    it("counts only the judged contests", () => {
-      const results = [
-        ...judgedResults("concat", ["join", "loop"]),
-        ...judgedResults("parse", ["regex", "split"]),
-        contenderResult("sort", "quick", 100),
-        contenderResult("sort", "merge", 200),
-      ];
-      const contests = [
-        judgedContest("concat", 9, ["join", "loop"]),
-        judgedContest("parse", 9, ["regex", "split"]),
-        contest("sort", 9, [contender("sort/quick", 100), contender("sort/merge", 200)], []),
-      ];
+    describe("when another contest was not judged", () => {
+      it("counts only the judged contests in the footer", () => {
+        const results = [
+          ...judgedResults("concat", ["join", "loop"]),
+          ...judgedResults("parse", ["regex", "split"]),
+          contenderResult("sort", "quick", 100),
+          contenderResult("sort", "merge", 200),
+        ];
+        const contests = [
+          judgedContest("concat", 9, ["join", "loop"]),
+          judgedContest("parse", 9, ["regex", "split"]),
+          contest("sort", 9, [contender("sort/quick", 100), contender("sort/merge", 200)], []),
+        ];
 
-      const text = footer(results, contests);
+        const text = footer(results, contests);
 
-      expect(text).toMatch(/\b2\b/u);
-      expect(text).not.toMatch(/\b3\b/u);
-      expect(text).toMatch(/\b9\b/u);
+        expect(text).toMatch(/\b2\b/u);
+        expect(text).not.toMatch(/\b3\b/u);
+        expect(text).toMatch(/\b9\b/u);
+      });
     });
 
-    it("states each round count when contests ran different counts", () => {
-      const results = [
-        ...judgedResults("concat", ["join", "loop"]),
-        ...judgedResults("parse", ["regex", "split"]),
-      ];
-      const contests = [
-        judgedContest("concat", 7, ["join", "loop"]),
-        judgedContest("parse", 8, ["regex", "split"]),
-      ];
+    describe("when contests ran different round counts", () => {
+      it("states each round count in the footer", () => {
+        const results = [
+          ...judgedResults("concat", ["join", "loop"]),
+          ...judgedResults("parse", ["regex", "split"]),
+        ];
+        const contests = [
+          judgedContest("concat", 7, ["join", "loop"]),
+          judgedContest("parse", 8, ["regex", "split"]),
+        ];
 
-      const text = footer(results, contests);
+        const text = footer(results, contests);
 
-      expect(text).toMatch(/\b7\b/u);
-      expect(text).toMatch(/\b8\b/u);
+        expect(text).toMatch(/\b7\b/u);
+        expect(text).toMatch(/\b8\b/u);
+      });
     });
 
-    it("recommends twice a tied contest's rounds", () => {
-      const results = [
-        ...judgedResults("concat", ["join", "loop"]),
-        ...judgedResults("parse", ["regex", "split"]),
-      ];
-      const contests = [
-        judgedContest("concat", 7, ["join", "loop"]),
-        contest(
-          "parse",
-          9,
-          [contender("parse/regex", 100, 1, 1), contender("parse/split", 101, 1.01, 1)],
-          [pair("parse", ["regex", "split"], [1.01, [0.98, 1.03]], null)],
-        ),
-      ];
+    describe("when a contest was tied", () => {
+      it("recommends twice its rounds in the footer", () => {
+        const results = [
+          ...judgedResults("concat", ["join", "loop"]),
+          ...judgedResults("parse", ["regex", "split"]),
+        ];
+        const contests = [
+          judgedContest("concat", 7, ["join", "loop"]),
+          contest(
+            "parse",
+            9,
+            [contender("parse/regex", 100, 1, 1), contender("parse/split", 101, 1.01, 1)],
+            [pair("parse", ["regex", "split"], [1.01, [0.98, 1.03]], null)],
+          ),
+        ];
 
-      const text = footer(results, contests);
+        const text = footer(results, contests);
 
-      expect(text).toMatch(/\b18\b/u);
-      expect(text).not.toMatch(/\b14\b/u);
+        expect(text).toMatch(/\b18\b/u);
+        expect(text).not.toMatch(/\b14\b/u);
+      });
     });
 
-    it("adds the plain-case sentence only when a plain case ran", () => {
-      const contestResults = judgedResults("concat", ["join", "loop"]);
-      const contests = [judgedContest("concat", 7, ["join", "loop"])];
-      const contestFooter = footer(contestResults, contests);
+    describe("when a plain case ran too", () => {
+      it("adds the plain-case sentence to the footer", () => {
+        const contestResults = judgedResults("concat", ["join", "loop"]);
+        const contests = [judgedContest("concat", 7, ["join", "loop"])];
+        const contestFooter = footer(contestResults, contests);
 
-      const withPlain = footer(
-        [measured("apple", "node", flatStats(812)), ...contestResults],
-        contests,
-      );
+        const withPlain = footer(
+          [measured("apple", "node", flatStats(812)), ...contestResults],
+          contests,
+        );
 
-      const added = withPlain.slice(contestFooter.length).trim();
-      expect({
-        extendsContestFooter: withPlain.startsWith(contestFooter),
-        addsText: added.length > 0,
-        contestFooterHasIt: contestFooter.includes(added),
-      }).toStrictEqual({ extendsContestFooter: true, addsText: true, contestFooterHasIt: false });
+        const added = withPlain.slice(contestFooter.length).trim();
+        expect({
+          extendsContestFooter: withPlain.startsWith(contestFooter),
+          addsText: added.length > 0,
+          contestFooterHasIt: contestFooter.includes(added),
+        }).toStrictEqual({ extendsContestFooter: true, addsText: true, contestFooterHasIt: false });
+      });
     });
   });
 

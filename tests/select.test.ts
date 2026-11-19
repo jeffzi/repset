@@ -173,10 +173,8 @@ describe("selectCases", () => {
 
       await expectConfigError(result, [file]);
     });
-  });
 
-  describe("the order of files", () => {
-    it("follows the order the arguments are written", async () => {
+    it("lists the files in the order the arguments are written", async () => {
       const files = ["zeta.bench.ts", "nested/**/*.bench.ts", "alpha.bench.mts"];
 
       const selection = await select({ files });
@@ -203,7 +201,7 @@ describe("selectCases", () => {
     });
   });
 
-  describe("the runtimes", () => {
+  describe("when several runtimes are selected", () => {
     it("lists each file on the first selected runtime", async () => {
       const byRuntime: StartChild = async (runtime) =>
         listed([{ id: runtime.runtime, setupPerCall: false }]);
@@ -295,7 +293,7 @@ describe("selectCases", () => {
     });
   });
 
-  describe("the selection", () => {
+  describe("when files are given relative to cwd on two runtimes", () => {
     it("holds the runtimes with their versions and each case's id, files and setupPerCall", async () => {
       const startChild: StartChild = async (_runtime, request) =>
         listed([

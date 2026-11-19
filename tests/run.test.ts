@@ -73,8 +73,8 @@ afterEach(() => {
 });
 
 describe("run", () => {
-  describe("the report", () => {
-    it("holds the inputs, the host and each measured case's result", async () => {
+  describe("when the run completes", () => {
+    it("returns a report holding the inputs, the host and each measured case's result", async () => {
       freezeClock();
 
       const report = await runHere({
@@ -180,8 +180,8 @@ describe("run", () => {
     });
   });
 
-  describe("the measuring children", () => {
-    it("starts one per case per runtime, runtime by runtime, with the merged minTime and minSamples", async () => {
+  describe("when several cases are selected", () => {
+    it("starts one measuring child per case per runtime, runtime by runtime, with the merged minTime and minSamples", async () => {
       const echo = starter((request, runtime) => {
         const asked = [runtime.runtime, basename(request.file), request.id];
         if (request.mode === "measure")
@@ -210,7 +210,7 @@ describe("run", () => {
     it.each([
       { why: "the count it is given", callsPerSample: 5, asked: ["5", "5"] },
       { why: "no count when it is given none", callsPerSample: undefined, asked: ["none", "none"] },
-    ])("asks each one for $why", async ({ callsPerSample, asked }) => {
+    ])("asks each measuring child for $why", async ({ callsPerSample, asked }) => {
       const echoCount = starter((request) =>
         failedOutcome(
           "fn",

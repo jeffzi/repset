@@ -149,7 +149,7 @@ const THREE_PROVEN_DIFFERENCES = THREE_PROVEN_PAIRS.map(([a, b]) =>
 );
 
 describe("run", () => {
-  describe("a contest's rounds", () => {
+  describe("when a contest runs", () => {
     describe("onPlanned", () => {
       it("counts every round of each contest among the measuring children", async () => {
         const planned: number[] = [];
@@ -266,7 +266,7 @@ describe("run", () => {
       },
     );
 
-    describe("the round orders", () => {
+    describe("when the round orders are drawn", () => {
       it("records the seed drawn when the run starts", async () => {
         const { report } = await runCases([JOIN, LOOP], { drawSeed: () => 1234 });
 
@@ -279,7 +279,7 @@ describe("run", () => {
         expect(report.options.seed).toBeNull();
       });
 
-      it("repeats for the same seed", async () => {
+      it("repeats the orders for the same seed", async () => {
         const { started: first } = await runCases([JOIN, LOOP, PLUS]);
 
         const { started: second } = await runCases([JOIN, LOOP, PLUS]);
@@ -287,7 +287,7 @@ describe("run", () => {
         expect(second).toStrictEqual(first);
       });
 
-      it("change with the seed", async () => {
+      it("changes the orders with the seed", async () => {
         const { started: first } = await runCases([JOIN, LOOP, PLUS]);
 
         const { started: second } = await runCases([JOIN, LOOP, PLUS], {
@@ -297,7 +297,7 @@ describe("run", () => {
         expect(second).not.toStrictEqual(first);
       });
 
-      it("are drawn uniformly from the permutations of the contenders", async () => {
+      it("draws the orders uniformly from the permutations of the contenders", async () => {
         const started: string[] = [];
         for (let seed = 1; seed <= 1000; seed += 1) {
           const seeded = await runCases([JOIN, LOOP, PLUS], { rounds: 6, drawSeed: () => seed });
@@ -464,8 +464,8 @@ describe("run", () => {
     });
   });
 
-  describe("a contest's entry", () => {
-    it("holds each contender's median, ratio and rank and the pair's verdict, the faster first", async () => {
+  describe("when a contest is judged", () => {
+    it("reports each contender's median, ratio and rank and the pair's verdict, the faster first", async () => {
       const join = [800, 810, 812, 815, 820, 805, 812];
       const loop = [1850, 1880, 1904.5, 1920, 1890, 1910, 1904.5];
       const differences = logRatios(join, loop);

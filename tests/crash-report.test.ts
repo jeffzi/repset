@@ -47,7 +47,6 @@ describe("crashReport", () => {
       const text = crashReport(error, platform);
 
       const body = issueBody(text) ?? "";
-
       expect(
         ["1.2.3", OS, RUNTIME, "kiwi & banana? #1 100%"].map((word) => body.includes(word)),
       ).toStrictEqual([true, true, true, true]);

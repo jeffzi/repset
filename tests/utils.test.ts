@@ -145,15 +145,19 @@ describe("thrownMessage", () => {
 });
 
 describe("valueAt", () => {
-  it("returns the value at an index that holds one", () => {
-    const value = valueAt([10, 20], 1);
+  describe("when the index holds a value", () => {
+    it("returns that value", () => {
+      const value = valueAt([10, 20], 1);
 
-    expect(value).toBe(20);
+      expect(value).toBe(20);
+    });
   });
 
-  it("throws a RangeError at an index past the values", () => {
-    const read = (): number => valueAt([10, 20], 2);
+  describe("when the index is past the values", () => {
+    it("throws a RangeError", () => {
+      const read = (): number => valueAt([10, 20], 2);
 
-    expect(read).toThrow(RangeError);
+      expect(read).toThrow(RangeError);
+    });
   });
 });

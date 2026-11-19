@@ -16,15 +16,7 @@ function writeFileWithMtime(path: string, content: string, mtime: number): void 
   utimesSync(path, mtime, mtime);
 }
 
-/**
- * Builds a throwaway project, removed when the test ends, with every directory's mtime set to
- * `OLDER` last so writing a child does not bump it.
- *
- * @param files - Each file's relative path, mapped to its mtime in seconds.
- * @param coverageMtime - The coverage report's mtime in seconds, or `undefined` to write no report.
- * @returns The project's root directory.
- * @throws Whatever creating the directory, writing a file or setting an mtime throws.
- */
+/** A throwaway project holding each file at its mtime and, if given one, a coverage report. */
 function createProject(files: Record<string, number>, coverageMtime: number | undefined): string {
   const dir = temporaryDir("coverage-fresh-");
   for (const [path, mtime] of Object.entries(files)) {

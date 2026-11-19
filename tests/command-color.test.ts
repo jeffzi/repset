@@ -6,6 +6,7 @@ import { formatTable } from "../src/table.js";
 import {
   captured,
   command,
+  type CommandIo,
   failsParse,
   measuresAll,
   runToStdout,
@@ -24,59 +25,72 @@ describe("main", () => {
       stubColorTerminalEnv();
     });
 
-    it("prints the colored table on a terminal stdout", async () => {
-      const ended = await runWithReport([], { startChild: failsParse, stdout: terminal() });
+    it.each<{
+      readonly why: string;
+      readonly args: readonly string[];
+      readonly env: readonly [variable: string, value: string | undefined];
+      readonly io: () => CommandIo;
+      readonly table: "colored" | "plain";
+    }>([
+      {
+        why: "a terminal stdout",
+        args: [],
+        env: ["NO_COLOR", undefined],
+        io: () => ({ stdout: terminal() }),
+        table: "colored",
+      },
+      {
+        why: "a terminal stdout when NO_COLOR is empty",
+        args: [],
+        env: ["NO_COLOR", ""],
+        io: () => ({ stdout: terminal() }),
+        table: "colored",
+      },
+      {
+        why: "a terminal stdout under --no-color",
+        args: ["--no-color"],
+        env: ["NO_COLOR", undefined],
+        io: () => ({ stdout: terminal() }),
+        table: "plain",
+      },
+      {
+        why: "a terminal stdout when NO_COLOR is set",
+        args: [],
+        env: ["NO_COLOR", "1"],
+        io: () => ({ stdout: terminal() }),
+        table: "plain",
+      },
+      {
+        why: "a terminal stdout when TERM is dumb",
+        args: [],
+        env: ["TERM", "dumb"],
+        io: () => ({ stdout: terminal() }),
+        table: "plain",
+      },
+      {
+        why: "a terminal stdout that reports one bit of color",
+        args: [],
+        env: ["NO_COLOR", undefined],
+        io: () => ({ stdout: Object.assign(terminal(), { getColorDepth: () => 1 }) }),
+        table: "plain",
+      },
+      {
+        why: "a stdout that is not a terminal while stderr is one",
+        args: [],
+        env: ["NO_COLOR", undefined],
+        io: () => ({ stdout: captured(), stderr: terminal() }),
+        table: "plain",
+      },
+    ])("prints the $table table on $why", async ({ args, env, io, table }) => {
+      vi.stubEnv(...env);
+      const color = table === "colored";
+
+      const ended = await runWithReport(args, { startChild: failsParse, ...io() });
 
       expect({ styled: styled(ended.stdout), stdout: ended.stdout }).toStrictEqual({
-        styled: true,
-        stdout: formatTable(ended.report.results, ended.report.contests, { color: true }),
+        styled: color,
+        stdout: formatTable(ended.report.results, ended.report.contests, { color }),
       });
-    });
-
-    it("prints the plain table on a terminal stdout under --no-color", async () => {
-      const ended = await runWithReport(["--no-color"], {
-        startChild: failsParse,
-        stdout: terminal(),
-      });
-
-      expect(ended.stdout).toBe(
-        formatTable(ended.report.results, ended.report.contests, { color: false }),
-      );
-    });
-
-    it.each([
-      { name: "NO_COLOR is set", variable: "NO_COLOR", value: "1" },
-      { name: "TERM is dumb", variable: "TERM", value: "dumb" },
-    ])("prints the plain table on a terminal stdout when $name", async ({ variable, value }) => {
-      vi.stubEnv(variable, value);
-
-      const ended = await runWithReport([], { startChild: failsParse, stdout: terminal() });
-
-      expect(ended.stdout).toBe(
-        formatTable(ended.report.results, ended.report.contests, { color: false }),
-      );
-    });
-
-    it("prints the plain table on a terminal stdout that reports one bit of color", async () => {
-      const stdout = Object.assign(terminal(), { getColorDepth: () => 1 });
-
-      const ended = await runWithReport([], { startChild: failsParse, stdout });
-
-      expect(ended.stdout).toBe(
-        formatTable(ended.report.results, ended.report.contests, { color: false }),
-      );
-    });
-
-    it("prints the plain table on a stdout that is not a terminal while stderr is one", async () => {
-      const ended = await runWithReport([], {
-        startChild: failsParse,
-        stdout: captured(),
-        stderr: terminal(),
-      });
-
-      expect(ended.stdout).toBe(
-        formatTable(ended.report.results, ended.report.contests, { color: false }),
-      );
     });
 
     it("colors the table on a terminal stderr under --output -, whatever stdout is", async () => {
@@ -129,16 +143,6 @@ describe("main", () => {
       });
 
       expect({ code, styled: styled(stderr) }).toStrictEqual({ code: 2, styled: true });
-    });
-
-    it("prints the colored table on a terminal stdout when NO_COLOR is empty", async () => {
-      vi.stubEnv("NO_COLOR", "");
-
-      const ended = await runWithReport([], { startChild: failsParse, stdout: terminal() });
-
-      expect(ended.stdout).toBe(
-        formatTable(ended.report.results, ended.report.contests, { color: true }),
-      );
     });
 
     it("aligns a colored multi-line --once failure as the plain one", async () => {

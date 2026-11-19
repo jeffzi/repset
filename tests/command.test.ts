@@ -49,7 +49,7 @@ describe("main", () => {
     vi.stubEnv("REPSET_CALLS_PER_SAMPLE", undefined);
   });
 
-  describe("when every flag is given", () => {
+  describe("when files and every run option are given", () => {
     it("hands the positional files, --runtime, --filter, --min-time, --min-samples, --timeout, --node-import and --output to the run", async () => {
       const dir = workspace();
 
@@ -94,30 +94,32 @@ describe("main", () => {
 
   describe("when the command line is wrong", () => {
     it.each([
-      { why: "an empty number", args: ["--min-time", ""] },
-      { why: "--list with --once", args: ["--list", "--once"] },
+      { why: "an empty number", args: ["--min-time", ""], named: ["min-time"] },
+      { why: "--list with --once", args: ["--list", "--once"], named: ["list", "once"] },
+      {
+        why: "a --timeout that is not decimal",
+        args: ["--timeout", "1e3"],
+        named: ["timeout", "1e3"],
+      },
+      {
+        why: "an unknown --runtime name",
+        args: ["--runtime", "node,banana"],
+        named: ["node,banana"],
+      },
     ])(
-      "exits 2 on $why with a message on stderr, nothing on stdout, no child",
-      async ({ args }) => {
+      "exits 2 on $why, naming it on stderr, with nothing on stdout and no child",
+      async ({ args, named }) => {
         const dir = workspace();
 
         const { code, stdout, stderr } = await command(dir, args, { startChild: startsNoChild });
 
-        expect({ code, stdout, printed: stderr.length > 0 }).toStrictEqual({
+        expect({ code, stdout, stderr }).toStrictEqual({
           code: 2,
           stdout: "",
-          printed: true,
+          stderr: naming(...named),
         });
       },
     );
-
-    it("exits 2 on a --timeout that is not decimal, naming the flag and the value", async () => {
-      const { code, stderr } = await command(workspace(), ["--timeout", "1e3"], {
-        startChild: startsNoChild,
-      });
-
-      expect({ code, stderr }).toStrictEqual({ code: 2, stderr: naming("timeout", "1e3") });
-    });
 
     it("prints a Commander error behind the repset: prefix alone", async () => {
       const { code, stderr } = await command(workspace(), ["--banana"], {
@@ -129,17 +131,6 @@ describe("main", () => {
         prefix: stderr.startsWith("repset: "),
         commander: stderr.includes("error: "),
       }).toStrictEqual({ code: 2, prefix: true, commander: false });
-    });
-
-    it("exits 2 on an unknown --runtime name, naming the value", async () => {
-      const { code, stderr } = await command(workspace(), ["--runtime", "node,banana"], {
-        startChild: startsNoChild,
-      });
-
-      expect({ code, named: stderr.includes("node,banana") }).toStrictEqual({
-        code: 2,
-        named: true,
-      });
     });
   });
 

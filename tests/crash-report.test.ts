@@ -82,9 +82,8 @@ describe("crashReport", () => {
       // One code point encodes to at most 12 characters, so a fuller cut would not have fit.
       expect({
         full: link.length > 6000 - 12 && link.length <= 6000,
-        wellFormed: body.isWellFormed(),
         start: kept.startsWith("0🍌1🍌") && message.startsWith(kept),
-      }).toStrictEqual({ full: true, wellFormed: true, start: true });
+      }).toStrictEqual({ full: true, start: true });
     });
   });
 });

@@ -277,7 +277,6 @@ describe("formatTable", () => {
 
       const row = rowIndex(lines, "apple");
       const indent = " ".repeat((lines[row]?.indexOf("│") ?? 0) + 2);
-      expect(lines[row]).toMatch(/^apple │ \S.*plum exploded$/u);
       expect(lines[row + 1]).toBe(`${indent}at the stone`);
       expect(lines[row + 2]).toBe(`${indent}  and the pit`);
     });

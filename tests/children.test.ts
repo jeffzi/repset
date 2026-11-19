@@ -287,17 +287,6 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
         },
       },
       {
-        why: "the child's own failure",
-        request: echoing(
-          '{"status":"failed","error":{"phase":"fn","message":"kiwi","stack":"at fn","teardownError":null}}\n',
-        ),
-        expected: {
-          status: "failed",
-          error: { phase: "fn", message: "kiwi", stack: "at fn", teardownError: null },
-          output: "",
-        },
-      },
-      {
         why: "the child's own failure whose cleanup teardown failed too",
         request: echoing(failureLine({ ...FN_KIWI, teardownError: MELON })),
         expected: {

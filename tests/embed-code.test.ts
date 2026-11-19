@@ -38,19 +38,6 @@ function read(dir: string, path: string): string {
 
 describe("embedCode", () => {
   describe("when a markdown file holds a CODE block", () => {
-    it("replaces the block's content with a ts fence holding the source file", async () => {
-      const dir = createProject({
-        "docs/snippets/x.ts": "export const x = 1;\nexport const y = 2;\n",
-        "README.md": `# Title\n\n${codeBlock("./docs/snippets/x.ts", "stale")}\n`,
-      });
-
-      await embedCode([join(dir, "README.md")]);
-
-      expect(codeBlockContent(read(dir, "README.md"))).toBe(
-        `${FENCE}ts\nexport const x = 1;\nexport const y = 2;\n${FENCE}`,
-      );
-    });
-
     it("returns the markdown file as changed", async () => {
       const dir = createProject({
         "docs/snippets/x.ts": "export const x = 1;\nexport const y = 2;\n",

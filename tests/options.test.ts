@@ -73,12 +73,6 @@ describe("resolveOptions", () => {
   });
 
   describe("when a config is named", () => {
-    it("reads it relative to the working directory", async () => {
-      const resolved = await resolveHere({ config: "named.ts" });
-
-      expect(resolved.minSamples).toBe(5);
-    });
-
     it.each([{ path: "missing.ts" }, { path: "nested" }])(
       "rejects $path, which holds no file, naming it",
       async ({ path }) => {

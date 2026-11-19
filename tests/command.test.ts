@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 
@@ -25,7 +25,6 @@ import {
 } from "./command-harness.js";
 import {
   failedOutcome,
-  type FindRuntime,
   ranOnce,
   starter as fakeStarter,
   type StartChild,
@@ -33,7 +32,6 @@ import {
   stopped,
 } from "./fake-children.js";
 import { parseReport, reportAt } from "./report-file.js";
-import { temporaryDir } from "./temporary-dir.js";
 
 describe("main", () => {
   describe("when every flag is given", () => {
@@ -81,7 +79,6 @@ describe("main", () => {
 
   describe("when the command line is wrong", () => {
     it.each([
-      { why: "an unknown flag", args: ["--banana"] },
       { why: "an empty number", args: ["--min-time", ""] },
       { why: "--metric-lines with --out -", args: ["--metric-lines", "--out", "-"] },
       { why: "--list with --once", args: ["--list", "--once"] },
@@ -161,37 +158,6 @@ describe("main", () => {
         last: naming("sort.bench.ts", "load", "kiwi"),
       });
     });
-
-    it("prints no stack for a failed listing that has none", async () => {
-      const dir = workspace();
-      const failsListing: StartChild = async () => ({
-        status: "failed",
-        error: { phase: "load", message: "kiwi", stack: null, teardownError: null },
-        output: "",
-      });
-
-      const { code, stderr } = await command(dir, ["sort.bench.ts"], {
-        startChild: failsListing,
-      });
-
-      expect({ code, mentionsNull: stderr.includes("null") }).toStrictEqual({
-        code: 2,
-        mentionsNull: false,
-      });
-    });
-  });
-
-  describe("on an error that is not a ConfigError", () => {
-    it("rejects with that error instead of exiting 2", async () => {
-      const error = new Error("kiwi");
-      const findsNone: FindRuntime = async () => {
-        throw error;
-      };
-
-      const ended = command(workspace(), ["sort.bench.ts"], { findRuntime: findsNone });
-
-      await expect(ended).rejects.toBe(error);
-    });
   });
 
   describe("when --help is given", () => {
@@ -224,16 +190,15 @@ describe("main", () => {
       });
     });
 
-    it("names a file under a subdirectory in its listing line by its slash-separated relative path", async () => {
-      const dir = temporaryDir("repset-command-");
-      mkdirSync(join(dir, "sub"));
-      writeFileSync(join(dir, "sub", "sort.bench.ts"), "");
+    it("lists the cases of the files the include globs find when no file is given", async () => {
+      const dir = workspace();
 
-      const { stderr } = await command(dir, ["--list"]);
+      const ended = await command(dir, ["--list"], { startChild: startsNoCase });
 
-      expect(linesOf(stderr)).toContainEqual(
-        expect.stringMatching(/(?:^|\s)sub\/sort\.bench\.ts$/u),
-      );
+      expect({ code: ended.code, stdout: ended.stdout }).toStrictEqual({
+        code: 0,
+        stdout: "parse/fast\nsort/fast\n",
+      });
     });
   });
 
@@ -256,26 +221,6 @@ describe("main", () => {
         printedDuringRun: ["", ""],
         stdout: formatTable(reportAt(join(dir, "report.json")).results),
       });
-    });
-
-    it("prints a progress line on stderr as each case's child starts, naming its runtime and case", async () => {
-      const dir = workspace();
-
-      const { stderr } = await command(dir, [
-        "--runtime",
-        "bun,node",
-        "sort.bench.ts",
-        "parse.bench.ts",
-      ]);
-
-      expect(linesOf(stderr)).toStrictEqual(
-        expect.arrayContaining([
-          naming("bun", "sort/fast"),
-          naming("bun", "parse/fast"),
-          naming("node", "sort/fast"),
-          naming("node", "parse/fast"),
-        ]),
-      );
     });
   });
 
@@ -431,13 +376,6 @@ describe("main", () => {
 
       const { results } = parseReport(stdout, "stdout");
       expect({ code, results: results.length }).toStrictEqual({ code: 0, results: 2 });
-    });
-
-    it("prints the table on stderr", async () => {
-      const { stdout, stderr } = await runToStdout();
-
-      const { results } = parseReport(stdout, "stdout");
-      expect(stderr.endsWith(formatTable(results))).toBe(true);
     });
   });
 

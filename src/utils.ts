@@ -64,6 +64,8 @@ export function describe(value: unknown): string {
       return "a function";
     case "string":
       return JSON.stringify(value);
+    case "bigint":
+      return `${value}n`;
     default:
       return String(value);
   }

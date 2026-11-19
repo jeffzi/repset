@@ -29,6 +29,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - Write the final report and exit 129 on `SIGHUP`, as on `SIGINT` and `SIGTERM`.
+- Name a bigint with its `n` suffix in error messages, so it no longer reads as a number.
 
 ## [0.1.0] - 2026-11-17
 

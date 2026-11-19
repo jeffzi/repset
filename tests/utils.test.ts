@@ -66,6 +66,7 @@ describe("the describe function", () => {
   it.each([
     { value: null, text: "null" },
     { value: [1], text: "an array" },
+    { value: 5n, text: "5n" },
   ])("names the value as $text", ({ value, text }) => {
     const described = describeValue(value);
 

@@ -1,16 +1,30 @@
 /**
- * A run: one child per selected case and runtime, measuring the case or running it once; and the
- * exact signed-rank statistics that judge a contest's pairs.
+ * A run: one child per selected case and runtime, measuring the case or running it once, and a
+ * contest's contenders in rounds of one child each.
  */
+import { randomInt } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { cpus as realCpus } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import type { ChildError, ChildRequest } from "./child.js";
-import { type FoundRuntime, type Outcome, startChild as realStartChild } from "./children.js";
+import type { ChildError, ChildRequest, MeasureRequest } from "./child.js";
+import {
+  type FoundRuntime,
+  type Outcome,
+  startChild as realStartChild,
+  type StartOptions,
+} from "./children.js";
+import { quantile } from "./measure/measure.js";
 import type { Runtime } from "./measure/runtime.js";
 import { type OptionsInput, resolveOptions, type ResolvedOptions } from "./options.js";
-import type { FailedProcess, Machine, Report, ReportOptions, Result } from "./report.js";
+import type {
+  Machine,
+  MeasuredProcess,
+  Report,
+  ReportOptions,
+  Result,
+  ResultBase,
+} from "./report.js";
 import {
   type ChildFunctionOverrides,
   type SelectedCase,
@@ -36,7 +50,8 @@ export interface OnceInput extends OptionsInput, ChildFunctionOverrides {
   readonly signal?: AbortSignal | undefined;
   /**
    * Receives the number of children each phase will start, before that phase's first child starts:
-   * the benchmark files to list, then the cases times the runtimes to measure or run once.
+   * the benchmark files to list, then one child per case and runtime to measure or run once, and
+   * one per contender in each round of a contest.
    */
   readonly onPlanned?: ((total: number) => void) | undefined;
 }
@@ -44,6 +59,11 @@ export interface OnceInput extends OptionsInput, ChildFunctionOverrides {
 export interface RunInput extends OnceInput {
   /** Receives each result when it finishes, before the next child starts. */
   readonly onResult?: ((result: Result) => void) | undefined;
+  /**
+   * Receives the number of planned measuring children that will no longer start when a contender
+   * fails: the rounds of its contest still to come on that runtime.
+   */
+  readonly onDropped?: ((count: number) => void) | undefined;
   /**
    * Receives the report with no result once listing has passed, before the first measuring child
    * starts; what it throws ends the run with no measuring child started.
@@ -55,6 +75,8 @@ export interface RunInput extends OnceInput {
   readonly callsPerSample?: number | undefined;
   /** The `package.json` whose version the report records; the package's own by default. */
   readonly packageJson?: string | undefined;
+  /** Draws the seed of the round orders when the run starts; a random 32-bit integer by default. */
+  readonly drawSeed?: (() => number) | undefined;
 }
 
 /** One case's once run on one runtime: it ran, or it failed in a phase. */
@@ -75,18 +97,49 @@ export interface OnceRun {
 /** How a child asked for `M` ended when the caller did not stop it. */
 type Finished<M extends ChildRequest["mode"]> = Exclude<Outcome<M>, { status: "stopped" }>;
 
-/** The processes of a case whose child failed: one, holding `null` for what it did not reach. */
-const FAILED_PROCESSES: readonly [FailedProcess] = [
-  {
-    round: 1,
-    orderInRound: 1,
-    stats: null,
-    sampling: null,
-    checks: null,
-    gc: null,
-    rawSamples: null,
-  },
-];
+/** What the process of a failed child did not reach. */
+const NOTHING_MEASURED = {
+  stats: null,
+  sampling: null,
+  checks: null,
+  gc: null,
+  rawSamples: null,
+} as const;
+
+/** One child's outcome, with its case, its runtime, and when it ran within its group. */
+interface Step<M extends ChildRequest["mode"]> {
+  readonly runtime: FoundRuntime;
+  readonly selected: SelectedCase;
+  readonly outcome: Finished<M>;
+  readonly round: number;
+  readonly orderInRound: number;
+}
+
+/** What the children's outcomes are passed to while a run starts them. */
+interface StartHandlers<M extends ChildRequest["mode"]> {
+  /**
+   * Called once the selection passed, before the first child of a case starts, with the number of
+   * children the cases will start, rounds included, and whether a contest formed.
+   */
+  readonly passed: (options: ResolvedOptions, total: number, contested: boolean) => void;
+  /** Receives each child's outcome before the next child starts. */
+  readonly finished: (step: Step<M>) => void;
+  /** Receives the number of planned children a failed case will no longer start, when there are some. */
+  readonly dropped?: ((count: number) => void) | undefined;
+  /** Called when the last round of a group ended on a runtime, before the next child starts. */
+  readonly ended?: ((runtime: FoundRuntime, group: readonly SelectedCase[]) => void) | undefined;
+}
+
+/** What starting the children of one group takes, shared by every group of a run. */
+interface GroupStart<R extends ChildRequest> {
+  readonly options: ResolvedOptions;
+  readonly request: (options: ResolvedOptions, selected: SelectedCase) => R;
+  readonly handlers: StartHandlers<R["mode"]>;
+  readonly startChild: NonNullable<OnceInput["startChild"]>;
+  readonly childOptions: StartOptions;
+  /** Draws the numbers that order each round of a contest. */
+  readonly random: () => number;
+}
 
 // ---------------------------------------------------------------------------
 // Running
@@ -107,28 +160,170 @@ export async function packageVersion(path: string = PACKAGE_JSON): Promise<strin
   return version;
 }
 
+/** A random 32-bit seed for the round orders. */
+function drawRandomSeed(): number {
+  return randomInt(2 ** 32);
+}
+
+/** Mulberry32: numbers uniform in [0, 1), the same sequence for the same 32-bit `seed`. */
+function seeded(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d_2b_79_f5) >>> 0;
+    let mixed = Math.imul(state ^ (state >>> 15), state | 1);
+    mixed ^= mixed + Math.imul(mixed ^ (mixed >>> 7), mixed | 61);
+    return ((mixed ^ (mixed >>> 14)) >>> 0) / 2 ** 32;
+  };
+}
+
+/** A uniformly random permutation of `items`, by Fisher–Yates over `random`. */
+function shuffled<T>(items: readonly T[], random: () => number): T[] {
+  const order = [...items];
+  for (let index = order.length - 1; index > 0; index -= 1) {
+    const other = Math.floor(random() * (index + 1));
+    [order[index], order[other]] = [valueAt(order, other), valueAt(order, index)];
+  }
+  return order;
+}
+
 /**
- * Resolves the caller's options, selects the cases, then starts one child per selected case per
- * runtime, one at a time: runtime by runtime in the selection's order, cases in selection order.
+ * Groups the selected cases into what runs in turn: each plain case alone, and the selected
+ * contenders of one benchmark together, at the place of the first of them.
+ *
+ * @param cases - The selected cases, in selection order.
+ * @returns The groups, in the order they run; a group of two or more contenders is a contest.
+ */
+function groupsOf(cases: readonly SelectedCase[]): SelectedCase[][] {
+  const groups: SelectedCase[][] = [];
+  const contests = new Map<string, SelectedCase[]>();
+  for (const selected of cases) {
+    if (selected.contender === null) {
+      groups.push([selected]);
+      continue;
+    }
+    const benchmark = JSON.stringify([selected.path, selected.name]);
+    const contest = contests.get(benchmark);
+    if (contest === undefined) {
+      const group = [selected];
+      contests.set(benchmark, group);
+      groups.push(group);
+    } else {
+      contest.push(selected);
+    }
+  }
+  return groups;
+}
+
+/**
+ * Counts the rounds a group runs.
+ *
+ * @param size - The number of cases in the group.
+ * @param rounds - The `rounds` option.
+ * @returns 1 for a lone case; otherwise `rounds`, or when unset the smallest `n` with
+ *   `4 / 2ⁿ ≤ 0.05 / pairs`, at which a pair can pass Holm's strictest step with one round
+ *   dissenting.
+ */
+function roundsOf(size: number, rounds: number | undefined): number {
+  if (size < 2) return 1;
+  if (rounds !== undefined) return rounds;
+  const pairs = (size * (size - 1)) / 2;
+  let count = 1;
+  while (4 / 2 ** count > 0.05 / pairs) count += 1;
+  return count;
+}
+
+/** One round of a group: its cases in the order they start. */
+interface Round {
+  readonly order: readonly SelectedCase[];
+  /** From 1. */
+  readonly number: number;
+  /** The rounds still to come after this one. */
+  readonly remaining: number;
+}
+
+/**
+ * Starts one child per case of a round, back to back, in its order.
+ *
+ * @param start - What starting a child takes.
+ * @param runtime - The runtime the children run on.
+ * @param round - The round to start.
+ * @param signal - The caller's stop signal.
+ * @returns The cases whose child failed, or `undefined` when the stop signal ended the round.
+ * @throws {@link Error} What `finished` or `dropped` throws, or what starting a child throws.
+ */
+async function startRound<R extends ChildRequest>(
+  start: GroupStart<R>,
+  runtime: FoundRuntime,
+  round: Round,
+  signal: AbortSignal | undefined,
+): Promise<SelectedCase[] | undefined> {
+  const { options, request, handlers, startChild, childOptions } = start;
+  const failed: SelectedCase[] = [];
+  for (const [index, selected] of round.order.entries()) {
+    if (signal?.aborted === true) return undefined;
+    const outcome = await startChild(runtime, request(options, selected), childOptions);
+    if (outcome.status === "stopped") return undefined;
+    handlers.finished({ runtime, selected, outcome, round: round.number, orderInRound: index + 1 });
+    if (outcome.status !== "failed") continue;
+    failed.push(selected);
+    if (round.remaining > 0) handlers.dropped?.(round.remaining);
+  }
+  return failed;
+}
+
+/**
+ * Starts the children of one group on one runtime: each round in a fresh random order for a
+ * contest, one child per case still running, back to back. A case whose child fails runs in no
+ * later round.
+ *
+ * @param start - What starting a child takes.
+ * @param runtime - The runtime the children run on.
+ * @param group - The group's cases, in selection order.
+ * @param signal - The caller's stop signal.
+ * @returns Whether the stop signal ended the group: before a child, or by stopping the running one.
+ * @throws {@link Error} What `finished` or `dropped` throws, or what starting a child throws.
+ */
+async function startGroup<R extends ChildRequest>(
+  start: GroupStart<R>,
+  runtime: FoundRuntime,
+  group: readonly SelectedCase[],
+  signal: AbortSignal | undefined,
+): Promise<boolean> {
+  const rounds = roundsOf(group.length, start.options.rounds);
+  let running = group;
+  for (let number = 1; number <= rounds; number += 1) {
+    const order = group.length > 1 ? shuffled(running, start.random) : running;
+    const round = { order, number, remaining: rounds - number };
+    const failed = await startRound(start, runtime, round, signal);
+    if (failed === undefined) return true;
+    running = running.filter((selected) => !failed.includes(selected));
+  }
+  return false;
+}
+
+/**
+ * Resolves the caller's options, selects the cases, then starts their children one at a time,
+ * runtime by runtime in the selection's order, cases in selection order. With a seed, the selected
+ * contenders of one benchmark form a contest, which runs all its rounds at the place of its first
+ * contender; without one, every case runs once.
  *
  * @param input - The caller's options, the positional files, the stop signal, the plan callback
  *   and the child functions.
  * @param request - The request of one case's child, from the resolved options.
- * @param finished - Receives each child's outcome before the next child starts.
- * @param passed - Called with the resolved options and the number of children the cases will
- *   start once the selection passed, before the first child of a case starts.
+ * @param handlers - What the selection and each child's outcome are passed to.
+ * @param seed - The seed of the round orders, or `undefined` to form no contest.
  * @returns The resolved options, and whether the stop signal ended the run before every child ran:
  *   during listing, before the next child, or by stopping the running one.
  * @throws `ConfigError` When the options are invalid or the selection fails, before any child
  *   but the listing children starts.
- * @throws {@link Error} What the plan callback, `passed` or `finished` throws, or what starting a
- *   child throws.
+ * @throws {@link Error} What the plan callback or a handler throws, or what starting a child
+ *   throws.
  */
 async function startEach<R extends ChildRequest>(
   input: OnceInput,
   request: (options: ResolvedOptions, selected: SelectedCase) => R,
-  finished: (runtime: FoundRuntime, selected: SelectedCase, outcome: Finished<R["mode"]>) => void,
-  passed: (options: ResolvedOptions, total: number) => void,
+  handlers: StartHandlers<R["mode"]>,
+  seed?: number,
 ): Promise<{ options: ResolvedOptions; interrupted: boolean }> {
   const options = await resolveOptions(input);
   const { signal, startChild = realStartChild } = input;
@@ -142,49 +337,84 @@ async function startEach<R extends ChildRequest>(
     onPlanned: input.onPlanned,
   });
   if (selection.status === "stopped") return { options, interrupted: true };
-  passed(options, selection.runtimes.length * selection.cases.length);
+  const groups =
+    seed === undefined ? selection.cases.map((selected) => [selected]) : groupsOf(selection.cases);
+  const childrenPerRuntime = groups.reduce(
+    (total, group) => total + group.length * roundsOf(group.length, options.rounds),
+    0,
+  );
+  const contested = groups.some((group) => group.length > 1);
+  handlers.passed(options, selection.runtimes.length * childrenPerRuntime, contested);
   const childOptions = startOptions(options, signal);
+  const start = { options, request, handlers, startChild, childOptions, random: seeded(seed ?? 0) };
   for (const runtime of selection.runtimes) {
-    for (const selected of selection.cases) {
-      if (signal?.aborted === true) return { options, interrupted: true };
-      const outcome = await startChild(runtime, request(options, selected), childOptions);
-      if (outcome.status === "stopped") return { options, interrupted: true };
-      finished(runtime, selected, outcome);
+    for (const group of groups) {
+      if (await startGroup(start, runtime, group, signal)) return { options, interrupted: true };
+      handlers.ended?.(runtime, group);
     }
   }
   return { options, interrupted: false };
 }
 
 /**
- * Turns a measuring child's outcome into the case's report result.
+ * What every result of a case holds, whether it was measured or failed.
  *
  * @param selected - The case.
- * @param runtime - The runtime its child ran on.
- * @param outcome - How its measuring child ended.
- * @returns A measured result when the child measured the case, a failed one otherwise.
+ * @param runtime - The runtime its children ran on.
+ * @returns Its id, name, contender, parameters, file, runtime and whether it set up per call.
  */
-function resultOf(
-  selected: SelectedCase,
-  runtime: FoundRuntime,
-  outcome: Finished<"measure">,
-): Result {
-  const base = {
+function resultBase(selected: SelectedCase, runtime: FoundRuntime): ResultBase {
+  return {
     id: selected.id,
-    name: selected.id,
-    contender: null,
+    name: selected.name,
+    contender: selected.contender,
     params: {},
     file: selected.file,
     runtime: { name: runtime.runtime, version: runtime.version },
     setupPerCall: selected.setupPerCall,
   };
-  if (outcome.status === "ok") {
-    const { stats, sampling, checks, gc } = outcome.result;
-    const measuring = { round: 1, orderInRound: 1, stats, sampling, checks, gc, rawSamples: null };
-    return { ...base, status: "ok", error: null, median: stats.median, processes: [measuring] };
-  }
-  const { phase, message, stack, teardownError } = outcome.error;
-  const error = { phase, message, stack, teardownError, output: outcome.output };
-  return { ...base, status: "failed", error, median: null, processes: FAILED_PROCESSES };
+}
+
+/**
+ * The handlers that turn measuring children into results: a case gathers one process per round;
+ * a failed child finishes its case at once, and the rest finish when their group's last round
+ * ends. A group the stop signal ends gives no further result.
+ *
+ * @param emit - Receives each result as it finishes.
+ * @returns The handlers of each child's outcome and of each group's end.
+ */
+function resultHandlers(
+  emit: (result: Result) => void,
+): Pick<StartHandlers<"measure">, "finished" | "ended"> {
+  const ran = new Map<SelectedCase, MeasuredProcess[]>();
+  return {
+    finished: ({ runtime, selected, outcome, round, orderInRound }) => {
+      const processes = ran.get(selected) ?? [];
+      if (outcome.status === "ok") {
+        const { stats, sampling, checks, gc } = outcome.result;
+        const measuring = { round, orderInRound, stats, sampling, checks, gc, rawSamples: null };
+        ran.set(selected, [...processes, measuring]);
+        return;
+      }
+      ran.delete(selected);
+      const { phase, message, stack, teardownError } = outcome.error;
+      const error = { phase, message, stack, teardownError, output: outcome.output };
+      const failed = { round, orderInRound, ...NOTHING_MEASURED };
+      const base = resultBase(selected, runtime);
+      emit({ ...base, status: "failed", error, median: null, processes: [...processes, failed] });
+    },
+    ended: (runtime, group) => {
+      for (const selected of group) {
+        const [first, ...rest] = ran.get(selected) ?? [];
+        ran.delete(selected);
+        if (first === undefined) continue;
+        const processes: [MeasuredProcess, ...MeasuredProcess[]] = [first, ...rest];
+        const medians = processes.map((process) => process.stats.median).toSorted((a, b) => a - b);
+        const median = quantile(medians, 0.5);
+        emit({ ...resultBase(selected, runtime), status: "ok", error: null, median, processes });
+      }
+    },
+  };
 }
 
 /**
@@ -209,17 +439,22 @@ function machineOf(cpus: () => readonly { readonly model: string }[]): Machine {
  *
  * @param input - The caller's options.
  * @param options - The resolved options.
+ * @param seed - The seed of the round orders, `null` when the run holds no contest.
  * @returns The report's options.
  */
-function reportOptions(input: OnceInput, options: ResolvedOptions): ReportOptions {
+function reportOptions(
+  input: OnceInput,
+  options: ResolvedOptions,
+  seed: number | null,
+): ReportOptions {
   return {
     runtimes: options.runtimes,
     files: input.files === undefined || input.files.length === 0 ? null : [...input.files],
     filter: input.filter ?? null,
     minTime: options.minTime,
     minSamples: options.minSamples,
-    rounds: null,
-    seed: null,
+    rounds: options.rounds ?? null,
+    seed,
     timeout: options.timeout,
     nodeImport: options.nodeImport?.written ?? null,
     rawSamples: false,
@@ -228,21 +463,24 @@ function reportOptions(input: OnceInput, options: ResolvedOptions): ReportOption
 
 /**
  * Runs a benchmark run: resolves the options, selects the cases, then measures each selected case
- * on each runtime in its own child, one at a time. It never prints.
+ * on each runtime in its own child, one at a time, and each contest in rounds of one child per
+ * contender. It never prints.
  *
- * A failed case is a result with an `error`, never a throw, and does not stop the run. When the
- * stop signal fires, the running child is killed, its case gets no result, and no further child
- * starts.
+ * A failed case is a result with an `error`, never a throw, and does not stop the run. A plain
+ * case's result is emitted when its child ends, a failed contender's when its failing child ends,
+ * and the other contenders' when their contest's last round ends. When the stop signal fires, the
+ * running child is killed, its case and the unfinished contenders of its contest get no result,
+ * and no further child starts.
  *
  * @param input - The caller's options, the positional files, the stop signal, the result,
- *   selection and plan callbacks, the calls per sample to fix, and the functions that look a
- *   runtime up, start a child, list the CPUs and name the `package.json` to read the version from,
- *   the real ones by default.
+ *   selection, plan and dropped-children callbacks, the calls per sample to fix, and the functions that look a
+ *   runtime up, start a child, list the CPUs, draw the seed and name the `package.json` to read
+ *   the version from, the real ones by default.
  * @returns The report of the results that finished, with `interrupted` set when the stop signal
  *   ended the run.
  * @throws {@link Error} The error reading the package's `package.json`, before any child starts;
  *   what `onSelected` or `onPlanned` throws, before the first child of its phase starts; what
- *   `onResult` throws, once a child has finished; or what starting a child throws.
+ *   `onResult` or `onDropped` throws, once a child has finished; or what starting a child throws.
  * @throws `ConfigError` When the options are invalid or the selection fails, before any
  *   measuring child starts.
  */
@@ -250,19 +488,25 @@ export async function run(input: RunInput): Promise<Report> {
   const startedAt = new Date().toISOString();
   const repset = await packageVersion(input.packageJson);
   const machine = machineOf(input.cpus ?? realCpus);
+  const seed = (input.drawSeed ?? drawRandomSeed)();
   const results: Result[] = [];
+  let contested = false;
   const { callsPerSample } = input;
   const reportOf = (options: ResolvedOptions, interrupted: boolean): Report => ({
     schema: 1,
     repset,
     startedAt,
     interrupted,
-    options: reportOptions(input, options),
+    options: reportOptions(input, options, contested ? seed : null),
     machine,
     results: [...results],
     contests: [],
   });
-  const { options, interrupted } = await startEach(
+  const emit = (result: Result): void => {
+    results.push(result);
+    input.onResult?.(result);
+  };
+  const { options, interrupted } = await startEach<MeasureRequest>(
     input,
     (resolved, selected) => ({
       mode: "measure",
@@ -272,22 +516,24 @@ export async function run(input: RunInput): Promise<Report> {
       minSamples: resolved.minSamples,
       ...(callsPerSample === undefined ? {} : { callsPerSample }),
     }),
-    (runtime, selected, outcome) => {
-      const result = resultOf(selected, runtime, outcome);
-      results.push(result);
-      input.onResult?.(result);
+    {
+      passed: (resolved, total, formed) => {
+        contested = formed;
+        input.onSelected?.(reportOf(resolved, false));
+        input.onPlanned?.(total);
+      },
+      dropped: input.onDropped,
+      ...resultHandlers(emit),
     },
-    (resolved, total) => {
-      input.onSelected?.(reportOf(resolved, false));
-      input.onPlanned?.(total);
-    },
+    seed,
   );
   return reportOf(options, interrupted);
 }
 
 /**
  * Runs every selected case once per runtime, each in its own child, with no timing, one at a time
- * in the order a run measures them. A failed case does not stop it.
+ * in selection order; a contest's contenders run once each, forming no rounds. A failed case does
+ * not stop it.
  *
  * @param input - The caller's options, the positional files, the stop signal, the plan callback,
  *   and the functions that look a runtime up and start a child, the real ones by default.
@@ -303,172 +549,18 @@ export async function runOnce(input: OnceInput): Promise<OnceRun> {
   const { interrupted } = await startEach(
     input,
     (_options, selected) => ({ mode: "once", file: selected.path, id: selected.id }),
-    (runtime, selected, outcome) => {
-      const ran = { id: selected.id, runtime: runtime.runtime };
-      if (outcome.status === "ok") {
-        results.push({ ...ran, status: "ok" });
-      } else {
-        const { phase, message, teardownError } = outcome.error;
-        results.push({ ...ran, status: "failed", error: { phase, message, teardownError } });
-      }
+    {
+      passed: (_options, total) => input.onPlanned?.(total),
+      finished: ({ runtime, selected, outcome }) => {
+        const ran = { id: selected.id, runtime: runtime.runtime };
+        if (outcome.status === "ok") {
+          results.push({ ...ran, status: "ok" });
+        } else {
+          const { phase, message, teardownError } = outcome.error;
+          results.push({ ...ran, status: "failed", error: { phase, message, teardownError } });
+        }
+      },
     },
-    (_options, total) => input.onPlanned?.(total),
   );
   return { interrupted, results };
-}
-
-// ---------------------------------------------------------------------------
-// Signed-rank statistics
-// ---------------------------------------------------------------------------
-
-/** Past this many weights, a null count could exceed 2^53 and stop being exact in a double. */
-const EXACT_COUNTS = 53;
-
-/**
- * The null distribution of the sum of the positive weights when each weight's sign is a fair coin
- * flip. Up to 53 weights `mass` holds integer counts of sign assignments over a `total` of 2^n,
- * exact in a double; past that it holds probabilities over a `total` of 1.
- *
- * @param weights - Nonnegative integer weights.
- * @returns `mass[t]` over `total` is the probability that the positive weights sum to `t`.
- */
-function nullDistribution(weights: readonly number[]): { mass: number[]; total: number } {
-  const exact = weights.length <= EXACT_COUNTS;
-  let mass = [1];
-  for (const weight of weights) {
-    const share = mass.map((count) => (exact ? count : count / 2));
-    const next = [...share, ...Array.from({ length: weight }, () => 0)];
-    for (const [sum, count] of share.entries())
-      next[sum + weight] = valueAt(next, sum + weight) + count;
-    mass = next;
-  }
-  return { mass, total: exact ? 2 ** weights.length : 1 };
-}
-
-/**
- * Ranks magnitudes from 1, equal magnitudes sharing their average rank, then doubles every rank so
- * an average of two ranks stays an integer.
- *
- * @param magnitudes - The magnitudes to rank.
- * @returns Each magnitude's doubled rank, in the input's order.
- */
-function doubledRanks(magnitudes: readonly number[]): number[] {
-  const order = [...magnitudes.keys()].toSorted(
-    (left, right) => valueAt(magnitudes, left) - valueAt(magnitudes, right),
-  );
-  const ranks = magnitudes.map(() => 0);
-  let start = 0;
-  while (start < order.length) {
-    const magnitude = valueAt(magnitudes, valueAt(order, start));
-    let end = start;
-    while (end + 1 < order.length && valueAt(magnitudes, valueAt(order, end + 1)) === magnitude) {
-      end += 1;
-    }
-    for (let position = start; position <= end; position += 1) {
-      ranks[valueAt(order, position)] = start + end + 2;
-    }
-    start = end + 1;
-  }
-  return ranks;
-}
-
-/**
- * The two-sided exact signed-rank p value. Zero differences are dropped, and equal magnitudes
- * share their average rank; the null distribution is the exact one of those ranks.
- *
- * @param differences - The paired differences.
- * @returns The p value, 1 when no difference is nonzero.
- */
-export function signedRankP(differences: readonly number[]): number {
-  const nonzero = differences.filter((difference) => difference !== 0);
-  if (nonzero.length === 0) return 1;
-  const ranks = doubledRanks(nonzero.map((difference) => Math.abs(difference)));
-  const observed = ranks.reduce(
-    (sum, rank, index) => (valueAt(nonzero, index) > 0 ? sum + rank : sum),
-    0,
-  );
-  const { mass, total } = nullDistribution(ranks);
-  let lower = 0;
-  let upper = 0;
-  for (const [sum, count] of mass.entries()) {
-    if (sum <= observed) lower += count;
-    if (sum >= observed) upper += count;
-  }
-  return Math.min(1, (2 * Math.min(lower, upper)) / total);
-}
-
-/** The Walsh averages `(d_i + d_j) / 2`, `i ≤ j`, of `differences`, ascending. */
-function walshAverages(differences: readonly number[]): number[] {
-  const averages: number[] = [];
-  for (const [index, left] of differences.entries()) {
-    for (const right of differences.slice(index)) averages.push((left + right) / 2);
-  }
-  return averages.toSorted((left, right) => left - right);
-}
-
-/**
- * The Hodges–Lehmann estimate: the median of the Walsh averages of every difference, zeros
- * included.
- *
- * @param differences - The paired differences.
- * @returns The estimate.
- * @throws RangeError When `differences` is empty.
- */
-export function hodgesLehmann(differences: readonly number[]): number {
-  const averages = walshAverages(differences);
-  const middle = averages.length - 1;
-  return (valueAt(averages, Math.floor(middle / 2)) + valueAt(averages, Math.ceil(middle / 2))) / 2;
-}
-
-/**
- * The exact confidence interval of the Hodges–Lehmann estimate: the Walsh averages of rank `C` and
- * `M + 1 − C` among the `M` of every difference, zeros included, where `C` is the largest count
- * with `2 · P(T ≤ C − 1) ≤ 1 − level` under the untied null of the signed-rank statistic `T` for
- * that many differences. Tied magnitudes keep the untied null.
- *
- * @param differences - The paired differences.
- * @param level - The confidence level, as 0.95 for 95%.
- * @returns The interval's low and high ends.
- * @throws RangeError When no Walsh average reaches `level`: too few differences for it.
- */
-export function signedRankInterval(
-  differences: readonly number[],
-  level: number,
-): readonly [number, number] {
-  const { mass, total } = nullDistribution(Array.from(differences, (_, index) => index + 1));
-  let critical = 0;
-  let cumulative = 0;
-  for (const count of mass) {
-    cumulative += count;
-    if ((2 * cumulative) / total > 1 - level) break;
-    critical += 1;
-  }
-  if (critical === 0) {
-    throw new RangeError(
-      `no interval reaches level ${level} with ${differences.length} differences`,
-    );
-  }
-  const averages = walshAverages(differences);
-  return [valueAt(averages, critical - 1), valueAt(averages, averages.length - critical)];
-}
-
-/**
- * Holm's adjusted p values: over the raw p values in ascending order, each one times the count of
- * p values from it to the largest, raised to the largest adjusted value before it and capped at 1.
- *
- * @param pValues - The raw p values of one family.
- * @returns The adjusted p values, in the input's order.
- */
-export function holm(pValues: readonly number[]): number[] {
-  const ordered = [...pValues.keys()].toSorted(
-    (left, right) => valueAt(pValues, left) - valueAt(pValues, right),
-  );
-  const adjusted = pValues.map(() => 1);
-  let running = 0;
-  for (const [step, index] of ordered.entries()) {
-    const scaled = Math.min(1, (pValues.length - step) * valueAt(pValues, index));
-    running = Math.max(running, scaled);
-    adjusted[index] = running;
-  }
-  return adjusted;
 }

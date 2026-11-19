@@ -301,6 +301,9 @@ async function measure(command: Command, context: Context): Promise<number> {
     ...command.input,
     ...childInput(context),
     callsPerSample: command.callsPerSample,
+    onDropped: (count) => {
+      progress.dropped(count);
+    },
     ...writes,
   });
   progress.stop();

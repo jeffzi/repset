@@ -16,6 +16,10 @@ import { ConfigError, isFile, type ResolvedOptions } from "./options.js";
 
 export interface SelectedCase {
   readonly id: string;
+  /** The name passed to `bench()`. */
+  readonly name: string;
+  /** The contender's key in the record `fn`, or `null` for a benchmark with one `fn`. */
+  readonly contender: string | null;
   /** The benchmark file that registers the case, as an absolute path. */
   readonly path: string;
   /** The file as the report writes it: relative to the working directory, with `/` separators. */
@@ -203,8 +207,8 @@ async function listFiles(
     const outcome = await startChild(runtime, { mode: "list", file: path }, childOptions);
     if (outcome.status === "stopped") return undefined;
     if (outcome.status === "failed") throw new ListingError(file, outcome.error, outcome.output);
-    for (const { id, setupPerCall } of outcome.result.cases) {
-      cases.push({ id, path, file, setupPerCall });
+    for (const { id, name, contender, setupPerCall } of outcome.result.cases) {
+      cases.push({ id, name, contender, path, file, setupPerCall });
     }
   }
   return cases;

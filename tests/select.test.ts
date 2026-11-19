@@ -299,12 +299,16 @@ describe("selectCases", () => {
         cases: [
           {
             id: "a.bench.ts",
+            name: "a.bench.ts",
+            contender: null,
             path: fixture("a.bench.ts"),
             file: "../a.bench.ts",
             setupPerCall: false,
           },
           {
             id: "inner.bench.ts",
+            name: "inner.bench.ts",
+            contender: null,
             path: fixture("nested/deep/inner.bench.ts"),
             file: "deep/inner.bench.ts",
             setupPerCall: true,

@@ -25,6 +25,8 @@ const CLEAR_ROW = "\r\x1b[2K";
 export interface Progress {
   /** Starts counting the children of a phase that starts `total` of them. */
   planned(total: number): void;
+  /** Lowers the phase's total by `count` children that will no longer start, keeping its started count. */
+  dropped(count: number): void;
   /** Shows that the phase's next child starts, doing what `text` says. */
   starting(text: string): void;
   /** Stops the indicator and erases the live line; calling it again does nothing. */
@@ -35,6 +37,7 @@ export interface Progress {
 function linePerChild(stderr: Output): Progress {
   return {
     planned: () => undefined,
+    dropped: () => undefined,
     starting: (text) => {
       stderr.write(`${text}\n`);
     },
@@ -75,6 +78,9 @@ function liveLine(stderr: Output, color: boolean): Progress {
     planned: (count) => {
       total = count;
       started = 0;
+    },
+    dropped: (count) => {
+      total -= count;
     },
     starting: (text) => {
       started += 1;

@@ -3,14 +3,18 @@ import { pathToFileURL } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { FoundRuntime, Outcome } from "../src/children.js";
 import { ConfigError } from "../src/options.js";
 import type { Report, Result } from "../src/report.js";
 import { run, runOnce } from "../src/run.js";
 import {
+  type Asked,
+  type CaseToList,
   failedOutcome,
   findAny,
   found,
   listed,
+  listingStarter,
   MELON,
   measured,
   measuredOutcome,
@@ -109,6 +113,57 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+/** The contender `key` of the contest `concat`. */
+function contender(key: string): CaseToList {
+  return { id: `concat/${key}`, setupPerCall: false, name: "concat", contender: key };
+}
+
+const APPLE: CaseToList = { id: "apple", setupPerCall: false };
+const BANANA: CaseToList = { id: "banana", setupPerCall: false };
+const JOIN = contender("join");
+const LOOP = contender("loop");
+const PLUS = contender("plus");
+
+/** The seed `runCases` draws unless told otherwise. */
+const SEED = 20_261_119;
+
+/** Answers a measuring child; `index` counts the measuring children started before it. */
+type Answer = (request: Asked, runtime: FoundRuntime, index: number) => Outcome;
+
+/** Runs `cases`, all listed in one file, drawing `SEED`, and logs each measuring child's case id. */
+async function runCases(
+  cases: CaseToList[],
+  input: Partial<RunInput> = {},
+  answer: Answer = () => measuredOutcome(4656),
+): Promise<{ report: Report; started: string[] }> {
+  const started: string[] = [];
+  const report = await runHere({
+    drawSeed: () => SEED,
+    startChild: listingStarter(cases, (request, runtime) => {
+      started.push(request.id);
+      return answer(request, runtime, started.length - 1);
+    }),
+    ...input,
+  });
+  return { report, started };
+}
+
+/** `items` cut into consecutive slices of `size`. */
+function chunks<T>(items: readonly T[], size: number): T[][] {
+  return Array.from({ length: Math.ceil(items.length / size) }, (_, index) =>
+    items.slice(index * size, (index + 1) * size),
+  );
+}
+
+/** Each process of `result` as its round, its order in the round and its median. */
+function processesOf(result: Result): (number | null)[][] {
+  return result.processes.map((process) => [
+    process.round,
+    process.orderInRound,
+    process.stats?.median ?? null,
+  ]);
+}
+
 describe("run", () => {
   describe("the report", () => {
     it("holds the inputs, the host and each measured case's result", async () => {
@@ -174,6 +229,15 @@ describe("run", () => {
           nodeImport: null,
         });
       });
+    });
+
+    it.each([
+      { rounds: 5, recorded: 5 },
+      { rounds: undefined, recorded: null },
+    ])("records the rounds option $rounds as $recorded", async ({ rounds, recorded }) => {
+      const report = await runHere(rounds === undefined ? {} : { rounds });
+
+      expect(report.options.rounds).toBe(recorded);
     });
 
     it("records a relative nodeImport from the config file as written", async () => {
@@ -357,6 +421,17 @@ describe("run", () => {
         "measure",
       ]);
     });
+
+    it("counts every round of each contest among the measuring children", async () => {
+      const events: string[] = [];
+
+      await runCases([APPLE, JOIN, LOOP], {
+        runtimes: ["node", "bun"],
+        onPlanned: logsPlans(events),
+      });
+
+      expect(events).toStrictEqual(["planned 1", "planned 30"]);
+    });
   });
 
   describe("the package's version", () => {
@@ -394,6 +469,303 @@ describe("run", () => {
         interrupted: report.interrupted,
         ran: report.results.map((result) => [result.runtime.name, result.id]),
       }).toStrictEqual({ interrupted: true, ran: [["node", "zeta.bench.ts"]] });
+    });
+  });
+
+  describe("contests", () => {
+    it("runs all of a contest's rounds at its first contender's place, one child per contender back to back, on each runtime", async () => {
+      const runtimes: string[] = [];
+
+      const { started } = await runCases(
+        [APPLE, JOIN, BANANA, LOOP],
+        { runtimes: ["bun", "node"], rounds: 2 },
+        (_request, runtime) => {
+          runtimes.push(runtime.runtime);
+          return measuredOutcome(4656);
+        },
+      );
+
+      const onRuntime = (offset: number): unknown[] => {
+        const ids = started.slice(offset, offset + 6);
+        return [ids[0], ids.slice(1, 3).toSorted(), ids.slice(3, 5).toSorted(), ids[5]];
+      };
+      const contest = ["concat/join", "concat/loop"];
+      expect({ runtimes, started: [onRuntime(0), onRuntime(6)] }).toStrictEqual({
+        runtimes: [...Array<string>(6).fill("bun"), ...Array<string>(6).fill("node")],
+        started: [
+          ["apple", contest, contest, "banana"],
+          ["apple", contest, contest, "banana"],
+        ],
+      });
+    });
+
+    it("runs a lone selected contender once, keeping its contender key, as a plain case", async () => {
+      const { report } = await runCases([APPLE, JOIN, LOOP], { filter: "apple|join" });
+
+      expect(
+        report.results.map((result) => [
+          result.id,
+          result.name,
+          result.contender,
+          processesOf(result),
+        ]),
+      ).toStrictEqual([
+        ["apple", "apple", null, [[1, 1, 4656]]],
+        ["concat/join", "concat", "join", [[1, 1, 4656]]],
+      ]);
+    });
+
+    it.each([
+      { contenders: 2, rounds: undefined, expected: 7 },
+      { contenders: 3, rounds: undefined, expected: 8 },
+      { contenders: 8, rounds: undefined, expected: 12 },
+      { contenders: 2, rounds: 3, expected: 3 },
+    ])(
+      "runs $expected rounds for $contenders contenders when rounds is $rounds",
+      async ({ contenders, rounds, expected }) => {
+        const cases = Array.from({ length: contenders }, (_, index) =>
+          contender(`c${String(index)}`),
+        );
+
+        const { report } = await runCases(cases, rounds === undefined ? {} : { rounds });
+
+        expect(report.results.map((result) => result.processes.length)).toStrictEqual(
+          Array<number>(contenders).fill(expected),
+        );
+      },
+    );
+
+    it.each([
+      { rounds: 3, medians: { "concat/join": 40, "concat/loop": 30 } },
+      { rounds: 4, medians: { "concat/join": 30, "concat/loop": 45 } },
+    ])(
+      "gives each contender one process per round in run order, its median the median of theirs, over $rounds rounds",
+      async ({ rounds, medians }) => {
+        const byRound: Record<string, number[]> = {
+          "concat/join": [50, 10, 40, 20],
+          "concat/loop": [30, 60, 5, 70],
+        };
+        const calls = new Map<string, number>();
+        const answer: Answer = (request) => {
+          const call = calls.get(request.id) ?? 0;
+          calls.set(request.id, call + 1);
+          return measuredOutcome(byRound[request.id]?.[call] ?? 0);
+        };
+
+        const { report, started } = await runCases([JOIN, LOOP], { rounds }, answer);
+
+        const expectedOf = (id: "concat/join" | "concat/loop"): unknown[] => {
+          const orders = started.flatMap((startedId, index) =>
+            startedId === id ? [(index % 2) + 1] : [],
+          );
+          const processes = orders.map((order, round) => [round + 1, order, byRound[id]?.[round]]);
+          return [id, "concat", id.slice("concat/".length), medians[id], processes];
+        };
+        expect(
+          report.results
+            .toSorted((left, right) => left.id.localeCompare(right.id))
+            .map((result) => [
+              result.id,
+              result.name,
+              result.contender,
+              result.median,
+              processesOf(result),
+            ]),
+        ).toStrictEqual([expectedOf("concat/join"), expectedOf("concat/loop")]);
+      },
+    );
+
+    describe("the round orders", () => {
+      it("records the seed drawn when the run starts", async () => {
+        const { report } = await runCases([JOIN, LOOP], { drawSeed: () => 1234 });
+
+        expect(report.options.seed).toBe(1234);
+      });
+
+      it("records a null seed when no contest forms", async () => {
+        const { report } = await runCases([APPLE, JOIN, LOOP], { filter: "apple|join" });
+
+        expect(report.options.seed).toBeNull();
+      });
+
+      it("repeats for the same seed", async () => {
+        const { started: first } = await runCases([JOIN, LOOP, PLUS]);
+
+        const { started: second } = await runCases([JOIN, LOOP, PLUS]);
+
+        expect(second).toStrictEqual(first);
+      });
+
+      it("change with the seed", async () => {
+        const { started: first } = await runCases([JOIN, LOOP, PLUS]);
+
+        const { started: second } = await runCases([JOIN, LOOP, PLUS], {
+          drawSeed: () => SEED + 1,
+        });
+
+        expect(second).not.toStrictEqual(first);
+      });
+
+      it("are drawn uniformly from the permutations of the contenders", async () => {
+        const { started } = await runCases([JOIN, LOOP, PLUS], { rounds: 6000 });
+
+        const counts = Object.values(
+          Object.groupBy(chunks(started, 3), (order) => order.join(" ")),
+        );
+        expect(counts.map((orders) => Math.abs((orders?.length ?? 0) - 1000) < 150)).toStrictEqual(
+          Array<boolean>(6).fill(true),
+        );
+      });
+    });
+
+    describe("when a contender's child fails", () => {
+      /** Runs `concat` over 4 rounds with `concat/loop` failing in round 2, logging starts and results. */
+      async function failLoopInRoundTwo(input: Partial<RunInput> = {}): Promise<{
+        report: Report;
+        started: string[];
+        events: string[];
+      }> {
+        const events: string[] = [];
+        let loopCalls = 0;
+        const { report, started } = await runCases(
+          [JOIN, LOOP, PLUS],
+          {
+            ...input,
+            rounds: 4,
+            onResult: (result) => {
+              events.push(`result ${result.id}`);
+            },
+          },
+          (request) => {
+            events.push(`start ${request.id}`);
+            if (request.id !== "concat/loop") return measuredOutcome(4656);
+            loopCalls += 1;
+            return loopCalls === 2 ? failedOutcome("fn", "kiwi") : measuredOutcome(17);
+          },
+        );
+        return { report, started, events };
+      }
+
+      it("gives it a failed result holding the processes that ran, the failed one last", async () => {
+        const { report, started } = await failLoopInRoundTwo();
+
+        const orders = started.flatMap((id, index) =>
+          id === "concat/loop" ? [(index % 3) + 1] : [],
+        );
+        const loop = report.results.find((result) => result.id === "concat/loop");
+        expect({
+          status: loop?.status,
+          error: loop?.error?.message,
+          median: loop?.median,
+          processes: loop === undefined ? [] : processesOf(loop),
+        }).toStrictEqual({
+          status: "failed",
+          error: "kiwi",
+          median: null,
+          processes: [
+            [1, orders[0], 17],
+            [2, orders[1], null],
+          ],
+        });
+      });
+
+      it("emits its result before the next child starts", async () => {
+        const { events } = await failLoopInRoundTwo();
+
+        const failedAt = events.lastIndexOf("start concat/loop");
+        expect(events[failedAt + 1]).toBe("result concat/loop");
+      });
+
+      it("runs it in no later round while the rest run every round", async () => {
+        const { started } = await failLoopInRoundTwo();
+
+        expect({
+          join: started.filter((id) => id === "concat/join").length,
+          loop: started.filter((id) => id === "concat/loop").length,
+          plus: started.filter((id) => id === "concat/plus").length,
+        }).toStrictEqual({ join: 4, loop: 2, plus: 4 });
+      });
+
+      it("gives every contender exactly one result", async () => {
+        const { events } = await failLoopInRoundTwo();
+
+        expect({
+          join: events.filter((event) => event === "result concat/join").length,
+          loop: events.filter((event) => event === "result concat/loop").length,
+          plus: events.filter((event) => event === "result concat/plus").length,
+        }).toStrictEqual({ join: 1, loop: 1, plus: 1 });
+      });
+
+      it("reports its rounds still to come as dropped, once, so planned minus dropped is the children started", async () => {
+        const planned: number[] = [];
+        const dropped: number[] = [];
+
+        const { started } = await failLoopInRoundTwo({
+          onPlanned: (total) => {
+            planned.push(total);
+          },
+          onDropped: (count) => {
+            dropped.push(count);
+          },
+        });
+
+        const left = (planned.at(-1) ?? 0) - dropped.reduce((sum, count) => sum + count, 0);
+        expect({ dropped, left }).toStrictEqual({ dropped: [2], left: started.length });
+      });
+    });
+
+    it("emits each surviving contender's result when the contest's last round ends", async () => {
+      const events: string[] = [];
+
+      await runCases(
+        [APPLE, JOIN, LOOP, BANANA],
+        {
+          rounds: 3,
+          onResult: (result) => {
+            events.push(`result ${result.id}`);
+          },
+        },
+        (request) => {
+          events.push(`start ${request.id}`);
+          return measuredOutcome(4656);
+        },
+      );
+
+      expect([
+        events.slice(0, 2),
+        events.slice(2, 8).map((event) => event.startsWith("start concat/")),
+        events.slice(8, 10).toSorted(),
+        events.slice(10),
+      ]).toStrictEqual([
+        ["start apple", "result apple"],
+        Array<boolean>(6).fill(true),
+        ["result concat/join", "result concat/loop"],
+        ["start banana", "result banana"],
+      ]);
+    });
+
+    describe("when the stop signal fires mid-contest", () => {
+      it("keeps the results emitted before it and emits nothing more for the contest", async () => {
+        const controller = new AbortController();
+        let joinCalls = 0;
+
+        const { report } = await runCases(
+          [APPLE, JOIN, LOOP, PLUS],
+          { rounds: 3, signal: controller.signal },
+          (request) => {
+            if (request.id === "concat/loop") return failedOutcome("fn", "kiwi");
+            if (request.id === "concat/join") joinCalls += 1;
+            if (joinCalls < 2) return measuredOutcome(4656);
+            controller.abort();
+            return stopped;
+          },
+        );
+
+        expect({
+          interrupted: report.interrupted,
+          ids: report.results.map((result) => result.id),
+        }).toStrictEqual({ interrupted: true, ids: ["apple", "concat/loop"] });
+      });
     });
   });
 
@@ -457,6 +829,20 @@ describe("runOnce", () => {
         { id: "a.bench.ts", runtime: "node", status: "ok" },
       ],
     });
+  });
+
+  it("runs each selected contender once in selection order, forming no rounds", async () => {
+    const outcome = await runOnceHere({
+      rounds: 3,
+      startChild: listingStarter([APPLE, JOIN, BANANA, LOOP], () => ranOnce),
+    });
+
+    expect(outcome.results.map((result) => result.id)).toStrictEqual([
+      "apple",
+      "concat/join",
+      "banana",
+      "concat/loop",
+    ]);
   });
 
   describe("onPlanned", () => {

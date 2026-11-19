@@ -108,3 +108,14 @@ export function starter(
     return answer(request, runtime, options);
   };
 }
+
+/** A child starter that lists `cases` in every file and answers the rest with `answer`. */
+export function listingStarter(
+  cases: CaseToList[],
+  answer: (request: Asked, runtime: FoundRuntime) => Outcome | Promise<Outcome>,
+): StartChild {
+  return async (runtime, request) => {
+    if (request.mode === "list") return listed(cases);
+    return answer(request, runtime);
+  };
+}

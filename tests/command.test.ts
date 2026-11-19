@@ -26,7 +26,10 @@ import {
   workspace,
 } from "./command-harness.js";
 import {
+  type CaseToList,
   failedOutcome,
+  listingStarter,
+  measuredOutcome,
   ranOnce,
   starter as fakeStarter,
   type StartChild,
@@ -493,6 +496,47 @@ describe("main", () => {
         expect({ seen, final: screen(stderr.text) }).toStrictEqual({ seen: screens, final: [""] });
       },
     );
+
+    it("lowers the live line's total by the rounds a failed contender will not run, keeping its started count", async () => {
+      const stderr = terminalOf(80);
+      const seen: string[][] = [];
+      const contender = (key: string): CaseToList => ({
+        id: `concat/${key}`,
+        setupPerCall: false,
+        name: "concat",
+        contender: key,
+      });
+      let loopCalls = 0;
+      const failsLoopInRoundTwo = listingStarter(
+        [contender("join"), contender("loop"), contender("plus")],
+        (request) => {
+          if (request.id !== "concat/loop") return measuredOutcome(4656);
+          loopCalls += 1;
+          return loopCalls === 2 ? failedOutcome("fn", "kiwi") : measuredOutcome(17);
+        },
+      );
+
+      await command(workspace(), ["--rounds", "4", "sort.bench.ts"], {
+        stderr,
+        startChild: watching(stderr, seen, failsLoopInRoundTwo),
+      });
+
+      const counts = seen.slice(1).map((rows) =>
+        /\[(\d+)\/(\d+)\]/u
+          .exec(rows.at(-1) ?? "")
+          ?.slice(1)
+          .map(Number),
+      );
+      expect({
+        started: counts.map((count) => count?.[0]),
+        first: counts.at(0)?.[1],
+        last: counts.at(-1)?.[1],
+      }).toStrictEqual({
+        started: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+        first: 12,
+        last: 10,
+      });
+    });
 
     it("redraws the live line with the next indicator frame as time passes", async () => {
       vi.useFakeTimers({ toFake: [...TIMERS] });

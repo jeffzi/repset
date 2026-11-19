@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { hodgesLehmann, holm, signedRankInterval, signedRankP } from "../src/run.js";
+import { hodgesLehmann, holm, signedRankInterval, signedRankP } from "../src/signed-rank.js";
 import { isRecord } from "../src/utils.js";
 import { fixturePath } from "./fixture-path.js";
 

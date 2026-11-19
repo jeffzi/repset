@@ -16,8 +16,10 @@ export interface ReportOptions {
   readonly filter: string | null;
   readonly minTime: number;
   readonly minSamples: number;
-  readonly rounds: null;
-  readonly seed: null;
+  /** The `rounds` option, or `null` when each contest's size sets its count. */
+  readonly rounds: number | null;
+  /** The seed of the round orders, or `null` when the run holds no contest. */
+  readonly seed: number | null;
   readonly timeout: number;
   /** The module Node children import first, as the config file or the caller wrote it. */
   readonly nodeImport: string | null;
@@ -58,10 +60,11 @@ export interface FailedProcess {
 }
 
 /** What every result holds, whether its case was measured or failed. */
-interface ResultBase {
+export interface ResultBase {
   readonly id: string;
   readonly name: string;
-  readonly contender: null;
+  /** The contender's key in a contest, or `null` for a plain benchmark. */
+  readonly contender: string | null;
   readonly params: Readonly<Record<string, never>>;
   /** The benchmark file, relative to the working directory, with `/` separators. */
   readonly file: string;
@@ -77,12 +80,15 @@ export interface MeasuredResult extends ResultBase {
   readonly processes: readonly [MeasuredProcess, ...MeasuredProcess[]];
 }
 
-/** A case that failed: `error` says why, and its one process holds `null` for what it did not reach. */
+/**
+ * A case that failed: `error` says why, and its processes are those that ran, the failed one last,
+ * holding `null` for what it did not reach.
+ */
 export interface FailedResult extends ResultBase {
   readonly status: "failed";
   readonly error: ResultError;
   readonly median: null;
-  readonly processes: readonly [FailedProcess];
+  readonly processes: readonly [...MeasuredProcess[], FailedProcess];
 }
 
 /** One case's result on one runtime. */

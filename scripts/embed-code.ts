@@ -4,21 +4,19 @@
  *
  * Run as `node --import tsx scripts/embed-code.ts <markdown files>`.
  */
-import { readFileSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
+import { readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
-import { property } from "../src/utils.js";
-
-/** The fields of a markdown-magic transform's argument this script reads. */
-interface TransformInput {
-  readonly options: unknown;
-  readonly srcPath: unknown;
-}
-
-type ProcessFile = (options: Record<string, unknown>) => Promise<unknown>;
-
 const FENCE = "```";
+
+/**
+ * A `CODE` block: its attributes, then its content split into the newlines that open it, the text
+ * between them, and the newlines that close it, so a rewrite keeps the layout as written.
+ */
+const CODE_BLOCK =
+  /<!-- docs CODE(?<attributes>\s[\s\S]*?)?-->(?<before>\n*)(?<content>[\s\S]*?)(?<after>\n*)<!-- \/docs -->/gu;
+
+const ATTRIBUTE = /(?<name>[\w-]+)="(?<value>[^"]*)"/gu;
 
 /**
  * A line holding nothing but an oxlint or fallow directive comment: it is addressed to this repo's
@@ -28,32 +26,21 @@ const CHECKER_DIRECTIVE = /^\s*\/\/\s*(?:oxlint-(?:disable|enable)|fallow-ignore
 
 const RELATIVE_SRC = /^\.\.?\//u;
 
-function isProcessFile(value: unknown): value is ProcessFile {
-  return typeof value === "function";
-}
-
-/**
- * markdown-magic's `processFile` runs only the transforms it is given. Its `markdownMagic` merges
- * them over its built-ins, which would keep `remote` fetching URLs and `TOC` rewriting its block.
- *
- * @returns markdown-magic's `processFile`.
- * @throws Error when markdown-magic exports no `processFile` function.
- */
-function loadProcessFile(): ProcessFile {
-  // markdown-magic is CommonJS and ships no types, so it is loaded as an untyped value and narrowed.
-  const module: unknown = createRequire(import.meta.url)("markdown-magic");
-  const processFile = property(module, "processFile");
-  if (!isProcessFile(processFile)) {
-    throw new Error("markdown-magic exports no processFile function");
+function parseAttributes(attributes: string): Map<string, string> {
+  const parsed = new Map<string, string>();
+  for (const { groups } of attributes.matchAll(ATTRIBUTE)) {
+    if (groups?.["name"] !== undefined && groups["value"] !== undefined) {
+      parsed.set(groups["name"], groups["value"]);
+    }
   }
-  return processFile;
+  return parsed;
 }
 
-function embed({ options, srcPath: markdownPath }: TransformInput): string {
-  const src = property(options, "src");
-  const header = property(options, "header");
-  if (typeof markdownPath !== "string" || typeof src !== "string") {
-    throw new Error(`a CODE block in ${String(markdownPath)} has no src option`);
+async function fence(markdownPath: string, attributes: string): Promise<string> {
+  const options = parseAttributes(attributes);
+  const src = options.get("src");
+  if (src === undefined) {
+    throw new Error(`a CODE block in ${markdownPath} has no double-quoted src option`);
   }
   if (!RELATIVE_SRC.test(src)) {
     throw new Error(`${markdownPath}: CODE src "${src}" must start with ./ or ../`);
@@ -61,7 +48,7 @@ function embed({ options, srcPath: markdownPath }: TransformInput): string {
   const codePath = resolve(dirname(markdownPath), src);
   let code: string;
   try {
-    code = readFileSync(codePath, "utf8");
+    code = await readFile(codePath, "utf8");
   } catch (error) {
     throw new Error(`${markdownPath}: cannot read CODE src ${codePath}`, { cause: error });
   }
@@ -69,49 +56,53 @@ function embed({ options, srcPath: markdownPath }: TransformInput): string {
     .replace(/\n$/u, "")
     .split("\n")
     .filter((line) => !CHECKER_DIRECTIVE.test(line));
-  if (typeof header === "string") shown.unshift(header);
+  const header = options.get("header");
+  if (header !== undefined) shown.unshift(header);
   return [`${FENCE}ts`, ...shown, FENCE].join("\n");
 }
 
-async function embedFile(processFile: ProcessFile, file: string, content: string): Promise<string> {
-  const processed = await processFile({
-    content,
-    srcPath: file,
-    open: "docs",
-    close: "/docs",
-    transforms: { CODE: embed },
-  });
-  const updated = property(processed, "updatedContents");
-  if (typeof updated !== "string") {
-    throw new TypeError(`markdown-magic returned no updated contents for ${file}`);
+async function embedFile(markdownPath: string, markdown: string): Promise<string> {
+  const blocks = [...markdown.matchAll(CODE_BLOCK)];
+  const fences = await Promise.all(
+    blocks.map(async ({ groups }) => fence(markdownPath, groups?.["attributes"] ?? "")),
+  );
+  let embedded = "";
+  let end = 0;
+  for (const [index, block] of blocks.entries()) {
+    const { attributes = "", before = "", content = "", after = "" } = block.groups ?? {};
+    // A block holding no text, or text flush against a marker, gets the fence on its own lines.
+    const opening = content === "" || before === "" ? "\n" : before;
+    const closing = content === "" || after === "" ? "\n" : after;
+    embedded += markdown.slice(end, block.index);
+    embedded += `<!-- docs CODE${attributes}-->${opening}${fences[index]}${closing}<!-- /docs -->`;
+    end = block.index + block[0].length;
   }
-  return updated;
+  return embedded + markdown.slice(end);
 }
 
 /**
  * Rewrite each `CODE` block in the given markdown files to a `ts` fence holding its source file,
- * without the lines that hold only an oxlint or fallow directive, under the block's `header` option if any.
- * Markers other than `CODE` are left as they are. No file is written until every file has been
- * embedded.
+ * without the lines that hold only an oxlint or fallow directive, under the block's `header` option
+ * if any. Markers other than `CODE` are left as they are, and the newlines around a block's content
+ * are kept as written. No file is written until every file has been embedded.
  *
  * @param files - Paths of the markdown files to rewrite.
  * @returns The markdown files that changed.
- * @throws Error naming the markdown file when a `CODE` block has no `src` option or its `src` does
- *   not start with `./` or `../`, or naming the path of a source file that cannot be read.
- * @throws Error when markdown-magic exports no `processFile` function.
- * @throws TypeError when markdown-magic returns no updated contents.
+ * @throws Error naming the markdown file when a `CODE` block has no double-quoted `src` option or
+ *   its `src` does not start with `./` or `../`, or naming the path of a source file that cannot be
+ *   read.
  * @throws Error from the filesystem when a markdown file cannot be read or written.
  */
 export async function embedCode(files: readonly string[]): Promise<string[]> {
-  const processFile = loadProcessFile();
-  const changes: [file: string, content: string][] = [];
-  for (const file of files) {
-    const original = readFileSync(file, "utf8");
-    const updated = await embedFile(processFile, file, original);
-    if (updated !== original) changes.push([file, updated]);
-  }
-  for (const [file, content] of changes) writeFileSync(file, content);
-  return changes.map(([file]) => file);
+  const embeddings = await Promise.all(
+    files.map(async (file) => {
+      const original = await readFile(file, "utf8");
+      return { file, original, updated: await embedFile(file, original) };
+    }),
+  );
+  const changed = embeddings.filter(({ original, updated }) => updated !== original);
+  await Promise.all(changed.map(async ({ file, updated }) => writeFile(file, updated)));
+  return changed.map(({ file }) => file);
 }
 
 if (import.meta.main) {

@@ -100,6 +100,50 @@ describe("embedCode", () => {
     });
   });
 
+  describe("when a CODE block's content is stale", () => {
+    it.each([
+      { layout: "one newline", around: "\n" },
+      { layout: "a blank line", around: "\n\n" },
+    ])("keeps $layout around the fence", async ({ around }) => {
+      const dir = createProject({
+        "x.ts": "export const x = 1;\n",
+        "README.md": `<!-- docs CODE src="./x.ts" -->${around}stale${around}<!-- /docs -->\n`,
+      });
+
+      await embedCode([join(dir, "README.md")]);
+
+      expect(read(dir, "README.md")).toBe(
+        `<!-- docs CODE src="./x.ts" -->${around}${FENCE}ts\nexport const x = 1;\n${FENCE}${around}<!-- /docs -->\n`,
+      );
+    });
+  });
+
+  describe("when a CODE block with attributes on their own lines is up to date", () => {
+    it("returns no changed files", async () => {
+      const dir = createProject({
+        "x.ts": "export const x = 1;\n",
+        "README.md": [
+          "<!-- docs CODE",
+          '  src="./x.ts"',
+          '  header="// x.ts"',
+          "-->",
+          "",
+          `${FENCE}ts`,
+          "// x.ts",
+          "export const x = 1;",
+          FENCE,
+          "",
+          "<!-- /docs -->",
+          "",
+        ].join("\n"),
+      });
+
+      const changed = await embedCode([join(dir, "README.md")]);
+
+      expect(changed).toStrictEqual([]);
+    });
+  });
+
   describe("when a markdown file holds no CODE block", () => {
     it("returns no changed files", async () => {
       const dir = createProject({ "README.md": "# Title\n\nPlain text.\n" });
@@ -107,6 +151,30 @@ describe("embedCode", () => {
       const changed = await embedCode([join(dir, "README.md")]);
 
       expect(changed).toStrictEqual([]);
+    });
+
+    it("leaves a block with another marker unchanged", async () => {
+      const dir = createProject({ "README.md": "<!-- docs OTHER -->\nkeep\n<!-- /docs -->\n" });
+
+      const changed = await embedCode([join(dir, "README.md")]);
+
+      expect(changed).toStrictEqual([]);
+    });
+  });
+
+  describe("when a CODE block has no double-quoted src", () => {
+    it.each([
+      { attributes: "no attribute", opening: "<!-- docs CODE -->" },
+      { attributes: "a single-quoted src", opening: "<!-- docs CODE src='./x.ts' -->" },
+    ])("rejects naming the markdown file with $attributes", async ({ opening }) => {
+      const dir = createProject({
+        "x.ts": "export const x = 1;\n",
+        "b.md": `${opening}\nstale\n<!-- /docs -->\n`,
+      });
+
+      const run = embedCode([join(dir, "b.md")]);
+
+      await expect(run).rejects.toThrow(join(dir, "b.md"));
     });
   });
 

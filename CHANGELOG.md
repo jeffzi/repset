@@ -11,6 +11,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Reword the error for two flags that cannot be given together, such as `--list` with `--once`.
 
+### Fixed
+
+- Say that contenders failed, instead of asking for more rounds, when a contest has fewer than two
+  finished contenders to judge.
+
 ## [0.2.0] - 2026-11-19
 
 ### Added

@@ -38,6 +38,11 @@ const JUDGED_FOOTER =
 const NONE_JUDGED_FOOTER =
   "No contest was judged: a verdict needs more rounds than these contests ran. Without a verdict, these medians do not order the contenders.";
 
+const NONE_FINISHED_FOOTER =
+  "No contest was judged: a verdict needs two contenders that finished, and each of these contests had fewer.";
+
+const TOO_FEW_FINISHED = "fewer than two contenders finished";
+
 type Style = "bold" | "dim" | "red" | "green";
 
 type Align = "left" | "right";
@@ -310,6 +315,11 @@ function contenderCells(contest: Contest, result: MeasuredResult): string[] {
   return [label, formatTime(result.median), `${ratio}${interval}`, rank];
 }
 
+/** Whether two or more of `contest`'s contenders finished, as a verdict needs. */
+function twoFinished(contest: Contest): boolean {
+  return contest.contenders.filter(({ median }) => median !== null).length >= 2;
+}
+
 /**
  * Lays out one contest's sub-table.
  *
@@ -318,7 +328,8 @@ function contenderCells(contest: Contest, result: MeasuredResult): string[] {
  * @param color - Whether to show the name bold, the rounds, rules, header and `not judged` line dim
  *   and each failure in red.
  * @returns The contest's name and rounds, a rule, the column header, a rule, a row per contender
- *   in the entry's order, then the `not judged` line when the contest was not judged.
+ *   in the entry's order, then, when the contest was not judged, the `not judged` line: its rounds,
+ *   or that fewer than two contenders finished.
  */
 function contestLines(
   contest: Contest,
@@ -332,6 +343,7 @@ function contestLines(
   const judged = contest.pairs.length > 0;
   const header = judged ? CONTEST_HEADER : CONTEST_HEADER.slice(0, 2);
   const rounds = plural(contest.rounds, "round");
+  const reason = twoFinished(contest) ? rounds : TOO_FEW_FINISHED;
   return [
     `${paint("bold", contest.name, color)}${paint("dim", ` · ${rounds}`, color)}`,
     ...boxLines(
@@ -344,7 +356,7 @@ function contestLines(
       results,
       color,
     ),
-    ...(judged ? [] : [paint("dim", `not judged: ${rounds}`, color)]),
+    ...(judged ? [] : [paint("dim", `not judged: ${reason}`, color)]),
   ];
 }
 
@@ -406,11 +418,14 @@ function sectionLines(blocks: readonly Block[], color: boolean): string[] {
  *
  * @param contests - The contests that ran, at least one.
  * @returns How many contests were judged over how many rounds and how to read ranks, or that none
- *   was, then a line per contest that ended with a tie, recommending twice its rounds.
+ *   was, blaming the rounds when some contest had two contenders that finished and the failed
+ *   contenders otherwise, then a line per contest that ended with a tie, recommending twice its
+ *   rounds.
  */
 function contestFooter(contests: readonly Contest[]): string[] {
   const judged = contests.filter(({ pairs }) => pairs.length > 0);
-  if (judged.length === 0) return [NONE_JUDGED_FOOTER];
+  if (judged.length === 0)
+    return [contests.some(twoFinished) ? NONE_JUDGED_FOOTER : NONE_FINISHED_FOOTER];
   const low = Math.min(...judged.map(({ rounds }) => rounds));
   const high = Math.max(...judged.map(({ rounds }) => rounds));
   const rounds = low === high ? plural(low, "round") : `${String(low)}–${String(high)} rounds`;

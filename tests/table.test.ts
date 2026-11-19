@@ -193,6 +193,26 @@ function judgedResults(name: string, [fast, slow]: readonly [string, string]): M
   return [contenderResult(name, fast, 100), contenderResult(name, slow, 200)];
 }
 
+/** A contest not judged over 9 rounds, one contender measured and one failed, with its results. */
+function unfinishedContest(
+  name: string,
+  [finished, failedKey]: readonly [string, string],
+  median: number,
+): { results: Result[]; entry: Contest } {
+  return {
+    results: [
+      contenderResult(name, finished, median),
+      failedContender(`${name}/${failedKey}`, "fn", "kiwi"),
+    ],
+    entry: contest(
+      name,
+      9,
+      [contender(`${name}/${finished}`, median), contender(`${name}/${failedKey}`, null)],
+      [],
+    ),
+  };
+}
+
 /** The lines of the table of `results` and `contests`, the last one empty after the closing newline. */
 function tableLines(results: readonly Result[], contests: readonly Contest[] = []): string[] {
   return formatTable(results, contests, { color: false }).split("\n");
@@ -547,6 +567,18 @@ describe("formatTable", () => {
         expect.stringMatching(/\b1 round$/u),
       ]);
     });
+
+    describe("when fewer than two of its contenders finished", () => {
+      it("ends the sub-table with a not judged line that holds no round count", () => {
+        const { results, entry } = unfinishedContest("concat", ["join", "loop"], 806);
+
+        const lines = tableLines(results, [entry]);
+
+        const notJudged = lines[rowIndex(lines, "loop") + 1];
+        expect(notJudged).toMatch(/\S/u);
+        expect(notJudged).not.toMatch(/\bround/u);
+      });
+    });
   });
 
   describe("when a contest ran", () => {
@@ -563,6 +595,42 @@ describe("formatTable", () => {
         const text = footer(results, contests);
 
         expect(text).not.toMatch(/\d/u);
+      });
+
+      describe("when no contest had two finished contenders", () => {
+        it("does not blame the rounds in the footer", () => {
+          const { results, entry } = unfinishedContest("concat", ["join", "loop"], 806);
+
+          const text = footer(results, [entry]);
+
+          expect(text).toMatch(/\S/u);
+          expect(text).not.toMatch(/\bround/u);
+        });
+      });
+
+      describe("when one contest had two finished contenders and another did not", () => {
+        it("blames the rounds in the footer as when every contest had them", () => {
+          const unfinished = unfinishedContest("parse", ["regex", "split"], 100);
+          const finishedResults = [
+            contenderResult("concat", "join", 806),
+            contenderResult("concat", "loop", 1880),
+          ];
+          const finishedContest = contest(
+            "concat",
+            9,
+            [contender("concat/join", 806), contender("concat/loop", 1880)],
+            [],
+          );
+          const roundsFooter = footer(finishedResults, [finishedContest]);
+
+          const text = footer(
+            [...unfinished.results, ...finishedResults],
+            [unfinished.entry, finishedContest],
+          );
+
+          expect(roundsFooter).toMatch(/\bround/u);
+          expect(text).toBe(roundsFooter);
+        });
       });
     });
 

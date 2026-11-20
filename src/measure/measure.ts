@@ -309,10 +309,10 @@ function checkedRatioToEmptyBody(bodyMeanNs: number, kind: Lifecycle, sampling: 
  * state then reads up to 2.3 times slower in that process. The minor collection first compacts the
  * state, so the full one moves it as a block.
  *
- * @param gc - The collector `measure` read from the runtime.
+ * @param gc - The runtime's exposed collector.
  * @throws MeasureError in phase `child` when the collector throws, with its value as cause.
  */
-function collectGarbage(gc: NonNullable<typeof globalThis.gc>): void {
+export function collectGarbage(gc: NonNullable<typeof globalThis.gc>): void {
   try {
     gc({ type: "minor" });
     gc();

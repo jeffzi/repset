@@ -3,7 +3,12 @@
 // reported, and prints `{"median": <ns per call>}` on stdout.
 //
 //   <node --import tsx | bun> --expose-gc baseline-child.ts <body> <calls per sample> <samples>
-import { exposedGc, runtimeNoInline, summarize } from "../../src/measure/measure.js";
+import {
+  collectGarbage,
+  exposedGc,
+  runtimeNoInline,
+  summarize,
+} from "../../src/measure/measure.js";
 import { WARMUP_MIN_MS, WARMUP_MIN_SAMPLES } from "../../src/measure/sampler.js";
 import {
   BODIES,
@@ -58,7 +63,7 @@ function run(state: State, gc: NodeJS.GCFunction): Float64Array {
     for (let call = 0; call < calls; call++) body(state);
     warmed += 1;
   }
-  gc();
+  collectGarbage(gc);
   const spans = new Float64Array(samples);
   for (let sample = 0; sample < samples; sample++) {
     const start = performance.now();

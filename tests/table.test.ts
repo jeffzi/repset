@@ -937,6 +937,7 @@ describe("formatTable", () => {
 describe("visibleWidth", () => {
   it.each([
     { text: "梨", label: "a Han character", width: 2 },
+    { text: "🍌", label: "a banana emoji", width: 2 },
     { text: "rose\u0301", label: "a combining mark", width: 4 },
     { text: paint("red", "fig", true), label: "escape codes", width: 3 },
   ])("counts the terminal columns of text with $label", ({ text, width }) => {

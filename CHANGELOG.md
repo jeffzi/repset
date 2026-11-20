@@ -23,6 +23,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - Stop the run and exit 141 instead of crashing when stderr's reader closes early, as for stdout.
+- Stop Node from reading a benchmark that walks its state up to twice as slow in some processes.
 
 ## [0.2.0] - 2026-11-19
 

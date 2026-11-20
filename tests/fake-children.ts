@@ -28,6 +28,7 @@ export function found(runtime: Runtime): FoundRuntime {
   };
 }
 
+/** A runtime lookup that finds every runtime, as {@link found} describes it. */
 export const findAny: FindRuntime = async (runtime) => found(runtime);
 
 /** A measurement whose median is `median`. */
@@ -53,6 +54,7 @@ export function measuredOutcome(median: number): Outcome {
   return { status: "ok", result: measured(median), output: "" };
 }
 
+/** An outcome in which the child ran its case once and it passed. */
 export const ranOnce: Outcome = { status: "ok", result: { status: "ok" }, output: "" };
 
 /** A case to list, whose benchmark name defaults to its id and whose contender defaults to `null`. */

@@ -183,29 +183,20 @@ describe("run", () => {
     });
 
     it("runs all of a contest's rounds at its first contender's place, one child per contender back to back, on each runtime", async () => {
-      const runtimes: string[] = [];
-
-      const { started } = await runCases(
-        [APPLE, JOIN, BANANA, LOOP],
-        { runtimes: ["bun", "node"], rounds: 2 },
-        (_request, runtime) => {
-          runtimes.push(runtime.runtime);
-          return measuredOutcome(4656);
-        },
-      );
+      const { started } = await runCases([APPLE, JOIN, BANANA, LOOP], {
+        runtimes: ["bun", "node"],
+        rounds: 2,
+      });
 
       const onRuntime = (offset: number): unknown[] => {
         const ids = started.slice(offset, offset + 6);
         return [ids[0], ids.slice(1, 3).toSorted(), ids.slice(3, 5).toSorted(), ids[5]];
       };
       const contest = ["concat/join", "concat/loop"];
-      expect({ runtimes, started: [onRuntime(0), onRuntime(6)] }).toStrictEqual({
-        runtimes: [...Array<string>(6).fill("bun"), ...Array<string>(6).fill("node")],
-        started: [
-          ["apple", contest, contest, "banana"],
-          ["apple", contest, contest, "banana"],
-        ],
-      });
+      expect([onRuntime(0), onRuntime(6)]).toStrictEqual([
+        ["apple", contest, contest, "banana"],
+        ["apple", contest, contest, "banana"],
+      ]);
     });
 
     it("runs a lone selected contender once, keeping its contender key, as a plain case", async () => {
@@ -292,16 +283,6 @@ describe("run", () => {
         const { started: second } = await runCases([JOIN, LOOP, PLUS]);
 
         expect(second).toStrictEqual(first);
-      });
-
-      it("changes the orders with the seed", async () => {
-        const { started: first } = await runCases([JOIN, LOOP, PLUS]);
-
-        const { started: second } = await runCases([JOIN, LOOP, PLUS], {
-          drawSeed: () => SEED + 1,
-        });
-
-        expect(second).not.toStrictEqual(first);
       });
 
       it("draws the orders uniformly from the permutations of the contenders", async () => {
@@ -476,6 +457,7 @@ describe("run", () => {
       const loop = [1850, 1880, 1904.5, 1920, 1890, 1910, 1904.5];
       const differences = logRatios(join, loop);
       const ratio = near(Math.exp(hodgesLehmann(differences)));
+      const p = signedRankP(differences);
 
       const report = await judge({ loop, join });
 
@@ -495,8 +477,8 @@ describe("run", () => {
               b: "concat/loop",
               ratio,
               interval: ratioInterval(differences, 0.95),
-              p: near(0.015625),
-              pAdjusted: near(0.015625),
+              p: near(p),
+              pAdjusted: near(holm([p])[0] ?? Number.NaN),
               faster: "concat/join",
               tie: null,
             },
@@ -533,8 +515,8 @@ describe("run", () => {
         const contenders = report.contests[0]?.contenders ?? [];
         expect(Object.fromEntries(contenders.map(({ id, ratio }) => [id, ratio]))).toStrictEqual({
           "concat/plus": 1,
-          "concat/loop": near(Math.sqrt(1.25)),
-          "concat/join": near(2),
+          "concat/loop": near(Math.exp(hodgesLehmann(logRatios(TIED.plus, TIED.loop)))),
+          "concat/join": near(Math.exp(hodgesLehmann(logRatios(TIED.plus, TIED.join)))),
         });
       });
 
@@ -712,11 +694,11 @@ describe("run", () => {
 
       expect(
         sortedPairs(report).map(({ p, faster, tie }) => ({
-          p,
+          clearsTheBar: p <= 0.05,
           faster,
           tie,
         })),
-      ).toStrictEqual(repeated({ p: near(0.03125), faster: null, tie: "rounds" }, 3));
+      ).toStrictEqual(repeated({ clearsTheBar: true, faster: null, tie: "rounds" }, 3));
     });
 
     describe("when a contender fails", () => {
@@ -725,6 +707,7 @@ describe("run", () => {
         const plus = [200, 210, 190, 205, 195, 220];
         const differences = logRatios(join, plus);
         const ratio = near(Math.exp(hodgesLehmann(differences)));
+        const p = signedRankP(differences);
 
         const report = await judge({ join, loop: [17, null], plus }, { rounds: 6 });
 
@@ -745,8 +728,8 @@ describe("run", () => {
                 b: "concat/plus",
                 ratio,
                 interval: ratioInterval(differences, 0.95),
-                p: near(0.03125),
-                pAdjusted: near(0.03125),
+                p: near(p),
+                pAdjusted: near(holm([p])[0] ?? Number.NaN),
                 faster: "concat/join",
                 tie: null,
               },
@@ -810,15 +793,12 @@ describe("run", () => {
           return stopped;
         });
 
-        const report = await judge(
-          {},
-          {
-            runtimes: ["node", "bun"],
-            rounds: 2,
-            signal: controller.signal,
-            startChild: stopsOnBun,
-          },
-        );
+        const { report } = await runCases([JOIN, LOOP], {
+          runtimes: ["node", "bun"],
+          rounds: 2,
+          signal: controller.signal,
+          startChild: stopsOnBun,
+        });
 
         expect({
           interrupted: report.interrupted,

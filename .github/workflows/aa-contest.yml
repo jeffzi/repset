@@ -1,0 +1,59 @@
+name: A/A contest
+
+# Measurement only, never merged: the A/A contest of `.research/investigation/aa-contest.md`
+# repeated on a GitHub-hosted runner, to see how far the null spread moves on a noisier machine.
+on:
+  push:
+    branches: [measure-aa-contest-ci]
+  workflow_dispatch:
+
+# One contest at a time, so two runs never share a runner's noise budget or overwrite an artifact.
+concurrency:
+  group: aa-contest-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  aa-contest:
+    name: A/A contest, 100 rounds
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-mise # zizmor: ignore[self-repository] -- actionlint 1.7.12 rejects the $/ form
+        with:
+          install_args: --locked node bun aqua:go-task/task
+
+      - name: Build
+        run: task build
+
+      - name: Run the contest
+        run: |
+          mkdir -p out
+          {
+            echo "# aa-contest-ci — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "# machine: $(lscpu | sed -n 's/^Model name: *//p'), $(nproc) CPUs, $(. /etc/os-release && echo "$PRETTY_NAME")"
+            echo "# node $(node --version), bun $(bun --version), repset $(git rev-parse --short HEAD)"
+            echo "# command: node dist/cli.js scripts/aa-contest/aa.bench.ts --runtime node,bun --rounds 100 -o out/aa-contest-ci.json"
+            echo "# start load: $(cut -d' ' -f1-3 /proc/loadavg)"
+          } >out/aa-contest-ci.txt
+          status=0
+          node dist/cli.js scripts/aa-contest/aa.bench.ts --runtime node,bun --rounds 100 \
+            -o out/aa-contest-ci.json >>out/aa-contest-ci.txt 2>&1 || status=$?
+          {
+            echo "exit $status"
+            echo "# end load: $(cut -d' ' -f1-3 /proc/loadavg) — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >>out/aa-contest-ci.txt
+          tail -40 out/aa-contest-ci.txt
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: aa-contest-ci
+          path: out/

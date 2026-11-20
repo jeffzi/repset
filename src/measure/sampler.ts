@@ -223,7 +223,7 @@ export interface WarmupProgress {
 }
 
 /**
- * Starts a warmup's bookkeeping, before its first sample.
+ * Creates the warmup state a sampler's loop passes to `recordWarmup`, one sample at a time.
  *
  * @param resolutionMs - The timer resolution, in milliseconds.
  * @param fixed - The fixed calls per sample, or `undefined` to calibrate one.
@@ -252,7 +252,7 @@ export function recordWarmup(progress: WarmupProgress, spanMs: number): void {
 }
 
 /**
- * Ends a warmup's bookkeeping.
+ * Reads the count to time at and the warmup samples taken off a finished warmup.
  *
  * @param progress - The warmup's bookkeeping after its last sample.
  * @returns The count warmup ended on, and the samples it recorded.
@@ -383,7 +383,7 @@ function timeSharedStateSamples<State>(
  * @param timed - The clock, the body, and its state.
  * @param count - Calls per sample.
  * @param spans - Preallocated storage for the spans, in milliseconds.
- * @param attempt - The `collect` callback that runs before the samples, the `afterTiming` callback
+ * @param options - The `collect` callback that runs before the samples, the `afterTiming` callback
  *   that runs after the last sample, before the run is checked (absent means nothing), and the
  *   `minTime` and `minSamples` the run must pass.
  * @returns How many entries of `spans` were filled, whether the store filled first, and the run's
@@ -394,11 +394,11 @@ function timingAttempt<State>(
   timed: Timed<State>,
   count: number,
   spans: Float64Array,
-  attempt: Pick<SharedStateOptions<State>, "collect" | "afterTiming" | "minTime" | "minSamples">,
+  options: Pick<SharedStateOptions<State>, "collect" | "afterTiming" | "minTime" | "minSamples">,
 ): TimedAttempt {
-  attempt.collect();
-  const run = timeSharedStateSamples(timed, count, spans, attempt);
-  attempt.afterTiming?.();
+  options.collect();
+  const run = timeSharedStateSamples(timed, count, spans, options);
+  options.afterTiming?.();
   return run;
 }
 

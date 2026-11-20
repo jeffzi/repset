@@ -88,9 +88,7 @@ function summarizeCollections(entries: readonly PerformanceEntry[]): GcDuringTim
   let totalMs = 0;
   let maxMs = 0;
   for (const entry of entries) {
-    // `Reflect.get`, not a property access: the global `PerformanceEntry` type has no `detail`,
-    // and Node's `PerformanceNodeEntry` types it as `any`.
-    const kind = property(Reflect.get(entry, "detail"), "kind");
+    const kind = property(property(entry, "detail"), "kind");
     if (kind === GC_MINOR) minor += 1;
     if (kind === GC_MAJOR) major += 1;
     totalMs += entry.duration;

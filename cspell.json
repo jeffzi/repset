@@ -11,6 +11,7 @@
     "mitata",
     "pmndrs",
     "repset",
+    "scipy",
     "smol",
     "Taskfile",
     "taskkill",

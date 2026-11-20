@@ -28,7 +28,7 @@ export function found(runtime: Runtime): FoundRuntime {
   };
 }
 
-/** A runtime lookup that finds every runtime. */
+/** A runtime lookup that finds every runtime, as {@link found} describes it. */
 export const findAny: FindRuntime = async (runtime) => found(runtime);
 
 /** A measurement whose median is `median`. */
@@ -54,12 +54,37 @@ export function measuredOutcome(median: number): Outcome {
   return { status: "ok", result: measured(median), output: "" };
 }
 
-/** An outcome in which the child ran its case once. */
+/** An outcome in which the child ran its case once and it passed. */
 export const ranOnce: Outcome = { status: "ok", result: { status: "ok" }, output: "" };
 
+/** A case to list, whose benchmark name defaults to its id and whose contender defaults to `null`. */
+export interface CaseToList
+  extends
+    Pick<ListedCase, "id" | "setupPerCall">,
+    Partial<Pick<ListedCase, "name" | "contender">> {}
+
+/** The contender `key` of the contest `concat`. */
+export function contender(key: string): CaseToList {
+  return { id: `concat/${key}`, setupPerCall: false, name: "concat", contender: key };
+}
+
+/** A plain case run once per process. */
+export const APPLE: CaseToList = { id: "apple", setupPerCall: false };
+
+/** Another plain case run once per process. */
+export const BANANA: CaseToList = { id: "banana", setupPerCall: false };
+
 /** An outcome in which the child listed `cases`. */
-export function listed(cases: ListedCase[]): Outcome {
-  return { status: "ok", result: { status: "ok", cases }, output: "" };
+export function listed(cases: CaseToList[]): Outcome {
+  const listedCases = cases.map(
+    ({ id, setupPerCall, name = id, contender: key = null }): ListedCase => ({
+      id,
+      setupPerCall,
+      name,
+      contender: key,
+    }),
+  );
+  return { status: "ok", result: { status: "ok", cases: listedCases }, output: "" };
 }
 
 /** A child starter that fails its caller with a plain error if any child starts. */
@@ -82,9 +107,19 @@ export function failedOutcome(
 /** The failure of a cleanup teardown that threw an `Error`, as the child encodes it. */
 export const MELON = { message: "melon", stack: "at teardown" } as const;
 
+/** An answer that measures every request, and fails `concat/loop`'s second call in phase `fn` with `kiwi`. */
+export function failsLoopInRoundTwo(): (request: Asked) => Outcome {
+  let loopCalls = 0;
+  return (request) => {
+    if (request.id !== "concat/loop") return measuredOutcome(4656);
+    loopCalls += 1;
+    return loopCalls === 2 ? failedOutcome("fn", "kiwi") : measuredOutcome(17);
+  };
+}
+
 /** A child starter that lists the one case `listCase` gives per file and answers the rest with `answer`. */
 export function starter(
-  listCase: (file: string) => { id: string; setupPerCall: boolean },
+  listCase: (file: string) => CaseToList,
   answer: (
     request: Asked,
     runtime: FoundRuntime,
@@ -94,5 +129,16 @@ export function starter(
   return async (runtime, request, options) => {
     if (request.mode === "list") return listed([listCase(request.file)]);
     return answer(request, runtime, options);
+  };
+}
+
+/** A child starter that lists `cases` in every file and answers the rest with `answer`. */
+export function listingStarter(
+  cases: CaseToList[],
+  answer: (request: Asked, runtime: FoundRuntime) => Outcome | Promise<Outcome>,
+): StartChild {
+  return async (runtime, request) => {
+    if (request.mode === "list") return listed(cases);
+    return answer(request, runtime);
   };
 }

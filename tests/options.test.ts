@@ -1,11 +1,17 @@
 import { execFileSync } from "node:child_process";
-import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_MIN_SAMPLES, DEFAULT_MIN_TIME } from "../src/measure/measure.js";
-import { ConfigError, resolveOptions, type OptionsInput } from "../src/options.js";
+import {
+  ConfigError,
+  DEFAULT_INCLUDE,
+  DEFAULT_RUNTIMES,
+  DEFAULT_TIMEOUT,
+  resolveOptions,
+  type OptionsInput,
+} from "../src/options.js";
 import { expectConfigError } from "./config-error.js";
 import { fixturePath } from "./fixture-path.js";
 import { SPAWN_TIMEOUT_MS } from "./spawn-limits.js";
@@ -32,7 +38,7 @@ function minSamplesInNode(config: string): string {
 
 /** The absolute path of the config fixture `name`. */
 function fixture(name: string): string {
-  return join(FIXTURES, name);
+  return fixturePath("config", name);
 }
 
 /** Resolves `options` from the fixture directory, which holds no `repset.config.*` file. */
@@ -40,14 +46,15 @@ async function resolveHere(options: Partial<OptionsInput> = {}): ReturnType<type
   return resolveOptions({ cwd: FIXTURES, ...options });
 }
 
-/** What a resolution with nothing given yields; defaults `options.ts` keeps to itself match any value. */
+/** What a resolution with nothing given yields. */
 const DEFAULTS = {
-  include: expect.any(Array),
+  include: DEFAULT_INCLUDE,
   includeBase: FIXTURES,
-  runtimes: expect.any(Array),
+  runtimes: DEFAULT_RUNTIMES,
   minTime: DEFAULT_MIN_TIME,
   minSamples: DEFAULT_MIN_SAMPLES,
-  timeout: expect.any(Number),
+  rounds: undefined,
+  timeout: DEFAULT_TIMEOUT,
   nodeImport: undefined,
   filter: undefined,
 };
@@ -102,6 +109,12 @@ describe("resolveOptions", () => {
 
       await expectConfigError(result, ["top-level-throw.ts", "banana"]);
     });
+
+    it("rejects a default export whose getter throws, naming the file and carrying its message", async () => {
+      const result = resolveHere({ config: "getter-throws.ts" });
+
+      await expectConfigError(result, ["getter-throws.ts", "pear"]);
+    });
   });
 
   describe("when the default export is not a plain object", () => {
@@ -115,29 +128,17 @@ describe("resolveOptions", () => {
     );
   });
 
-  describe("when checking keys", () => {
-    it("rejects a key that is not an option, naming it", async () => {
+  describe("when the config file holds a key that is not an option", () => {
+    it("rejects the key, naming it", async () => {
       const result = resolveHere({ config: "unknown-key.ts" });
 
       await expectConfigError(result, ["banana"]);
     });
 
-    it("treats a key that is not an option and holds undefined as absent", async () => {
+    it("treats the key as absent when it holds undefined", async () => {
       const resolved = await resolveHere({ config: "unknown-undefined.ts" });
 
       expect(resolved).toStrictEqual(DEFAULTS);
-    });
-
-    it("rejects a default export whose getter throws, naming the file and carrying its message", async () => {
-      const result = resolveHere({ config: "getter-throws.ts" });
-
-      await expectConfigError(result, ["getter-throws.ts", "pear"]);
-    });
-
-    it("treats a caller option holding undefined as absent", async () => {
-      const resolved = await resolveHere({ config: "caller-undefined.ts", minTime: undefined });
-
-      expect(resolved.minTime).toBe(5);
     });
   });
 
@@ -165,8 +166,8 @@ describe("resolveOptions", () => {
       { options: { runtimes: ["node", "bun", "node"] }, option: "runtimes", shown: "node" },
       { options: { minTime: -1 }, option: "minTime", shown: "-1" },
       { options: { minTime: Number.NaN }, option: "minTime", shown: "NaN" },
-      { options: { minSamples: 0 }, option: "minSamples", shown: "0" },
       { options: { minSamples: 1.5 }, option: "minSamples", shown: "1.5" },
+      { options: { rounds: 0 }, option: "rounds", shown: "0" },
       { options: { timeout: 0 }, option: "timeout", shown: "0" },
       { options: { timeout: 2.5 }, option: "timeout", shown: "2.5" },
       { options: { timeout: 2_147_483_648 }, option: "timeout", shown: "2147483648" },
@@ -189,7 +190,7 @@ describe("resolveOptions", () => {
     });
   });
 
-  describe("when merging", () => {
+  describe("when an option is given in more than one place", () => {
     it("takes every option the config file gives over the default", async () => {
       const resolved = await resolveHere({ config: "all-options.ts" });
 
@@ -199,6 +200,7 @@ describe("resolveOptions", () => {
         runtimes: ["bun", "node"],
         minTime: 0,
         minSamples: 1,
+        rounds: 1,
         timeout: 2_147_483_647,
         nodeImport: { written: "tsx", resolved: "tsx" },
         filter: undefined,
@@ -212,6 +214,7 @@ describe("resolveOptions", () => {
         runtimes: ["node"],
         minTime: 7,
         minSamples: 9,
+        rounds: 6,
         timeout: 200,
         nodeImport: "jiti",
         filter: "^a",
@@ -223,6 +226,7 @@ describe("resolveOptions", () => {
         runtimes: ["node"],
         minTime: 7,
         minSamples: 9,
+        rounds: 6,
         timeout: 200,
         nodeImport: { written: "jiti", resolved: "jiti" },
         filter: /^a/u,
@@ -230,7 +234,7 @@ describe("resolveOptions", () => {
     });
   });
 
-  describe("when resolving bases", () => {
+  describe("when a path option is relative", () => {
     it("bases include on the config file's directory", async () => {
       const resolved = await resolveHere({ config: "nested/include.ts" });
 

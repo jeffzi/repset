@@ -5,7 +5,7 @@
  * `schema` and never a key.
  */
 
-import type { ChildError, Measured } from "./child.js";
+import type { ChildError, ListedCase, Measured } from "./child.js";
 import type { Runtime } from "./measure/runtime.js";
 
 /** Every option that shaped the run, after the caller's options and the config were merged. */
@@ -16,8 +16,10 @@ export interface ReportOptions {
   readonly filter: string | null;
   readonly minTime: number;
   readonly minSamples: number;
-  readonly rounds: null;
-  readonly seed: null;
+  /** The `rounds` option, or `null` when each contest's size sets its count. */
+  readonly rounds: number | null;
+  /** The seed of the round orders, or `null` when the run holds no contest. */
+  readonly seed: number | null;
   readonly timeout: number;
   /** The module Node children import first, as the config file or the caller wrote it. */
   readonly nodeImport: string | null;
@@ -47,7 +49,7 @@ export interface MeasuredProcess extends Pick<Measured, "stats" | "sampling" | "
 }
 
 /** The process of a failed case, holding `null` for what it did not reach. */
-export interface FailedProcess {
+interface FailedProcess {
   readonly round: number;
   readonly orderInRound: number;
   readonly stats: null;
@@ -58,15 +60,11 @@ export interface FailedProcess {
 }
 
 /** What every result holds, whether its case was measured or failed. */
-interface ResultBase {
-  readonly id: string;
-  readonly name: string;
-  readonly contender: null;
+export interface ResultBase extends Pick<ListedCase, "id" | "name" | "contender" | "setupPerCall"> {
   readonly params: Readonly<Record<string, never>>;
   /** The benchmark file, relative to the working directory, with `/` separators. */
   readonly file: string;
   readonly runtime: { readonly name: Runtime; readonly version: string };
-  readonly setupPerCall: boolean;
 }
 
 /** A case that was measured: its median is the median of its processes' medians. */
@@ -77,16 +75,68 @@ export interface MeasuredResult extends ResultBase {
   readonly processes: readonly [MeasuredProcess, ...MeasuredProcess[]];
 }
 
-/** A case that failed: `error` says why, and its one process holds `null` for what it did not reach. */
+/**
+ * A case that failed: `error` says why, and its processes are those that ran, the failed one last,
+ * holding `null` for what it did not reach.
+ */
 export interface FailedResult extends ResultBase {
   readonly status: "failed";
   readonly error: ResultError;
   readonly median: null;
-  readonly processes: readonly [FailedProcess];
+  readonly processes: readonly [...MeasuredProcess[], FailedProcess];
 }
 
 /** One case's result on one runtime. */
 export type Result = MeasuredResult | FailedResult;
+
+/**
+ * A contender of a judged contest, or of one that cannot be judged with `ratio` and `rank` `null`;
+ * a failed contender has a `null` median too.
+ */
+export interface ContestContender {
+  readonly id: string;
+  readonly median: number | null;
+  /** Its pair's ratio with the fastest contender, 1 for the fastest itself. */
+  readonly ratio: number | null;
+  /** 1 plus the number of contenders proven faster. */
+  readonly rank: number | null;
+}
+
+/** The verdict on two contenders of a contest, `a` the earlier in the contest's contenders. */
+export interface ContestPair {
+  readonly a: string;
+  readonly b: string;
+  /** The exp of the Hodges–Lehmann estimate of the per-round `ln(median_b / median_a)`. */
+  readonly ratio: number;
+  /** The exact signed-rank interval of `ratio` at the level `1 − 0.05 / pairs`. */
+  readonly interval: readonly [number, number];
+  /** The exact two-sided signed-rank p value over the rounds. */
+  readonly p: number;
+  /** `p` adjusted by Holm's over the contest's pairs. */
+  readonly pAdjusted: number;
+  /** The faster contender's case id, or `null` when the pair is tied. */
+  readonly faster: string | null;
+  /**
+   * Why the pair has no verdict:
+   *
+   * - `"rounds"`: `pAdjusted` is above 0.05, so the rounds did not tell the contenders apart.
+   * - `"timer"`: `pAdjusted` is at most 0.05, but `ratio` is within 1.25 timer resolutions per
+   *   call of 1, a gap too small for the timer to measure.
+   * - `null`: the pair is proven, and `faster` names the faster contender.
+   */
+  readonly tie: "rounds" | "timer" | null;
+}
+
+/** One contest on one runtime: its contenders, and a verdict per pair of those that never failed. */
+export interface Contest {
+  readonly name: string;
+  readonly params: Readonly<Record<string, never>>;
+  readonly runtime: ResultBase["runtime"];
+  readonly rounds: number;
+  /** Sorted by rank then median, by median alone when not judged, the failed ones last. */
+  readonly contenders: readonly ContestContender[];
+  readonly pairs: readonly ContestPair[];
+}
 
 /** The JSON document `run` returns; `schema` names its format version. */
 export interface Report {
@@ -101,5 +151,6 @@ export interface Report {
   readonly machine: Machine;
   /** The results that finished, in run order. */
   readonly results: readonly Result[];
-  readonly contests: readonly [];
+  /** The contests that finished, in run order. */
+  readonly contests: readonly Contest[];
 }

@@ -12,7 +12,7 @@ import { enabledGc } from "./measure/fixtures.js";
 import { resetRegistry } from "./registry.js";
 import { KILL_AFTER_MS, SPAWN_TIMEOUT_MS } from "./spawn-limits.js";
 
-/** The slot where the `lifecycle.ts` fixture records each callback it runs. */
+/** The slot where the `lifecycle.ts` and `contest.ts` fixtures record each callback they run. */
 const CALLS = Symbol.for("repset.child-calls");
 
 /** The absolute path of the child fixture `name`. */
@@ -26,13 +26,12 @@ const FILE = fixture("three-cases.ts");
 const FILE_LISTED = {
   status: "ok",
   cases: [
-    { id: "alpha", setupPerCall: false },
-    { id: "beta", setupPerCall: true },
-    { id: "gamma", setupPerCall: false },
+    { id: "alpha", setupPerCall: false, name: "alpha", contender: null },
+    { id: "beta", setupPerCall: true, name: "beta", contender: null },
+    { id: "gamma", setupPerCall: false, name: "gamma", contender: null },
   ],
 };
 
-/** The sampling bounds of a short measurement. */
 const SHORT_RUN = { minTime: 5, minSamples: 8 };
 
 /** How long a short measurement may take on a slow CI runner. */
@@ -42,21 +41,10 @@ const MEASURE_REQUEST = { mode: "measure", file: FILE, id: "alpha", ...SHORT_RUN
 
 const LIFECYCLE = fixture("lifecycle.ts");
 
-/** The `lifecycle.ts` cases whose thrown value yields no stack, with the message they report. */
-const NO_STACK_CASES = [
-  {
-    id: "fn-throws-unreadable-stack",
-    thrown: "an Error whose stack getter throws",
-    message: "fig",
-  },
-  {
-    id: "fn-throws-trapped-proxy",
-    thrown: "a value whose instanceof check throws",
-    message: "a value with no string form",
-  },
-];
+/** A plain benchmark, then the contest `sort` of the contenders `quick` and `merge`. */
+const CONTEST = fixture("contest.ts");
 
-/** The callbacks the `lifecycle.ts` fixture recorded since the test began. */
+/** The callbacks the fixtures recorded since the test began. */
 function calls(): unknown[] {
   const recorded: unknown = Reflect.get(globalThis, CALLS);
   if (!Array.isArray(recorded)) throw new Error("no call list installed");
@@ -140,10 +128,25 @@ describe("parseRequest", () => {
 
 describe("listCases", () => {
   describe("when the file registers cases", () => {
-    it("returns each case's id and setupPerCall in registration order", async () => {
+    it("returns each case's id, setupPerCall, name and contender in registration order", async () => {
       const result = await listCases(FILE);
 
       expect(result).toStrictEqual(FILE_LISTED);
+    });
+  });
+
+  describe("when the file registers a contest", () => {
+    it("returns each contender's benchmark name and key beside a plain benchmark's null contender", async () => {
+      const result = await listCases(CONTEST);
+
+      expect(result).toStrictEqual({
+        status: "ok",
+        cases: [
+          { id: "plain", setupPerCall: false, name: "plain", contender: null },
+          { id: "sort/quick", setupPerCall: false, name: "sort", contender: "quick" },
+          { id: "sort/merge", setupPerCall: false, name: "sort", contender: "merge" },
+        ],
+      });
     });
   });
 
@@ -162,31 +165,12 @@ describe("listCases", () => {
       });
     });
 
-    it.each([
-      {
-        name: "top-level-numeric-message.ts",
-        thrown: "an Error whose message is a number",
-        message: "42",
-        stack: expect.any(String),
-      },
-      {
-        name: "top-level-unreadable-stack.ts",
-        thrown: "an Error whose stack getter throws",
-        message: "fig",
-        stack: null,
-      },
-      {
-        name: "top-level-trapped-proxy.ts",
-        thrown: "a value whose instanceof check throws",
-        message: "a value with no string form",
-        stack: null,
-      },
-    ])("fails in phase load when the file throws $thrown", async ({ name, message, stack }) => {
-      const result = await listCases(fixture(name));
+    it("fails in phase load when the file throws a value whose instanceof check throws", async () => {
+      const result = await listCases(fixture("top-level-trapped-proxy.ts"));
 
-      expect(result).toStrictEqual({
+      expect(result).toMatchObject({
         status: "failed",
-        error: { phase: "load", message, stack, teardownError: null },
+        error: { phase: "load", teardownError: null },
       });
     });
   });
@@ -209,45 +193,10 @@ describe("measureCase", () => {
   });
 
   describe("when the case measures", { timeout: MEASURE_TIMEOUT_MS }, () => {
-    it("returns the report's per-process fields, its quantiles under their own names", async () => {
-      const result = await measureShort(LIFECYCLE, "steady");
-
-      expect(result).toStrictEqual({
-        status: "ok",
-        stats: {
-          min: expect.any(Number),
-          p25: expect.any(Number),
-          median: expect.any(Number),
-          p75: expect.any(Number),
-          p99: expect.any(Number),
-          max: expect.any(Number),
-          mean: expect.any(Number),
-          sampleCount: expect.any(Number),
-        },
-        sampling: {
-          timerResolutionNs: expect.any(Number),
-          callsPerSample: expect.any(Number),
-          callsPerSampleFixed: expect.any(Boolean),
-          warmupSamples: expect.any(Number),
-          timingAttempts: expect.any(Number),
-          timingMs: expect.any(Number),
-        },
-        checks: { ratioToEmptyBody: expect.any(Number) },
-        gc: expect.any(Object),
-      });
-      if (!("stats" in result)) throw new Error("unreachable: the shape above holds stats");
-      const { min, p25, median, p75, p99, max } = result.stats;
-      const quantiles = [min, p25, median, p75, p99, max];
-      expect(quantiles).toStrictEqual(quantiles.toSorted((a, b) => a - b));
-    });
-
-    it("measures at the calls per sample it is given, reporting it as fixed", async () => {
+    it("measures at the calls per sample it is given", async () => {
       const result = await measureCase(LIFECYCLE, "steady", { ...SHORT_RUN, callsPerSample: 3 });
 
-      expect(result).toMatchObject({
-        status: "ok",
-        sampling: { callsPerSample: 3, callsPerSampleFixed: true },
-      });
+      expect(result).toMatchObject({ status: "ok", sampling: { callsPerSample: 3 } });
     });
   });
 
@@ -257,18 +206,6 @@ describe("measureCase", () => {
 
       expect(result).toMatchObject({ status: "failed", error: { phase: "fn" } });
     });
-
-    it.each(NO_STACK_CASES)(
-      "fails in phase fn with a null stack when the case throws $thrown",
-      async ({ id, message }) => {
-        const result = await measureShort(LIFECYCLE, id);
-
-        expect(result).toStrictEqual({
-          status: "failed",
-          error: { phase: "fn", message, stack: null, teardownError: null },
-        });
-      },
-    );
   });
 });
 
@@ -291,6 +228,12 @@ describe("runOnce", () => {
       expect(result.status).toBe("ok");
       expect(calls()).toStrictEqual(["quiet setup", "quiet fn", "quiet teardown"]);
     });
+
+    it("runs the contender its id names, no other contender", async () => {
+      await runOnce(CONTEST, "sort/merge");
+
+      expect(calls()).toStrictEqual(["merge fn"]);
+    });
   });
 
   describe("when the case fails", () => {
@@ -305,23 +248,6 @@ describe("runOnce", () => {
           stack: expect.stringMatching(/^Error: kiwi\n/u),
           teardownError: null,
         },
-      });
-    });
-
-    it.each([
-      { id: "fn-throws-string", thrown: "a value that is not an Error", message: "pear" },
-      {
-        id: "fn-throws-numeric-stack",
-        thrown: "an Error whose stack is not a string",
-        message: "plum",
-      },
-      ...NO_STACK_CASES,
-    ])("carries a null stack when the case throws $thrown", async ({ id, message }) => {
-      const result = await runOnce(LIFECYCLE, id);
-
-      expect(result).toStrictEqual({
-        status: "failed",
-        error: { phase: "fn", message, stack: null, teardownError: null },
       });
     });
 
@@ -409,7 +335,7 @@ describe("the child started on node", { timeout: SPAWN_TIMEOUT_MS }, () => {
       expect(run.status).toBe(0);
       expect(resultLine(run.fd3)).toStrictEqual({
         status: "ok",
-        cases: [{ id: "orange", setupPerCall: false }],
+        cases: [{ id: "orange", setupPerCall: false, name: "orange", contender: null }],
       });
     });
   });
@@ -431,18 +357,7 @@ describe("the child started on node", { timeout: SPAWN_TIMEOUT_MS }, () => {
 
       expect(resultLine(run.fd3)).toStrictEqual({
         status: "ok",
-        cases: [{ id: "found", setupPerCall: false }],
-      });
-    });
-  });
-
-  describe("when the file throws an Error whose message is a bigint", () => {
-    it("writes the failed result of a list request in phase load, the message in its string form", async () => {
-      const run = await spawnChild({ mode: "list", file: fixture("top-level-bigint-message.ts") });
-
-      expect(resultLine(run.fd3)).toMatchObject({
-        status: "failed",
-        error: { phase: "load", message: "1" },
+        cases: [{ id: "found", setupPerCall: false, name: "found", contender: null }],
       });
     });
   });

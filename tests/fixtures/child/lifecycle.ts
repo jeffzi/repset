@@ -1,5 +1,4 @@
-import { bench } from "../../../src/child.js";
-import { trappedProxy, unreadableStackError } from "../../thrown-values.js";
+import { bench } from "../../../src/bench.js";
 
 const CALLS = Symbol.for("repset.child-calls");
 
@@ -44,23 +43,6 @@ bench("fn-throws", {
   },
 });
 
-bench("fn-throws-string", {
-  setup: () => 0,
-  fn: () => {
-    // oxlint-disable-next-line typescript/only-throw-error -- a thrown value that is not an Error is the input under test
-    throw "pear";
-  },
-});
-
-bench("fn-throws-numeric-stack", {
-  setup: () => 0,
-  fn: () => {
-    const error = new Error("plum");
-    Object.defineProperty(error, "stack", { value: 42 });
-    throw error;
-  },
-});
-
 bench("fn-and-teardown-throw", {
   setup: () => 0,
   fn: () => {
@@ -68,20 +50,5 @@ bench("fn-and-teardown-throw", {
   },
   teardown: () => {
     throw new Error("melon");
-  },
-});
-
-bench("fn-throws-unreadable-stack", {
-  setup: () => 0,
-  fn: () => {
-    throw unreadableStackError();
-  },
-});
-
-bench("fn-throws-trapped-proxy", {
-  setup: () => 0,
-  fn: () => {
-    // oxlint-disable-next-line typescript/only-throw-error -- a thrown value whose instanceof check throws is the input under test
-    throw trappedProxy();
   },
 });

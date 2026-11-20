@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { basename, join } from "node:path";
+import { WriteStream } from "node:tty";
 import { stripVTControlCharacters } from "node:util";
 
 import { expect, vi } from "vitest";
@@ -17,12 +18,15 @@ import {
   type StartChild,
 } from "./fake-children.js";
 import { parseReport, reportAt } from "./report-file.js";
-import { temporaryDir } from "./temporary-dir.js";
+import { temporaryProject } from "./temporary-dir.js";
 
 type Io = NonNullable<Parameters<typeof main>[1]>;
 
 /** The benchmark files every workspace holds; the fake children never import them. */
 const FILES = ["sort.bench.ts", "parse.bench.ts"];
+
+/** The file `runWithReport` writes the report to, relative to the workspace. */
+const REPORT_FILE = "report.json";
 
 /** The one case the fake listing child finds in `file`. */
 function caseOf(file: string): string {
@@ -75,10 +79,7 @@ function writeError(code: string): NodeJS.ErrnoException {
   return Object.assign(new Error(`write ${code}`), { code, syscall: "write" });
 }
 
-/**
- * A stream stand-in whose writes fail with `failure` until told otherwise; when `held`, a failed
- * write's `error` event waits for `emitHeld`.
- */
+/** A stream stand-in whose writes fail with `failure`, holding each `error` event when `held`. */
 function standIn(failure: Error | undefined, held = false): Captured {
   let error = failure;
   let reported = false;
@@ -120,17 +121,23 @@ export function closed(code: string): Captured {
   return standIn(writeError(code));
 }
 
-/**
- * A stream stand-in whose reader went away before the run, whose failed writes report `code` to
- * their callbacks and hold their `error` event until `emitHeld`.
- */
+/** A stream stand-in like {@link closed} whose failed writes hold `error` until `emitHeld`. */
 export function closedHeld(code: string): Captured {
   return standIn(writeError(code), true);
 }
 
-/** A stream stand-in that claims to be a terminal, with nothing written yet. */
+/** A stream stand-in that claims to be a terminal, reporting its color depth as a real one does. */
 export function terminal(): Captured {
-  return Object.assign(captured(), { isTTY: true as const });
+  return Object.assign(captured(), {
+    isTTY: true as const,
+    getColorDepth: (): number => WriteStream.prototype.getColorDepth.call(undefined, process.env),
+  });
+}
+
+/** Clears the variables a shell may set that change the command's runs or color. */
+export function clearShellEnv(): void {
+  vi.stubEnv("FORCE_COLOR", undefined);
+  vi.stubEnv("REPSET_CALLS_PER_SAMPLE", undefined);
 }
 
 /** Clears the color variables and claims a 256-color terminal, so a terminal stream shows color. */
@@ -147,9 +154,7 @@ export function styled(text: string): boolean {
 
 /** A fresh working directory holding the empty benchmark files, removed when the test ends. */
 export function workspace(): string {
-  const dir = temporaryDir("repset-command-");
-  for (const file of FILES) writeFileSync(join(dir, file), "");
-  return dir;
+  return temporaryProject("repset-command-", Object.fromEntries(FILES.map((file) => [file, ""])));
 }
 
 interface Ended {
@@ -185,20 +190,26 @@ export async function command(
   return { code, stdout: stdout.text, stderr: stderr.text };
 }
 
+interface EndedWithReport extends Ended {
+  readonly report: Report;
+}
+
+interface EndedWithResults extends Ended {
+  readonly results: readonly Result[];
+}
+
 /** Runs the two workspace files with `args` and `--output report.json`, returning what ended and the report. */
 export async function runWithReport(
   args: readonly string[],
   io: CommandIo = {},
-): Promise<Ended & { readonly report: Report }> {
+): Promise<EndedWithReport> {
   const dir = workspace();
-  const ended = await command(dir, [...FILES, ...args, "--output", "report.json"], io);
-  return { ...ended, report: reportAt(join(dir, "report.json")) };
+  const ended = await command(dir, [...FILES, ...args, "--output", REPORT_FILE], io);
+  return { ...ended, report: reportAt(join(dir, REPORT_FILE)) };
 }
 
 /** Runs the two workspace files with `--output -`, returning what ended and the results stdout holds. */
-export async function runToStdout(
-  io: CommandIo = {},
-): Promise<Ended & { readonly results: readonly Result[] }> {
+export async function runToStdout(io: CommandIo = {}): Promise<EndedWithResults> {
   const ended = await command(workspace(), [...FILES, "--output", "-"], io);
   return { ...ended, results: parseReport(ended.stdout, "stdout").results };
 }

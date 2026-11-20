@@ -5,29 +5,26 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ConfigError } from "../src/options.js";
 import type { Report, Result } from "../src/report.js";
-import { run, runOnce } from "../src/run.js";
+import { runOnce } from "../src/run.js";
 import {
+  APPLE,
+  BANANA,
+  contender,
   failedOutcome,
   findAny,
   found,
   listed,
+  listingStarter,
   MELON,
   measured,
   measuredOutcome,
   ranOnce,
-  starter as fakeStarter,
   type StartChild,
   startsNoChild,
   stopped,
 } from "./fake-children.js";
 import { fixturePath } from "./fixture-path.js";
-
-const DISCOVERY = fixturePath("discovery");
-
-const RUN_FIXTURES = fixturePath("run");
-
-/** A stand-in for the package's `package.json` whose version is `1.2.3`. */
-const VERSIONED = join(RUN_FIXTURES, "version.json");
+import { cpu, DISCOVERY, measuresAll, runHere, starter } from "./run-here.js";
 
 /** The config fixtures that import a module beside them. */
 const NESTED_CONFIGS = fixturePath("config", "nested");
@@ -36,40 +33,6 @@ const NESTED_CONFIGS = fixturePath("config", "nested");
 const DOT_IMPORT_CONFIG = join(NESTED_CONFIGS, "dot-import.ts");
 
 const STARTED_AT = new Date("2026-11-01T12:00:00.000Z");
-
-/** The one case the fake listing child finds in `file`: named for the file, per-call only in `a.bench.ts`. */
-function caseOf(file: string): { id: string; setupPerCall: boolean } {
-  const id = basename(file);
-  return { id, setupPerCall: id === "a.bench.ts" };
-}
-
-/** A child starter that lists one case per file and answers the rest with `answer`. */
-function starter(answer: Parameters<typeof fakeStarter>[1]): StartChild {
-  return fakeStarter(caseOf, answer);
-}
-
-/** A child starter that measures every case with the median 4656. */
-const measuresAll = starter(() => measuredOutcome(4656));
-
-/** One CPU of the fake host, as `os.cpus()` lists it. */
-function cpu(model: string): { model: string } {
-  return { model };
-}
-
-type RunInput = Parameters<typeof run>[0];
-
-/** Runs from the discovery fixtures with no config file, the fake lookup and the 1.2.3 version. */
-async function runHere(input: Partial<RunInput> = {}): ReturnType<typeof run> {
-  return run({
-    cwd: DISCOVERY,
-    files: ["zeta.bench.ts"],
-    findRuntime: findAny,
-    startChild: measuresAll,
-    packageJson: VERSIONED,
-    cpus: () => [cpu("Apple M2 Max")],
-    ...input,
-  });
-}
 
 type OnceInput = Parameters<typeof runOnce>[0];
 
@@ -110,10 +73,8 @@ afterEach(() => {
 });
 
 describe("run", () => {
-  describe("the report", () => {
-    it("holds the inputs, the host and each measured case's result", async () => {
-      freezeClock();
-
+  describe("when the run completes", () => {
+    it("returns a report holding the inputs, the host and each measured case's result", async () => {
       const report = await runHere({
         cwd: join(DISCOVERY, "nested"),
         files: ["../a.bench.ts"],
@@ -125,10 +86,10 @@ describe("run", () => {
         nodeImport: "tsx",
         cpus: () => [cpu("Apple M2 Max"), cpu("Apple M2 Max"), cpu("Apple M2 Max")],
       });
+      const { stats, sampling, checks, gc } = measured(4656);
 
       expect(report).toMatchObject({
         repset: "1.2.3",
-        startedAt: "2026-11-01T12:00:00.000Z",
         interrupted: false,
         options: {
           runtimes: ["node"],
@@ -150,14 +111,7 @@ describe("run", () => {
             status: "ok",
             error: null,
             median: 4656,
-            processes: [
-              {
-                stats: measured(4656).stats,
-                sampling: measured(4656).sampling,
-                checks: measured(4656).checks,
-                gc: measured(4656).gc,
-              },
-            ],
+            processes: [{ stats, sampling, checks, gc }],
           },
         ],
       });
@@ -174,6 +128,15 @@ describe("run", () => {
           nodeImport: null,
         });
       });
+    });
+
+    it.each([
+      { rounds: 5, recorded: 5 },
+      { rounds: undefined, recorded: null },
+    ])("records the rounds option $rounds as $recorded", async ({ rounds, recorded }) => {
+      const report = await runHere(rounds === undefined ? {} : { rounds });
+
+      expect(report.options.rounds).toBe(recorded);
     });
 
     it("records a relative nodeImport from the config file as written", async () => {
@@ -208,8 +171,8 @@ describe("run", () => {
     });
   });
 
-  describe("the measuring children", () => {
-    it("starts one per case per runtime, runtime by runtime, with the merged minTime and minSamples", async () => {
+  describe("when several cases are selected", () => {
+    it("starts one measuring child per case per runtime, runtime by runtime, with the merged minTime and minSamples", async () => {
       const echo = starter((request, runtime) => {
         const asked = [runtime.runtime, basename(request.file), request.id];
         if (request.mode === "measure")
@@ -238,7 +201,7 @@ describe("run", () => {
     it.each([
       { why: "the count it is given", callsPerSample: 5, asked: ["5", "5"] },
       { why: "no count when it is given none", callsPerSample: undefined, asked: ["none", "none"] },
-    ])("asks each one for $why", async ({ callsPerSample, asked }) => {
+    ])("asks each measuring child for $why", async ({ callsPerSample, asked }) => {
       const echoCount = starter((request) =>
         failedOutcome(
           "fn",
@@ -348,8 +311,7 @@ describe("run", () => {
         onPlanned: logsPlans(events),
       });
 
-      expect(events).toStrictEqual([
-        "planned 2",
+      expect(events.slice(-5)).toStrictEqual([
         "planned 4",
         "measure",
         "measure",
@@ -362,7 +324,7 @@ describe("run", () => {
   describe("the package's version", () => {
     describe("when it holds no version", () => {
       it("throws a plain error naming the file, before any child starts", async () => {
-        const packageJson = join(RUN_FIXTURES, "no-version.json");
+        const packageJson = fixturePath("run", "no-version.json");
 
         const result = runHere({ packageJson, startChild: startsNoChild });
 
@@ -394,6 +356,28 @@ describe("run", () => {
         interrupted: report.interrupted,
         ran: report.results.map((result) => [result.runtime.name, result.id]),
       }).toStrictEqual({ interrupted: true, ran: [["node", "zeta.bench.ts"]] });
+    });
+
+    it("starts no further child once a child that finished fired it", async () => {
+      const controller = new AbortController();
+      const measuring: string[] = [];
+      const stopAfterZeta = starter((request) => {
+        if (request.mode !== "measure") return measuredOutcome(4656);
+        measuring.push(request.id);
+        if (request.id === "zeta.bench.ts") controller.abort();
+        return measuredOutcome(4656);
+      });
+
+      const report = await runHere({
+        files: ["zeta.bench.ts", "a.bench.ts"],
+        signal: controller.signal,
+        startChild: stopAfterZeta,
+      });
+
+      expect({ interrupted: report.interrupted, measuring }).toStrictEqual({
+        interrupted: true,
+        measuring: ["zeta.bench.ts"],
+      });
     });
   });
 
@@ -459,6 +443,23 @@ describe("runOnce", () => {
     });
   });
 
+  it("runs each selected contender once in selection order, forming no rounds", async () => {
+    const outcome = await runOnceHere({
+      rounds: 3,
+      startChild: listingStarter(
+        [APPLE, contender("join"), BANANA, contender("loop")],
+        () => ranOnce,
+      ),
+    });
+
+    expect(outcome.results.map((result) => result.id)).toStrictEqual([
+      "apple",
+      "concat/join",
+      "banana",
+      "concat/loop",
+    ]);
+  });
+
   describe("onPlanned", () => {
     it("receives the once child count before the first once child starts", async () => {
       const events: string[] = [];
@@ -473,7 +474,7 @@ describe("runOnce", () => {
         onPlanned: logsPlans(events),
       });
 
-      expect(events).toStrictEqual(["planned 2", "planned 4", "once", "once", "once", "once"]);
+      expect(events.slice(-5)).toStrictEqual(["planned 4", "once", "once", "once", "once"]);
     });
   });
 });

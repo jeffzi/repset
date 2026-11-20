@@ -25,6 +25,8 @@ export interface Config {
   readonly minTime?: number | undefined;
   /** Timing takes at least this many samples. */
   readonly minSamples?: number | undefined;
+  /** How many rounds each contest runs in; unset leaves the count to the contest's size. */
+  readonly rounds?: number | undefined;
   /** The longest one child may run, in milliseconds; a child that passes it fails its case. */
   readonly timeout?: number | undefined;
   /** A module Node children import first, such as a TypeScript loader. Bun children ignore it. */
@@ -82,6 +84,8 @@ export interface ResolvedOptions {
   readonly runtimes: readonly Runtime[];
   readonly minTime: number;
   readonly minSamples: number;
+  /** `undefined` leaves the count of rounds to each contest's size. */
+  readonly rounds?: number | undefined;
   readonly timeout: number;
   readonly nodeImport: NodeImport | undefined;
   readonly filter: RegExp | undefined;
@@ -107,6 +111,7 @@ const OPTION_KEYS: Readonly<Record<OptionName, true>> = {
   runtimes: true,
   minTime: true,
   minSamples: true,
+  rounds: true,
   timeout: true,
   nodeImport: true,
 };
@@ -229,9 +234,9 @@ function checkedMinTime(value: unknown): number {
   return value;
 }
 
-function checkedMinSamples(value: unknown): number {
+function checkedPositiveInteger(option: string, value: unknown): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
-    throw invalid("minSamples", "an integer of 1 or more", value);
+    throw invalid(option, "an integer of 1 or more", value);
   }
   return value;
 }
@@ -266,7 +271,8 @@ function checkedConfig(values: Readonly<Partial<Record<OptionName, unknown>>>): 
     include: given(values.include, checkedInclude),
     runtimes: given(values.runtimes, checkedRuntimes),
     minTime: given(values.minTime, checkedMinTime),
-    minSamples: given(values.minSamples, checkedMinSamples),
+    minSamples: given(values.minSamples, (value) => checkedPositiveInteger("minSamples", value)),
+    rounds: given(values.rounds, (value) => checkedPositiveInteger("rounds", value)),
     timeout: given(values.timeout, checkedTimeout),
     nodeImport: given(values.nodeImport, (value) => checkedString("nodeImport", value)),
   };
@@ -302,8 +308,9 @@ function resolvedNodeImport(
  *
  * @param options - The caller's options, the config to read and the working directory.
  * @returns The checked and merged options.
- * @throws {@link ConfigError} When the config file is missing, ambiguous, fails to import, has
- *   no plain-object default export or sets an unknown key, or when any value is invalid.
+ * @throws {@link ConfigError} When the config file is missing, ambiguous, cannot be read though its
+ *   path exists, fails to import, has no plain-object default export, has a default export whose
+ *   values cannot be read, or sets an unknown key, or when any value is invalid.
  */
 export async function resolveOptions(options: OptionsInput): Promise<ResolvedOptions> {
   const file = configPath(options);
@@ -315,6 +322,7 @@ export async function resolveOptions(options: OptionsInput): Promise<ResolvedOpt
     runtimes: caller.runtimes ?? fromFile.runtimes ?? DEFAULT_RUNTIMES,
     minTime: caller.minTime ?? fromFile.minTime ?? DEFAULT_MIN_TIME,
     minSamples: caller.minSamples ?? fromFile.minSamples ?? DEFAULT_MIN_SAMPLES,
+    rounds: caller.rounds ?? fromFile.rounds,
     timeout: caller.timeout ?? fromFile.timeout ?? DEFAULT_TIMEOUT,
     nodeImport: resolvedNodeImport(caller.nodeImport, fromFile.nodeImport, file),
     filter: given(options.filter, checkedFilter),

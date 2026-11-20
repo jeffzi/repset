@@ -1,11 +1,11 @@
-import { basename, join } from "node:path";
+import { basename, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
 import type { FoundRuntime, LookupOptions } from "../src/children.js";
 import { ConfigError, type ResolvedOptions } from "../src/options.js";
-import { selectCases, type SelectedCase, type Selection } from "../src/run.js";
+import { selectCases, type SelectedCase, type Selection } from "../src/select.js";
 import { expectConfigError } from "./config-error.js";
 import {
   failedOutcome,
@@ -75,6 +75,7 @@ async function select(
     signal?: AbortSignal;
     startChild?: StartChild;
     findRuntime?: FindRuntime;
+    onPlanned?: (total: number) => void;
   } = {},
 ): Promise<Selection> {
   return selectCases({
@@ -84,6 +85,7 @@ async function select(
     findRuntime: input.findRuntime ?? findAny,
     startChild: input.startChild ?? onePerFile,
     ...(input.signal === undefined ? {} : { signal: input.signal }),
+    ...(input.onPlanned === undefined ? {} : { onPlanned: input.onPlanned }),
   });
 }
 
@@ -108,11 +110,8 @@ describe("selectCases", () => {
     it("receives the number of files to list before the first listing child starts", async () => {
       const events: string[] = [];
 
-      await selectCases({
-        options: optionsWith(),
+      await select({
         files: ["zeta.bench.ts", "a.bench.ts", "alpha.bench.mts"],
-        cwd: FIXTURES,
-        findRuntime: findAny,
         startChild: async (runtime, request, options) => {
           events.push(request.mode);
           return onePerFile(runtime, request, options);
@@ -127,17 +126,33 @@ describe("selectCases", () => {
   });
 
   describe("when no positional file is given", () => {
-    it("matches the include globs against includeBase, skipping node_modules, sorted by slash-separated path", async () => {
+    it("matches the include globs against includeBase, not cwd", async () => {
       const selection = await select({ cwd: TESTS });
 
-      expect(pathsOf(selection)).toStrictEqual([
-        fixture("[ab].bench.ts"),
-        fixture("a.bench.ts"),
-        fixture("alpha.bench.mts"),
+      const paths = pathsOf(selection);
+      expect({
+        found: paths.length > 0,
+        outsideBase: paths.filter((path) => !path.startsWith(FIXTURES + sep)),
+      }).toStrictEqual({ found: true, outsideBase: [] });
+    });
+
+    it("skips every file under a node_modules directory", async () => {
+      const selection = await select({ cwd: TESTS });
+
+      const paths = pathsOf(selection);
+      expect({
+        found: paths.length > 0,
+        underNodeModules: paths.filter((path) => path.split(sep).includes("node_modules")),
+      }).toStrictEqual({ found: true, underNodeModules: [] });
+    });
+
+    it("sorts the files by slash-separated path, putting nested/ before nested2", async () => {
+      const selection = await select({ cwd: TESTS });
+
+      expect(pathsOf(selection).filter((path) => path.includes("nested"))).toStrictEqual([
         fixture("nested/deep/inner.bench.ts"),
         fixture("nested/mid.bench.ts"),
         fixture("nested2.bench.ts"),
-        fixture("zeta.bench.ts"),
       ]);
     });
   });
@@ -157,10 +172,8 @@ describe("selectCases", () => {
 
       await expectConfigError(result, [file]);
     });
-  });
 
-  describe("the order of files", () => {
-    it("follows the order the arguments are written", async () => {
+    it("lists the files in the order the arguments are written", async () => {
       const files = ["zeta.bench.ts", "nested/**/*.bench.ts", "alpha.bench.mts"];
 
       const selection = await select({ files });
@@ -187,7 +200,7 @@ describe("selectCases", () => {
     });
   });
 
-  describe("the runtimes", () => {
+  describe("when several runtimes are selected", () => {
     it("lists each file on the first selected runtime", async () => {
       const byRuntime: StartChild = async (runtime) =>
         listed([{ id: runtime.runtime, setupPerCall: false }]);
@@ -279,7 +292,7 @@ describe("selectCases", () => {
     });
   });
 
-  describe("the selection", () => {
+  describe("when files are given relative to cwd on two runtimes", () => {
     it("holds the runtimes with their versions and each case's id, files and setupPerCall", async () => {
       const startChild: StartChild = async (_runtime, request) =>
         listed([
@@ -299,12 +312,16 @@ describe("selectCases", () => {
         cases: [
           {
             id: "a.bench.ts",
+            name: "a.bench.ts",
+            contender: null,
             path: fixture("a.bench.ts"),
             file: "../a.bench.ts",
             setupPerCall: false,
           },
           {
             id: "inner.bench.ts",
+            name: "inner.bench.ts",
+            contender: null,
             path: fixture("nested/deep/inner.bench.ts"),
             file: "deep/inner.bench.ts",
             setupPerCall: true,

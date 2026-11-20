@@ -1,11 +1,9 @@
-/**
- * The two bodies the overhead check times, each about a microsecond per call.
- *
- * `each` calls a small function per element through a helper, the shape the JIT compiles into the
- * loop around it, so a harness that changes what surrounds the body call changes that body's cost
- * first. `inlined` is the same loop written out. Both run against one state of {@link SIZE}
- * moving points.
- */
+// The two bodies the overhead check times, each about a microsecond per call.
+//
+// `each` calls a small function per element through a helper, the shape the JIT compiles into the
+// loop around it, so a harness that changes what surrounds the body call changes that body's cost
+// first. `inlined` is the same loop written out. Both run against one state of `SIZE` moving
+// points.
 
 interface Point {
   x: number;
@@ -28,7 +26,18 @@ export const BODY_NAMES = ["each", "inlined"] as const;
 export type BodyName = (typeof BODY_NAMES)[number];
 
 /**
- * Builds a state of {@link SIZE} points at rest with small distinct velocities.
+ * The name the overhead bench registers `body` under.
+ *
+ * @param body - The body the case times.
+ * @returns The bench name, `overhead/` followed by the body's name.
+ */
+export function benchName(body: BodyName): string {
+  return `overhead/${body}`;
+}
+
+/**
+ * Builds a state of {@link SIZE} points at x = 0 whose velocities cycle through
+ * {@link VELOCITY_LEVELS} multiples of {@link VELOCITY_STEP}, starting at 0.
  *
  * @returns A fresh state.
  */

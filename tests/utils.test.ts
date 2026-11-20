@@ -2,13 +2,24 @@ import { describe, expect, it } from "vitest";
 
 import {
   describe as describeValue,
+  errorStack,
   isRecord,
+  property,
   thrownMessage,
   timerResolutionMs,
   valueAt,
 } from "../src/utils.js";
 
 const RESOLUTION = 0.125;
+
+/** An `Error` whose `stack` getter throws. */
+function unreadableStackError(): Error {
+  return Object.defineProperty(new Error("fig"), "stack", {
+    get: () => {
+      throw new Error("trap");
+    },
+  });
+}
 
 /**
  * The first transition that spans a single resolution; every one before it spans several.
@@ -85,6 +96,18 @@ describe("the describe function", () => {
   });
 });
 
+describe("property", () => {
+  it.each([
+    { what: "an object", value: { version: "1.2.3" }, expected: "1.2.3" },
+    { what: "null", value: null, expected: undefined },
+    { what: "a string", value: "1.2.3", expected: undefined },
+  ])("reads the key of $what as $expected", ({ value, expected }) => {
+    const read = property(value, "version");
+
+    expect(read).toBe(expected);
+  });
+});
+
 describe("isRecord", () => {
   it.each([
     { value: null, why: "null", expected: false },
@@ -98,58 +121,85 @@ describe("isRecord", () => {
 });
 
 describe("thrownMessage", () => {
-  describe("when the value has no string form", () => {
-    it("returns a string instead of throwing", () => {
-      const unprintable: unknown = Object.create(null);
-
-      const message = (): string => thrownMessage(unprintable);
-
-      expect(message).not.toThrow();
-    });
-  });
-
-  describe("when the value is an Error whose message cannot be read", () => {
-    it("returns a string instead of throwing", () => {
-      const unreadable = Object.defineProperty(new Error("plum"), "message", {
-        get: () => {
-          throw new Error("kiwi");
-        },
-      });
-
-      const message = (): string => thrownMessage(unreadable);
+  describe("when reading or converting the value throws", () => {
+    it.each<{ thrown: string; value: unknown }>([
+      { thrown: "a value with no string form", value: Object.create(null) },
+      {
+        thrown: "an Error whose message getter throws",
+        value: Object.defineProperty(new Error("plum"), "message", {
+          get: () => {
+            throw new Error("kiwi");
+          },
+        }),
+      },
+      {
+        thrown: "an Error whose message has no string form",
+        value: Object.defineProperty(new Error("cherry"), "message", {
+          value: Object.create(null),
+        }),
+      },
+    ])("returns a string instead of throwing for $thrown", ({ value }) => {
+      const message = (): string => thrownMessage(value);
 
       expect(message).not.toThrow();
     });
   });
 
   describe("when the value is an Error whose message is not a string", () => {
-    it.each([
-      { why: "a number", message: 42, expected: "42" },
-      {
-        why: "a value with no string form",
-        message: Object.create(null),
-        expected: "a value with no string form",
-      },
-    ])("returns the string form of a message that is $why", ({ message, expected }) => {
-      const error = Object.defineProperty(new Error("cherry"), "message", { value: message });
+    it("returns the string form of the message", () => {
+      const error = Object.defineProperty(new Error("cherry"), "message", { value: 42 });
 
       const read = thrownMessage(error);
 
-      expect(read).toBe(expected);
+      expect(read).toBe("42");
+    });
+  });
+});
+
+describe("errorStack", () => {
+  describe("when the value is an Error with a string stack", () => {
+    it("returns that stack", () => {
+      const error = Object.defineProperty(new Error("plum"), "stack", { value: "at plum" });
+
+      const stack = errorStack(error);
+
+      expect(stack).toBe("at plum");
+    });
+  });
+
+  describe("when the value holds no readable string stack", () => {
+    it.each([
+      {
+        thrown: "a value that is not an Error, even with a string stack",
+        value: { stack: "at pear" },
+      },
+      {
+        thrown: "an Error whose stack is not a string",
+        value: Object.defineProperty(new Error("plum"), "stack", { value: 42 }),
+      },
+      { thrown: "an Error whose stack getter throws", value: unreadableStackError() },
+    ])("returns null for $thrown", ({ value }) => {
+      const stack = errorStack(value);
+
+      expect(stack).toBeNull();
     });
   });
 });
 
 describe("valueAt", () => {
-  it("returns the value at an index that holds one", () => {
-    const value = valueAt([10, 20], 1);
+  describe("when the index holds a value", () => {
+    it("returns that value", () => {
+      const value = valueAt([10, 20], 1);
 
-    expect(value).toBe(20);
+      expect(value).toBe(20);
+    });
   });
 
-  it("throws a RangeError at an index past the values", () => {
-    const read = (): number => valueAt([10, 20], 2);
+  describe("when the index is past the values", () => {
+    it("throws a RangeError", () => {
+      const read = (): number => valueAt([10, 20], 2);
 
-    expect(read).toThrow(RangeError);
+      expect(read).toThrow(RangeError);
+    });
   });
 });

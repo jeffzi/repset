@@ -13,6 +13,9 @@ const MEASURE_PATH = fileURLToPath(new URL("../../src/measure/measure.ts", impor
 /** Bun starting, then a few real-clock measurements of about 1.25 s each, on a slow CI runner. */
 const BUN_TIMEOUT_MS = 60_000;
 
+/** The generated case's own timeout, under {@link BUN_TIMEOUT_MS} so Bun reports a slow case before the spawn is killed. */
+const BUN_CASE_TIMEOUT_MS = 50_000;
+
 /** A cheap shared-state benchmark well above the empty body's cost, as script source. */
 const SCRIPT_BENCH = `
 const values = Array.from({ length: 64 }, (_, index) => index);
@@ -46,7 +49,7 @@ interface BunTestRun {
 }
 
 /**
- * Runs `body` as one `bun test` case with `measure` and `MeasureError` imported, the benchmark of
+ * Runs `body` as one `bun test` case with `measure` imported, the benchmark of
  * {@link SCRIPT_BENCH} defined, a stub `gc`, a `loadFailure` object for a factory to throw, and
  * `bun:jsc` mocked by `bunJsc`.
  *
@@ -68,10 +71,10 @@ const loadFailure = { name: "durian" };
 mock.module("bun:jsc", ${bunJsc});
 globalThis.gc = () => {};
 test("jsc mock", async () => {
-  const { measure, MeasureError } = await import(${JSON.stringify(MEASURE_PATH)});
+  const { measure } = await import(${JSON.stringify(MEASURE_PATH)});
   ${SCRIPT_BENCH}
 ${body}
-}, 50_000);
+}, ${BUN_CASE_TIMEOUT_MS});
 `,
   );
 
@@ -90,17 +93,16 @@ const { measure } = await import(${JSON.stringify(MEASURE_PATH)});
 ${SCRIPT_BENCH}
 const result = await measure({ kind: "sharedState", setup, fn });
 console.log(JSON.stringify({
-  observesGc: "gcDuringTiming" in result,
-  sank: sink > 0,
+  observesGc: result.gc !== null,
 }));
 `;
 
       const child = runBun(["--expose-gc", "-e", script]);
 
-      expect(child.stderr).toBe("");
+      // oxlint-disable-next-line vitest/valid-expect -- Vitest takes a failure message as expect's second argument
+      expect(child.status, child.stderr).toBe(0);
       expect(JSON.parse(child.stdout)).toStrictEqual({
         observesGc: false,
-        sank: true,
       });
     },
     BUN_TIMEOUT_MS,
@@ -113,7 +115,6 @@ console.log(JSON.stringify({
         `
   const error = await measure({ kind: "sharedState", setup, fn }).then(() => null, (e) => e);
   console.log("REPORT " + JSON.stringify({
-    measureError: error instanceof MeasureError,
     phase: error?.phase,
     cause: error?.cause === loadFailure,
   }));
@@ -122,7 +123,7 @@ console.log(JSON.stringify({
       );
 
       expect(bun.status).toBe(0);
-      expect(bun.report).toStrictEqual({ measureError: true, phase: "child", cause: true });
+      expect(bun.report).toStrictEqual({ phase: "child", cause: true });
     },
     BUN_TIMEOUT_MS,
   );

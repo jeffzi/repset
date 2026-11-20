@@ -1,4 +1,4 @@
-import { quantile } from "../../src/measure/measure.js";
+import { medianOf } from "../../src/run.js";
 import { valueAt } from "../../src/utils.js";
 
 /**
@@ -71,17 +71,7 @@ function signFlipPValue(differences: readonly number[], observedSum: number): nu
   return extreme / signedSums.length;
 }
 
-/** The median of `values`, which are left unsorted. */
-function median(values: readonly number[]): number {
-  return quantile(
-    values.toSorted((left, right) => left - right),
-    0.5,
-  );
-}
-
 /**
- * Summarizes one round.
- *
  * @param pairs - The round's paired medians and each pair's per-call resolution.
  * @returns The round's summary. The sign of its `meanDifference` is the direction the p-value
  * tested: positive when repset reads higher, negative when lower, zero when the paired differences
@@ -95,8 +85,8 @@ function summarizeRound(pairs: Pairs): RoundSummary {
       `expected paired values, got ${baseline.length} baseline, ${repset.length} repset and ${perCallResolutions.length} per-call resolutions`,
     );
   }
-  const baselineMedian = median(baseline);
-  const repsetMedian = median(repset);
+  const baselineMedian = medianOf(baseline);
+  const repsetMedian = medianOf(repset);
   const differences = repset.map((repsetValue, index) =>
     pairedDifference(valueAt(baseline, index), repsetValue, valueAt(perCallResolutions, index)),
   );
@@ -125,13 +115,13 @@ function summarizeRound(pairs: Pairs): RoundSummary {
  * `confirmationRound` propagates.
  */
 export function judgeScenario(first: Pairs, confirmationRound: () => Pairs): ScenarioVerdict {
-  const firstRound = summarizeRound(first);
-  if (firstRound.pValue >= SIGNIFICANCE) {
-    return { passed: true, first: firstRound };
+  const firstSummary = summarizeRound(first);
+  if (firstSummary.pValue >= SIGNIFICANCE) {
+    return { passed: true, first: firstSummary };
   }
-  const confirmation = summarizeRound(confirmationRound());
+  const confirmationSummary = summarizeRound(confirmationRound());
   const differenceConfirmed =
-    confirmation.pValue < SIGNIFICANCE &&
-    Math.sign(confirmation.meanDifference) === Math.sign(firstRound.meanDifference);
-  return { passed: !differenceConfirmed, first: firstRound, confirmation };
+    confirmationSummary.pValue < SIGNIFICANCE &&
+    Math.sign(confirmationSummary.meanDifference) === Math.sign(firstSummary.meanDifference);
+  return { passed: !differenceConfirmed, first: firstSummary, confirmation: confirmationSummary };
 }

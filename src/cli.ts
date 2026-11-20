@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { release } from "node:os";
 
-import { crashReport, main, streamColors } from "./command.js";
+import { crashReport, main, runtimeLabel, streamColors } from "./command.js";
+import { runningRuntime } from "./measure/runtime.js";
 import { packageVersion } from "./run.js";
 
 const args = process.argv.slice(2);
@@ -13,7 +14,7 @@ try {
   const report = crashReport(error, {
     version,
     os: `${process.platform} ${release()} ${process.arch}`,
-    runtime: `node ${process.versions.node}`,
+    runtime: runtimeLabel(runningRuntime(), process.versions),
     color: streamColors(args, process.stdout, process.stderr).stderr,
   });
   process.stderr.write(report);

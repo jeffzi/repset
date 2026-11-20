@@ -1,269 +1,32 @@
 /**
- * A run: selecting the cases (finding the benchmark files, looking up the runtimes, and listing
- * each file's cases in a child), then starting one child per case and runtime to measure the case
- * or run it once.
+ * A run: the results of each case's children, the judged entry of each contest, and the report
+ * that holds them.
  */
-import { globSync } from "node:fs";
+import { randomInt } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { cpus as realCpus } from "node:os";
-import { basename, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { ChildError, ChildRequest } from "./child.js";
-import {
-  findRuntime as realFindRuntime,
-  type FoundRuntime,
-  type Outcome,
-  startChild as realStartChild,
-  type StartOptions,
-} from "./children.js";
+import type { ChildError, MeasureRequest } from "./child.js";
+import type { FoundRuntime } from "./children.js";
 import type { Runtime } from "./measure/runtime.js";
-import {
-  ConfigError,
-  isFile,
-  type OptionsInput,
-  resolveOptions,
-  type ResolvedOptions,
-} from "./options.js";
-import type { FailedProcess, Machine, Report, ReportOptions, Result } from "./report.js";
-import { property } from "./utils.js";
-
-// ---------------------------------------------------------------------------
-// Case selection
-// ---------------------------------------------------------------------------
-
-export interface SelectedCase {
-  readonly id: string;
-  /** The benchmark file that registers the case, as an absolute path. */
-  readonly path: string;
-  /** The file as the report writes it: relative to the working directory, with `/` separators. */
-  readonly file: string;
-  readonly setupPerCall: boolean;
-}
-
-/** The runtimes and cases a run measures, or a stop that came during runtime discovery or listing. */
-export type Selection =
-  | {
-      readonly status: "selected";
-      readonly runtimes: readonly FoundRuntime[];
-      readonly cases: readonly SelectedCase[];
-    }
-  | { readonly status: "stopped" };
-
-export interface ChildFunctions {
-  readonly findRuntime: typeof realFindRuntime;
-  readonly startChild: typeof realStartChild;
-}
-
-/** {@link ChildFunctions} a caller may replace; each one it leaves out is the real function. */
-export type ChildFunctionOverrides = {
-  readonly [Name in keyof ChildFunctions]?: ChildFunctions[Name] | undefined;
-};
-
-export interface SelectInput extends ChildFunctionOverrides {
-  readonly options: ResolvedOptions;
-  /** The positional files, relative to `cwd`; when there are some, they replace `include`. */
-  readonly files: readonly string[];
-  readonly cwd: string;
-  /** Ends the selection as stopped when it fires during runtime discovery or listing. */
-  readonly signal?: AbortSignal | undefined;
-  /**
-   * Receives the number of benchmark files to list once every runtime is found, before the first
-   * listing child starts.
-   */
-  readonly onPlanned?: ((total: number) => void) | undefined;
-}
-
-/** A benchmark file whose listing child failed, with what the child left to print before it. */
-export class ListingError extends ConfigError {
-  override readonly name = "ListingError";
-  readonly failureStack: string | null;
-  /** The last 16 KiB of the listing child's stdout and stderr. */
-  readonly output: string;
-
-  /**
-   * @param file - The benchmark file, as the report writes it.
-   * @param error - The listing child's failure.
-   * @param output - The listing child's output tail.
-   */
-  constructor(file: string, error: ChildError, output: string) {
-    super(`cannot list the cases of ${file}: phase ${error.phase}: ${error.message}`);
-    this.failureStack = error.stack;
-    this.output = output;
-  }
-}
-
-/**
- * Finds the files a glob pattern matches, never descending into `node_modules`.
- *
- * @param pattern - The glob pattern.
- * @param base - The directory the pattern is relative to.
- * @returns The files, as absolute paths sorted by path.
- * @throws {@link ConfigError} When a match exists but cannot be read.
- */
-function globFiles(pattern: string, base: string): string[] {
-  const matches = globSync(pattern, {
-    cwd: base,
-    exclude: (path) => basename(path) === "node_modules",
-  })
-    .map((match) => resolve(base, match))
-    .filter((path) => isFile(path));
-  // By the slash-separated path, by code unit, so the order is the same on every OS.
-  return matches.toSorted((a, b) => {
-    const [left, right] = [a.replaceAll(sep, "/"), b.replaceAll(sep, "/")];
-    return left < right ? -1 : Number(left > right);
-  });
-}
-
-/**
- * Finds a positional argument's files.
- *
- * @param argument - The argument: a file, or else a glob.
- * @param cwd - The directory the argument is relative to.
- * @returns The file the argument names, or else the files it matches as a glob.
- * @throws {@link ConfigError} When the argument names no file and matches none as a glob, or a
- *   path it names or matches cannot be read.
- */
-function argumentFiles(argument: string, cwd: string): string[] {
-  const named = resolve(cwd, argument);
-  if (isFile(named)) return [named];
-  const matched = globFiles(argument, cwd);
-  if (matched.length === 0) throw new ConfigError(`no benchmark file matches ${argument}`);
-  return matched;
-}
-
-/**
- * Finds the benchmark files of a selection.
- *
- * @param options - The resolved options, whose `include` patterns apply when `files` is empty.
- * @param files - The positional arguments, relative to `cwd`.
- * @param cwd - The directory the arguments are relative to.
- * @returns The files in the order their patterns are written, each one once.
- * @throws {@link ConfigError} When an argument matches no file, no `include` pattern matches one,
- *   or a path cannot be read.
- */
-function benchmarkFiles(options: ResolvedOptions, files: readonly string[], cwd: string): string[] {
-  const perPattern =
-    files.length > 0
-      ? files.map((argument) => argumentFiles(argument, cwd))
-      : options.include.map((pattern) => globFiles(pattern, options.includeBase));
-  const found = [...new Set(perPattern.flat())];
-  if (found.length === 0) {
-    throw new ConfigError(`no benchmark file matches include ${options.include.join(", ")}`);
-  }
-  return found;
-}
-
-/**
- * Rejects a listing in which two cases share an id, whether they register it from one file or
- * several.
- *
- * @param cases - The listed cases.
- * @throws {@link ConfigError} Naming the first id two cases share and the files that register it.
- */
-function checkUniqueIds(cases: readonly SelectedCase[]): void {
-  const seen = new Set<string>();
-  const repeated = cases.find(({ id }) => {
-    if (seen.has(id)) return true;
-    seen.add(id);
-    return false;
-  });
-  if (repeated === undefined) return;
-  const files = new Set(cases.filter(({ id }) => id === repeated.id).map(({ file }) => file));
-  throw new ConfigError(
-    `more than one case has the id ${repeated.id}, in ${[...files].join(", ")}`,
-  );
-}
-
-/**
- * Collects what starts a child from the resolved options; `nodeImport` is `undefined` when the
- * options have none.
- *
- * @param options - The resolved options.
- * @param signal - The caller's stop signal.
- * @returns The options' timeout and resolved `nodeImport`, and the signal.
- */
-function startOptions(options: ResolvedOptions, signal: AbortSignal | undefined): StartOptions {
-  return { timeout: options.timeout, nodeImport: options.nodeImport?.resolved, signal };
-}
-
-/** `path` relative to `cwd` with `/` separators, as the report and the progress lines show it. */
-export function shownPath(cwd: string, path: string): string {
-  return relative(cwd, path).replaceAll(sep, "/");
-}
-
-/**
- * Lists the cases of `files`, one listing child per file on `runtime`, in file order.
- *
- * @param files - The benchmark files, as absolute paths.
- * @param runtime - The runtime the listing children run on.
- * @param input - The options, the working directory, the stop signal, the plan callback and the
- *   child starter.
- * @returns The cases in file order, or `undefined` when the stop signal fired.
- * @throws {@link ListingError} When a listing child fails.
- * @throws {@link Error} What `onPlanned` or starting a listing child throws.
- */
-async function listFiles(
-  files: readonly string[],
-  runtime: FoundRuntime,
-  input: SelectInput,
-): Promise<SelectedCase[] | undefined> {
-  const { options, cwd, signal, startChild = realStartChild } = input;
-  const childOptions = startOptions(options, signal);
-  input.onPlanned?.(files.length);
-  const cases: SelectedCase[] = [];
-  for (const path of files) {
-    if (signal?.aborted === true) return undefined;
-    const file = shownPath(cwd, path);
-    const outcome = await startChild(runtime, { mode: "list", file: path }, childOptions);
-    if (outcome.status === "stopped") return undefined;
-    if (outcome.status === "failed") throw new ListingError(file, outcome.error, outcome.output);
-    for (const listed of outcome.result.cases) cases.push({ ...listed, path, file });
-  }
-  return cases;
-}
-
-/**
- * Selects the cases a run measures. Every runtime is looked up before any listing child starts.
- *
- * @param input - The options, the positional files, the working directory, the stop signal, the
- *   plan callback, and the functions that look a runtime up and start a child, the real ones by
- *   default.
- * @returns The runtimes with their versions and the selected cases, or a stop when the signal fired
- *   during runtime discovery or listing.
- * @throws {@link ConfigError} When an argument matches no file, a runtime cannot be found, a
- *   listing child fails (a {@link ListingError}), two cases share an id, or no case is selected.
- * @throws {@link Error} What `onPlanned` or starting a listing child throws, and the plain `Error`
- *   that finding the runtime this process runs on throws when `process.versions` holds no version
- *   for it.
- */
-export async function selectCases(input: SelectInput): Promise<Selection> {
-  const { options, files, cwd, signal, findRuntime = realFindRuntime } = input;
-  const found = benchmarkFiles(options, files, cwd);
-  const lookup = { timeout: options.timeout, signal };
-  const looked = await Promise.all(
-    options.runtimes.map(async (runtime) => findRuntime(runtime, lookup)),
-  );
-  const runtimes = looked.filter((runtime) => runtime !== undefined);
-  if (runtimes.length < looked.length) return { status: "stopped" };
-  const [first] = runtimes;
-  if (first === undefined) throw new ConfigError("runtimes must name at least one runtime");
-
-  const listed = await listFiles(found, first, input);
-  if (listed === undefined) return { status: "stopped" };
-  if (listed.length === 0) throw new ConfigError("no benchmark file registers a case");
-  checkUniqueIds(listed);
-
-  const { filter } = options;
-  const cases =
-    filter === undefined ? listed : listed.filter((selected) => filter.test(selected.id));
-  if (cases.length === 0) throw new ConfigError(`no case id matches the filter ${String(filter)}`);
-  return { status: "selected", runtimes, cases };
-}
-
-// ---------------------------------------------------------------------------
-// Run inputs and results
-// ---------------------------------------------------------------------------
+import type { ResolvedOptions } from "./options.js";
+import type {
+  Contest,
+  ContestPair,
+  FailedResult,
+  Machine,
+  MeasuredProcess,
+  MeasuredResult,
+  Report,
+  ReportOptions,
+  Result,
+  ResultBase,
+} from "./report.js";
+import { ALPHA, isContest, type OnceInput, type StartHandlers, startEach } from "./schedule.js";
+import type { SelectedCase } from "./select.js";
+import { hodgesLehmann, holm, signedRankInterval, signedRankP } from "./signed-rank.js";
+import { pairsOf, property, quantile, valueAt } from "./utils.js";
 
 /**
  * The package's own `package.json`: one directory above this module, which holds from `src/` and
@@ -271,32 +34,33 @@ export async function selectCases(input: SelectInput): Promise<Selection> {
  */
 const PACKAGE_JSON = fileURLToPath(new URL("../package.json", import.meta.url));
 
-export interface OnceInput extends OptionsInput, ChildFunctionOverrides {
-  /** Paths or globs of benchmark files, relative to `cwd`; when there are some, they replace `include`. */
-  readonly files?: readonly string[] | undefined;
-  /** Kills the running child and starts no further one when it fires. */
-  readonly signal?: AbortSignal | undefined;
-  /**
-   * Receives the number of children each phase will start, before that phase's first child starts:
-   * the benchmark files to list, then the cases times the runtimes to measure or run once.
-   */
-  readonly onPlanned?: ((total: number) => void) | undefined;
-}
-
 export interface RunInput extends OnceInput {
-  /** Receives each result when it finishes, before the next child starts. */
-  readonly onResult?: ((result: Result) => void) | undefined;
   /**
-   * Receives the report with no result once listing has passed, before the first measuring child
-   * starts; what it throws ends the run with no measuring child started.
+   * Receives each result when it finishes, before the next child starts, with the entries of the
+   * contests finished so far: a contest's entry comes with its last result.
    */
-  readonly onSelected?: ((report: Report) => void) | undefined;
+  readonly onResult?: ((result: Result, contests: readonly Contest[]) => void) | undefined;
+  /**
+   * Receives the number of planned measuring children that will no longer start when a contender
+   * fails: the rounds of its contest still to come on that runtime.
+   */
+  readonly onDropped?: ((count: number) => void) | undefined;
+  /**
+   * Receives the report with no result once listing has passed, with the cases of each contest
+   * that formed, scheduled the same on every runtime, before the first measuring child starts; what
+   * it throws ends the run with no measuring child started.
+   */
+  readonly onSelected?:
+    | ((report: Report, contests: readonly (readonly SelectedCase[])[]) => void)
+    | undefined;
   /** Lists the host's logical CPUs; `os.cpus` by default. */
   readonly cpus?: (() => readonly { readonly model: string }[]) | undefined;
   /** The calls per sample every measuring child times its case at; absent means each calibrates one. */
   readonly callsPerSample?: number | undefined;
   /** The `package.json` whose version the report records; the package's own by default. */
   readonly packageJson?: string | undefined;
+  /** Draws the seed of the round orders when the run starts; a random 32-bit integer by default. */
+  readonly drawSeed?: (() => number) | undefined;
 }
 
 /** One case's once run on one runtime: it ran, or it failed in a phase. */
@@ -314,28 +78,17 @@ export interface OnceRun {
   readonly results: readonly OnceResult[];
 }
 
-/** How a child asked for `M` ended when the caller did not stop it. */
-type Finished<M extends ChildRequest["mode"]> = Exclude<Outcome<M>, { status: "stopped" }>;
-
-/** The processes of a case whose child failed: one, holding `null` for what it did not reach. */
-const FAILED_PROCESSES: readonly [FailedProcess] = [
-  {
-    round: 1,
-    orderInRound: 1,
-    stats: null,
-    sampling: null,
-    checks: null,
-    gc: null,
-    rawSamples: null,
-  },
-];
-
-// ---------------------------------------------------------------------------
-// Running
-// ---------------------------------------------------------------------------
+/** What the process of a failed child did not reach. */
+const NOTHING_MEASURED = {
+  stats: null,
+  sampling: null,
+  checks: null,
+  gc: null,
+  rawSamples: null,
+} as const;
 
 /**
- * Reads the `version` string of a `package.json`, rejecting a file that holds none.
+ * Reads the `version` string of a `package.json`.
  *
  * @param path - The `package.json` to read; the package's own by default.
  * @returns Its `version`.
@@ -350,90 +103,287 @@ export async function packageVersion(path: string = PACKAGE_JSON): Promise<strin
 }
 
 /**
- * Resolves the caller's options, selects the cases, then starts one child per selected case per
- * runtime, one at a time: runtime by runtime in the selection's order, cases in selection order.
- *
- * @param input - The caller's options, the positional files, the stop signal, the plan callback
- *   and the child functions.
- * @param request - The request of one case's child, from the resolved options.
- * @param finished - Receives each child's outcome before the next child starts.
- * @param passed - Called with the resolved options and the number of children the cases will
- *   start once the selection passed, before the first child of a case starts.
- * @returns The resolved options, and whether the stop signal ended the run before every child ran:
- *   during listing, before the next child, or by stopping the running one.
- * @throws {@link ConfigError} When the options are invalid or the selection fails, before any child
- *   but the listing children starts.
- * @throws {@link Error} What the plan callback, `passed` or `finished` throws, or what starting a
- *   child throws.
- */
-async function startEach<R extends ChildRequest>(
-  input: OnceInput,
-  request: (options: ResolvedOptions, selected: SelectedCase) => R,
-  finished: (runtime: FoundRuntime, selected: SelectedCase, outcome: Finished<R["mode"]>) => void,
-  passed: (options: ResolvedOptions, total: number) => void,
-): Promise<{ options: ResolvedOptions; interrupted: boolean }> {
-  const options = await resolveOptions(input);
-  const { signal, startChild = realStartChild } = input;
-  const selection = await selectCases({
-    options,
-    files: input.files ?? [],
-    cwd: input.cwd,
-    signal,
-    findRuntime: input.findRuntime,
-    startChild,
-    onPlanned: input.onPlanned,
-  });
-  if (selection.status === "stopped") return { options, interrupted: true };
-  passed(options, selection.runtimes.length * selection.cases.length);
-  const childOptions = startOptions(options, signal);
-  for (const runtime of selection.runtimes) {
-    for (const selected of selection.cases) {
-      if (signal?.aborted === true) return { options, interrupted: true };
-      const outcome = await startChild(runtime, request(options, selected), childOptions);
-      if (outcome.status === "stopped") return { options, interrupted: true };
-      finished(runtime, selected, outcome);
-    }
-  }
-  return { options, interrupted: false };
-}
-
-/**
- * Turns a measuring child's outcome into the case's report result.
+ * What every result of a case holds, whether it was measured or failed.
  *
  * @param selected - The case.
- * @param runtime - The runtime its child ran on.
- * @param outcome - How its measuring child ended.
- * @returns A measured result when the child measured the case, a failed one otherwise.
+ * @param runtime - The runtime its children ran on.
+ * @returns Its id, name, contender, parameters, file, runtime and whether it set up per call.
  */
-function resultOf(
-  selected: SelectedCase,
-  runtime: FoundRuntime,
-  outcome: Finished<"measure">,
-): Result {
-  const base = {
+function resultBase(selected: SelectedCase, runtime: FoundRuntime): ResultBase {
+  return {
     id: selected.id,
-    name: selected.id,
-    contender: null,
+    name: selected.name,
+    contender: selected.contender,
     params: {},
     file: selected.file,
     runtime: { name: runtime.runtime, version: runtime.version },
     setupPerCall: selected.setupPerCall,
   };
-  if (outcome.status === "ok") {
-    const { stats, sampling, checks, gc } = outcome.result;
-    const measuring = { round: 1, orderInRound: 1, stats, sampling, checks, gc, rawSamples: null };
-    return { ...base, status: "ok", error: null, median: stats.median, processes: [measuring] };
-  }
-  const { phase, message, stack, teardownError } = outcome.error;
-  const error = { phase, message, stack, teardownError, output: outcome.output };
-  return { ...base, status: "failed", error, median: null, processes: FAILED_PROCESSES };
+}
+
+/** How many timer resolutions per call a pair's ratio must clear past 1 to tell its contenders apart. */
+const RESOLUTIONS = 1.25;
+
+/** Two contenders of a contest, the signed-rank test of their rounds, and whom it proves faster. */
+interface Verdict {
+  readonly a: MeasuredResult;
+  readonly b: MeasuredResult;
+  readonly p: number;
+  readonly pAdjusted: number;
+  readonly faster: MeasuredResult | null;
+  readonly tie: ContestPair["tie"];
+}
+
+/** The per-round `ln(median_b / median_a)` over the rounds both contenders ran. */
+function logRatios(a: MeasuredResult, b: MeasuredResult): number[] {
+  const medians = new Map(a.processes.map((process) => [process.round, process.stats.median]));
+  return b.processes.flatMap((process) => {
+    const median = medians.get(process.round);
+    return median === undefined ? [] : [Math.log(process.stats.median / median)];
+  });
+}
+
+/** The largest timer resolution per call among both contenders' processes, over the smaller median. */
+function resolutionPerCall(a: MeasuredResult, b: MeasuredResult): number {
+  const perCall = [...a.processes, ...b.processes].map(
+    ({ sampling }) => sampling.timerResolutionNs / sampling.callsPerSample,
+  );
+  return Math.max(...perCall) / Math.min(a.median, b.median);
+}
+
+/** Why a pair has no verdict, or `null` when it is proven; see `ContestPair.tie`. */
+function tieOf(
+  pAdjusted: number,
+  estimate: number,
+  a: MeasuredResult,
+  b: MeasuredResult,
+): ContestPair["tie"] {
+  if (pAdjusted > ALPHA) return "rounds";
+  const withinTimer = Math.exp(Math.abs(estimate)) - 1 <= RESOLUTIONS * resolutionPerCall(a, b);
+  return withinTimer ? "timer" : null;
 }
 
 /**
- * Describes the host; `cpu` and `cores` are `null` when `cpus` lists none.
+ * Tests every pair of `measured`, adjusting the p values by Holm's over all of them.
+ *
+ * @param measured - The contenders that never failed.
+ * @returns A verdict per pair; a pair is proven when its adjusted p is at most `ALPHA` and its
+ *   ratio clears 1 by more than `RESOLUTIONS` timer resolutions per call.
+ */
+function verdictsOf(measured: readonly MeasuredResult[]): Verdict[] {
+  const tested = measured.flatMap((a, index) =>
+    measured.slice(index + 1).map((b) => {
+      const differences = logRatios(a, b);
+      return { a, b, p: signedRankP(differences), estimate: hodgesLehmann(differences) };
+    }),
+  );
+  const adjusted = holm(tested.map(({ p }) => p));
+  return tested.map(({ a, b, p, estimate }, index) => {
+    const pAdjusted = valueAt(adjusted, index);
+    const tie = tieOf(pAdjusted, estimate, a, b);
+    const winner = estimate > 0 ? a : b;
+    return { a, b, p, pAdjusted, faster: tie === null ? winner : null, tie };
+  });
+}
+
+/**
+ * The pair of a verdict, `a` the earlier contender in `order`.
+ *
+ * @param verdict - The verdict.
+ * @param order - The contest's contenders that never failed, sorted.
+ * @param level - The interval's confidence level.
+ * @returns The pair's ratio, interval and verdict.
+ */
+function pairOf(verdict: Verdict, order: readonly MeasuredResult[], level: number): ContestPair {
+  const [a, b] =
+    order.indexOf(verdict.a) < order.indexOf(verdict.b)
+      ? [verdict.a, verdict.b]
+      : [verdict.b, verdict.a];
+  const differences = logRatios(a, b);
+  const [low, high] = signedRankInterval(differences, level);
+  return {
+    a: a.id,
+    b: b.id,
+    ratio: Math.exp(hodgesLehmann(differences)),
+    interval: [Math.exp(low), Math.exp(high)],
+    p: verdict.p,
+    pAdjusted: verdict.pAdjusted,
+    faster: verdict.faster?.id ?? null,
+    tie: verdict.tie,
+  };
+}
+
+/**
+ * Judges a contest from its contenders' results. A contest left with fewer than two contenders
+ * that never failed, or whose rounds `n` fail `2 / 2ⁿ ≤ 0.05 / pairs`, is not judged: its entry
+ * holds the medians and no rank, ratio or pair.
+ *
+ * @param results - The contest's results on one runtime, in the order they were emitted.
+ * @returns The contest's entry.
+ */
+function contestOf(results: readonly [Result, ...Result[]]): Contest {
+  const [{ name, runtime }] = results;
+  const rounds = Math.max(
+    ...results.flatMap(({ processes }) => processes.map(({ round }) => round)),
+  );
+  const measured = results.filter((result): result is MeasuredResult => result.status === "ok");
+  const failed = results
+    .filter((result): result is FailedResult => result.status === "failed")
+    .map(({ id }) => ({ id, median: null, ratio: null, rank: null }));
+  const pairCount = pairsOf(measured.length);
+  const head = { name, params: {}, runtime, rounds };
+  const smallestP = 2 / 2 ** rounds;
+  const tooFewRounds = smallestP > ALPHA / pairCount;
+  if (measured.length < 2 || tooFewRounds) {
+    const contenders = measured
+      .toSorted((left, right) => left.median - right.median)
+      .map(({ id, median }) => ({ id, median, ratio: null, rank: null }));
+    return { ...head, contenders: [...contenders, ...failed], pairs: [] };
+  }
+  const verdicts = verdictsOf(measured);
+  const rankOf = (result: MeasuredResult): number =>
+    1 +
+    verdicts.filter(
+      ({ a, b, faster }) => (a === result || b === result) && faster !== null && faster !== result,
+    ).length;
+  const ranked = measured
+    .map((result) => ({ result, rank: rankOf(result) }))
+    .toSorted((left, right) =>
+      left.rank === right.rank ? left.result.median - right.result.median : left.rank - right.rank,
+    );
+  const order = ranked.map(({ result }) => result);
+  const position = (id: string): number => order.findIndex((result) => result.id === id);
+  const pairs = verdicts
+    .map((verdict) => pairOf(verdict, order, 1 - ALPHA / pairCount))
+    .toSorted((left, right) =>
+      left.a === right.a
+        ? position(left.b) - position(right.b)
+        : position(left.a) - position(right.a),
+    );
+  const [fastest] = order;
+  const contenders = ranked.map(({ result, rank }) => ({
+    id: result.id,
+    median: result.median,
+    ratio:
+      result === fastest
+        ? 1
+        : (pairs.find((pair) => pair.a === fastest?.id && pair.b === result.id)?.ratio ?? null),
+    rank,
+  }));
+  return { ...head, contenders: [...contenders, ...failed], pairs };
+}
+
+/**
+ * Reads the median of `values`, interpolated between the two middle values when their count is
+ * even.
+ *
+ * @param values - The values, in any order; they are left as they are.
+ * @returns The median.
+ * @throws RangeError when `values` is empty.
+ */
+export function medianOf(values: readonly number[]): number {
+  return quantile(
+    values.toSorted((left, right) => left - right),
+    0.5,
+  );
+}
+
+/**
+ * The result of a case whose every process measured, its median the median of theirs.
+ *
+ * @param selected - The case.
+ * @param runtime - The runtime its children ran on.
+ * @param processes - Its processes, in run order.
+ * @returns The measured result.
+ */
+function measuredResult(
+  selected: SelectedCase,
+  runtime: FoundRuntime,
+  processes: readonly [MeasuredProcess, ...MeasuredProcess[]],
+): MeasuredResult {
+  return {
+    ...resultBase(selected, runtime),
+    status: "ok",
+    error: null,
+    median: medianOf(processes.map((process) => process.stats.median)),
+    processes,
+  };
+}
+
+/**
+ * The handlers that turn measuring children into results: a case gathers one process per round;
+ * a failed child finishes its case at once, and the rest finish when their group's last round
+ * ends. A contest's entry is recorded just before its last result is emitted: the last survivor's
+ * when its last round ends, or the last failure's when no contender is left running. A group the
+ * stop signal ends gives no further result and no entry.
+ *
+ * @param emit - Receives each result as it finishes.
+ * @param record - Receives each contest's entry as it finishes.
+ * @returns The handlers of each child's outcome and of each group's end.
+ */
+function resultHandlers(
+  emit: (result: Result) => void,
+  record: (contest: Contest) => void,
+): Pick<StartHandlers<"measure">, "finished" | "ended"> {
+  const ran = new Map<SelectedCase, MeasuredProcess[]>();
+  const failed = new Map<SelectedCase, FailedResult>();
+  const takeFailures = (group: readonly SelectedCase[]): FailedResult[] =>
+    [...failed].flatMap(([selected, result]) => {
+      if (!group.includes(selected)) return [];
+      failed.delete(selected);
+      return [result];
+    });
+  return {
+    finished: ({ runtime, selected, group, outcome, round, orderInRound }) => {
+      const processes = ran.get(selected) ?? [];
+      if (outcome.status === "ok") {
+        const { stats, sampling, checks, gc } = outcome.result;
+        const measuring = { round, orderInRound, stats, sampling, checks, gc, rawSamples: null };
+        ran.set(selected, [...processes, measuring]);
+        return;
+      }
+      ran.delete(selected);
+      const { phase, message, stack, teardownError } = outcome.error;
+      const error = { phase, message, stack, teardownError, output: outcome.output };
+      const failing = { round, orderInRound, ...NOTHING_MEASURED };
+      const result: FailedResult = {
+        ...resultBase(selected, runtime),
+        status: "failed",
+        error,
+        median: null,
+        processes: [...processes, failing],
+      };
+      const contestEnds =
+        isContest(group) && group.every((member) => member === selected || failed.has(member));
+      if (contestEnds) {
+        const [first, ...rest] = [...takeFailures(group), result];
+        record(contestOf([first, ...rest]));
+      } else {
+        failed.set(selected, result);
+      }
+      emit(result);
+    },
+    ended: (runtime, group) => {
+      const finished = group.flatMap((selected) => {
+        const [first, ...rest] = ran.get(selected) ?? [];
+        ran.delete(selected);
+        return first === undefined ? [] : [measuredResult(selected, runtime, [first, ...rest])];
+      });
+      const [first, ...rest] = [...takeFailures(group), ...finished];
+      for (const result of finished.slice(0, -1)) emit(result);
+      if (isContest(group) && first !== undefined) record(contestOf([first, ...rest]));
+      const last = finished.at(-1);
+      if (last !== undefined) emit(last);
+    },
+  };
+}
+
+/**
+ * Describes the host.
  *
  * @param cpus - Lists the host's logical CPUs.
- * @returns The OS, the architecture, the first CPU's model and the CPU count.
+ * @returns The OS, the architecture, the first CPU's model and the CPU count; `cpu` and `cores`
+ *   are `null` when `cpus` lists none.
  */
 function machineOf(cpus: () => readonly { readonly model: string }[]): Machine {
   const listed = cpus();
@@ -451,60 +401,83 @@ function machineOf(cpus: () => readonly { readonly model: string }[]): Machine {
  *
  * @param input - The caller's options.
  * @param options - The resolved options.
+ * @param seed - The seed of the round orders, `null` when the run holds no contest.
  * @returns The report's options.
  */
-function reportOptions(input: OnceInput, options: ResolvedOptions): ReportOptions {
+function reportOptions(
+  input: OnceInput,
+  options: ResolvedOptions,
+  seed: number | null,
+): ReportOptions {
   return {
     runtimes: options.runtimes,
     files: input.files === undefined || input.files.length === 0 ? null : [...input.files],
     filter: input.filter ?? null,
     minTime: options.minTime,
     minSamples: options.minSamples,
-    rounds: null,
-    seed: null,
+    rounds: options.rounds ?? null,
+    seed,
     timeout: options.timeout,
     nodeImport: options.nodeImport?.written ?? null,
     rawSamples: false,
   };
 }
 
+/** A random 32-bit seed for the round orders. */
+function drawRandomSeed(): number {
+  return randomInt(2 ** 32);
+}
+
 /**
  * Runs a benchmark run: resolves the options, selects the cases, then measures each selected case
- * on each runtime in its own child, one at a time. It never prints.
+ * on each runtime in its own child, one at a time, and each contest in rounds of one child per
+ * contender. It never prints.
  *
- * A failed case is a result with an `error`, never a throw, and does not stop the run. When the
- * stop signal fires, the running child is killed, its case gets no result, and no further child
- * starts.
+ * A failed case is a result with an `error`, never a throw, and does not stop the run. A plain
+ * case's result is emitted when its child ends, a failed contender's when its failing child ends,
+ * and the other contenders' when their contest's last round ends. When the stop signal fires, the
+ * running child is killed, its case and the unfinished contenders of its contest get no result,
+ * and no further child starts.
  *
  * @param input - The caller's options, the positional files, the stop signal, the result,
- *   selection and plan callbacks, the calls per sample to fix, and the functions that look a
- *   runtime up, start a child, list the CPUs and name the `package.json` to read the version from,
- *   the real ones by default.
+ *   selection, plan and dropped-children callbacks, the calls per sample to fix, and the functions that look a
+ *   runtime up, start a child, list the CPUs, draw the seed and name the `package.json` to read
+ *   the version from, the real ones by default.
  * @returns The report of the results that finished, with `interrupted` set when the stop signal
  *   ended the run.
  * @throws {@link Error} The error reading the package's `package.json`, before any child starts;
  *   what `onSelected` or `onPlanned` throws, before the first child of its phase starts; what
- *   `onResult` throws, once a child has finished; or what starting a child throws.
- * @throws {@link ConfigError} When the options are invalid or the selection fails, before any
+ *   `onResult` or `onDropped` throws, once a child has finished; or what starting a child throws.
+ * @throws `ConfigError` When the options are invalid or the selection fails, before any
  *   measuring child starts.
  */
 export async function run(input: RunInput): Promise<Report> {
   const startedAt = new Date().toISOString();
   const repset = await packageVersion(input.packageJson);
   const machine = machineOf(input.cpus ?? realCpus);
+  const seed = (input.drawSeed ?? drawRandomSeed)();
   const results: Result[] = [];
+  const contests: Contest[] = [];
+  let contested = false;
   const { callsPerSample } = input;
   const reportOf = (options: ResolvedOptions, interrupted: boolean): Report => ({
     schema: 1,
     repset,
     startedAt,
     interrupted,
-    options: reportOptions(input, options),
+    options: reportOptions(input, options, contested ? seed : null),
     machine,
     results: [...results],
-    contests: [],
+    contests: [...contests],
   });
-  const { options, interrupted } = await startEach(
+  const emit = (result: Result): void => {
+    results.push(result);
+    input.onResult?.(result, [...contests]);
+  };
+  const record = (contest: Contest): void => {
+    contests.push(contest);
+  };
+  const { options, interrupted } = await startEach<MeasureRequest>(
     input,
     (resolved, selected) => ({
       mode: "measure",
@@ -514,28 +487,30 @@ export async function run(input: RunInput): Promise<Report> {
       minSamples: resolved.minSamples,
       ...(callsPerSample === undefined ? {} : { callsPerSample }),
     }),
-    (runtime, selected, outcome) => {
-      const result = resultOf(selected, runtime, outcome);
-      results.push(result);
-      input.onResult?.(result);
+    {
+      passed: (resolved, total, formed) => {
+        contested = formed.length > 0;
+        input.onSelected?.(reportOf(resolved, false), formed);
+        input.onPlanned?.(total);
+      },
+      dropped: input.onDropped,
+      ...resultHandlers(emit, record),
     },
-    (resolved, total) => {
-      input.onSelected?.(reportOf(resolved, false));
-      input.onPlanned?.(total);
-    },
+    seed,
   );
   return reportOf(options, interrupted);
 }
 
 /**
  * Runs every selected case once per runtime, each in its own child, with no timing, one at a time
- * in the order a run measures them. A failed case does not stop it.
+ * in selection order; a contest's contenders run once each, forming no rounds. A failed case does
+ * not stop it.
  *
  * @param input - The caller's options, the positional files, the stop signal, the plan callback,
  *   and the functions that look a runtime up and start a child, the real ones by default.
  * @returns Per case and runtime, that it ran or how it failed, with `interrupted` set when the stop
  *   signal ended it.
- * @throws {@link ConfigError} When the options are invalid or the selection fails, before any once
+ * @throws `ConfigError` When the options are invalid or the selection fails, before any once
  *   child starts.
  * @throws {@link Error} What `onPlanned` throws, before the first child of its phase starts, or
  *   what starting a child throws.
@@ -545,16 +520,18 @@ export async function runOnce(input: OnceInput): Promise<OnceRun> {
   const { interrupted } = await startEach(
     input,
     (_options, selected) => ({ mode: "once", file: selected.path, id: selected.id }),
-    (runtime, selected, outcome) => {
-      const ran = { id: selected.id, runtime: runtime.runtime };
-      if (outcome.status === "ok") {
-        results.push({ ...ran, status: "ok" });
-      } else {
-        const { phase, message, teardownError } = outcome.error;
-        results.push({ ...ran, status: "failed", error: { phase, message, teardownError } });
-      }
+    {
+      passed: (_options, total) => input.onPlanned?.(total),
+      finished: ({ runtime, selected, outcome }) => {
+        const ran = { id: selected.id, runtime: runtime.runtime };
+        if (outcome.status === "ok") {
+          results.push({ ...ran, status: "ok" });
+        } else {
+          const { phase, message, teardownError } = outcome.error;
+          results.push({ ...ran, status: "failed", error: { phase, message, teardownError } });
+        }
+      },
     },
-    (_options, total) => input.onPlanned?.(total),
   );
   return { interrupted, results };
 }

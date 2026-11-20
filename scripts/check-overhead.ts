@@ -14,14 +14,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { SamplingReport } from "../src/child.js";
 import { childRuntimeFlags, findRuntime, howItEnded } from "../src/children.js";
 import { CALLS_PER_SAMPLE } from "../src/command-line.js";
+import type { SamplingReport } from "../src/measure/measure.js";
 import { RUNTIMES, type Runtime } from "../src/measure/runtime.js";
 import { DEFAULT_TIMEOUT } from "../src/options.js";
 import type { FailedResult, Report } from "../src/report.js";
 import { isRecord, property, thrownMessage, valueAt } from "../src/utils.js";
-import { BODY_NAMES, type BodyName } from "./check-overhead/bodies.js";
+import { BODY_NAMES, type BodyName, benchName } from "./check-overhead/bodies.js";
 import {
   judgeScenario,
   type Pairs,
@@ -75,6 +75,7 @@ interface Round {
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const CLI = join(ROOT, "dist", "cli.js");
 const BENCH_FILE = "scripts/check-overhead/overhead.bench.ts";
+const TS_LOADER = "tsx";
 const BASELINE_CHILD = join(ROOT, "scripts", "check-overhead", "baseline-child.ts");
 
 const PAIRS = 12;
@@ -114,17 +115,36 @@ function howRunEnded(subject: string, end: RunEnd): string {
  *   not a report, or holds no failed result.
  */
 function failedResult(reportPath: string): FailedResult | undefined {
-  let parsed: unknown;
+  let report: Report;
   try {
-    parsed = JSON.parse(readFileSync(reportPath, "utf8"));
+    report = readReport(reportPath);
   } catch {
     return undefined;
   }
-  if (!isReport(parsed)) return undefined;
-  return parsed.results.find((result): result is FailedResult => result.status === "failed");
+  return report.results.find((result): result is FailedResult => result.status === "failed");
 }
 
-/** The message saying `failed`'s case failed, naming the scenario `name`, the phase and the error. */
+/**
+ * Reads the report one run of the repset command wrote.
+ *
+ * @param reportPath - The file the command wrote its report to.
+ * @returns The report.
+ * @throws Error naming `reportPath` when the file is missing, unreadable, not JSON, or not a
+ *   report.
+ */
+function readReport(reportPath: string): Report {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(reportPath, "utf8"));
+  } catch (error) {
+    throw new Error(`cannot read the report ${reportPath}: ${thrownMessage(error)}`, {
+      cause: error,
+    });
+  }
+  if (!isReport(parsed)) throw new Error(`${reportPath} is not a report`);
+  return parsed;
+}
+
 function caseFailure(name: string, failed: FailedResult): string {
   return `${name}: the case failed in phase ${failed.error.phase}: ${failed.error.message}`;
 }
@@ -174,19 +194,17 @@ function onlyResult(
   name: string,
   reportPath: string,
 ): { readonly report: Report; readonly result: Report["results"][number] } {
-  let parsed: unknown;
+  let report: Report;
   try {
-    parsed = JSON.parse(readFileSync(reportPath, "utf8"));
+    report = readReport(reportPath);
   } catch (error) {
-    throw new Error(`${name}: cannot read the report ${reportPath}: ${thrownMessage(error)}`, {
-      cause: error,
-    });
+    throw new Error(`${name}: ${thrownMessage(error)}`, { cause: error });
   }
-  const result = isReport(parsed) && parsed.results.length === 1 ? parsed.results[0] : undefined;
-  if (!isReport(parsed) || result === undefined) {
-    throw new Error(`${name}: ${reportPath} is not a report holding exactly one result`);
+  const [result, ...others] = report.results;
+  if (result === undefined || others.length > 0) {
+    throw new Error(`${name}: ${reportPath} holds ${String(report.results.length)} results, not 1`);
   }
-  return { report: parsed, result };
+  return { report, result };
 }
 
 /**
@@ -205,7 +223,7 @@ function onlyResult(
  *   or not a report holding exactly one result, or the process's count does not match the
  *   scenario's.
  */
-export function repsetReading(scenario: Scenario, end: RunEnd, reportPath: string): RepsetReading {
+function repsetReading(scenario: Scenario, end: RunEnd, reportPath: string): RepsetReading {
   const name = scenarioName(scenario);
   if (end.status !== 0) {
     // repset exits 1 when a case fails, and its report then says why.
@@ -241,7 +259,7 @@ export function repsetReading(scenario: Scenario, end: RunEnd, reportPath: strin
  * @throws Error naming the scenario when the child printed something that is not JSON or holds no
  *   finite numeric median.
  */
-export function checkedBaselineMedian(scenario: Scenario, end: RunEnd, stdout: string): number {
+function checkedBaselineMedian(scenario: Scenario, end: RunEnd, stdout: string): number {
   const name = scenarioName(scenario);
   if (end.status !== 0) throw new Error(howRunEnded(`${name}: the baseline child`, end));
   let printed: unknown;
@@ -294,9 +312,9 @@ function readRepset(scenario: Scenario): RepsetReading {
       "--runtime",
       scenario.runtime,
       "--filter",
-      `^overhead/${scenario.body}$`,
+      `^${benchName(scenario.body)}$`,
       "--node-import",
-      "tsx",
+      TS_LOADER,
       "--output",
       outPath,
     ];
@@ -347,7 +365,7 @@ function readBaseline(
   counts: BaselineCounts,
 ): number {
   const args = [
-    ...childRuntimeFlags(scenario.runtime, "tsx"),
+    ...childRuntimeFlags(scenario.runtime, TS_LOADER),
     BASELINE_CHILD,
     scenario.body,
     String(counts.callsPerSample),
@@ -388,16 +406,12 @@ function takeRound(scenario: Scenario, readers: Readers): Round {
   const readings: RepsetReading[] = [];
   let latest: RepsetReading | undefined;
   for (let pair = 0; pair < PAIRS; pair += 1) {
-    let baselineCounts: BaselineCounts;
-    if (latest === undefined || pair % 2 === 0) {
-      latest = readers.repset(scenario);
-      baselineCounts = latest;
-      baseline.push(readers.baseline(scenario, baselineCounts));
-    } else {
-      baselineCounts = latest;
-      baseline.push(readers.baseline(scenario, baselineCounts));
-      latest = readers.repset(scenario);
-    }
+    // Pair 0 is even, so `latest` is unset only where repset reads first anyway.
+    const repsetFirst = pair % 2 === 0;
+    if (repsetFirst || latest === undefined) latest = readers.repset(scenario);
+    const baselineCounts: BaselineCounts = latest;
+    baseline.push(readers.baseline(scenario, baselineCounts));
+    if (!repsetFirst) latest = readers.repset(scenario);
     readings.push(latest);
     perCallResolutions.push(
       latest.timerResolutionNs / Math.min(latest.callsPerSample, baselineCounts.callsPerSample),
@@ -427,12 +441,19 @@ function roundLabel(roundIndex: number): string {
   return roundIndex === 0 ? "first" : "confirmation";
 }
 
+function scenarioLine(name: string, text: string): string {
+  return `${name}  ${text}`;
+}
+
 function pairPlace(name: string, roundIndex: number, pairIndex: number): string {
-  return `${name}  ${roundLabel(roundIndex)} round, pair ${String(pairIndex + 1)}:`;
+  return scenarioLine(name, `${roundLabel(roundIndex)} round, pair ${String(pairIndex + 1)}:`);
 }
 
 function summaryLine(name: string, roundIndex: number, summary: RoundSummary): string {
-  return `${name}  ${roundLabel(roundIndex)} round  baseline ${summary.baselineMedian.toFixed(1)} ns  repset ${summary.repsetMedian.toFixed(1)} ns  gap ${formatSigned(summary.gap * 100)}%  mean diff ${formatSigned(summary.meanDifference)} ns  p=${summary.pValue.toFixed(4)}`;
+  return scenarioLine(
+    name,
+    `${roundLabel(roundIndex)} round  baseline ${summary.baselineMedian.toFixed(1)} ns  repset ${summary.repsetMedian.toFixed(1)} ns  gap ${formatSigned(summary.gap * 100)}%  mean diff ${formatSigned(summary.meanDifference)} ns  p=${summary.pValue.toFixed(4)}`,
+  );
 }
 
 /**
@@ -507,14 +528,14 @@ function scenarioReport(
     }
     return roundLines(name, roundIndex, summary, round.pairs);
   });
-  const outcome = `${name}  ${verdict.passed ? "pass" : "FAIL"}`;
+  const outcome = scenarioLine(name, verdict.passed ? "pass" : "FAIL");
   if (scenario.countMode === "one-call") {
     lines.push(outcome);
     return { lines, floorBreaks: [] };
   }
   const readings = rounds.flatMap((round) => round.readings);
   const shortestTiming = Math.min(...readings.map((reading) => reading.timingMs));
-  lines.push(`${name}  shortest timing ${shortestTiming.toFixed(1)} ms`);
+  lines.push(scenarioLine(name, `shortest timing ${shortestTiming.toFixed(1)} ms`));
   const breaks = floorBreaks(name, rounds);
   lines.push(...breaks, outcome);
   return { lines, floorBreaks: breaks };
@@ -545,9 +566,9 @@ export function runCheck(readers: Readers, print: (text: string) => void = conso
       rounds.push(confirmation);
       return confirmation.pairs;
     });
-    const report = scenarioReport(scenario, verdict, rounds);
-    failed ||= !verdict.passed || report.floorBreaks.length > 0;
-    print(report.lines.join("\n"));
+    const printed = scenarioReport(scenario, verdict, rounds);
+    failed ||= !verdict.passed || printed.floorBreaks.length > 0;
+    print(printed.lines.join("\n"));
   }
   return failed ? 1 : 0;
 }

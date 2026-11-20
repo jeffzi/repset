@@ -3,20 +3,14 @@
  * child elsewhere.
  */
 import type { Output } from "./command.js";
-import { paint } from "./table.js";
+import { paint, visibleWidth } from "./table.js";
+import { GRAPHEMES } from "./utils.js";
 
 /** The frames of the live line's indicator, one per tick. */
 const FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 
 /** How long each indicator frame shows, in milliseconds. */
 const FRAME_MS = 80;
-
-/** Splits the live line into the characters a person sees, so a cut never splits one. */
-const GRAPHEMES = new Intl.Segmenter();
-
-/** The characters a terminal draws two columns wide: East Asian wide and full-width ones, and emoji. */
-const WIDE =
-  /\p{Extended_Pictographic}|[ᄀ-ᅟ⺀-〾ぁ-㏿㐀-䶿一-鿿ꀀ-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦\u{20000}-\u{3FFFF}]/u;
 
 /** Moves the cursor to the start of its row and erases the row. */
 const CLEAR_ROW = "\r\x1b[2K";
@@ -25,6 +19,8 @@ const CLEAR_ROW = "\r\x1b[2K";
 export interface Progress {
   /** Starts counting the children of a phase that starts `total` of them. */
   planned(total: number): void;
+  /** Lowers the phase's total by `count` children that will no longer start, keeping its started count. */
+  dropped(count: number): void;
   /** Shows that the phase's next child starts, doing what `text` says. */
   starting(text: string): void;
   /** Stops the indicator and erases the live line; calling it again does nothing. */
@@ -35,6 +31,7 @@ export interface Progress {
 function linePerChild(stderr: Output): Progress {
   return {
     planned: () => undefined,
+    dropped: () => undefined,
     starting: (text) => {
       stderr.write(`${text}\n`);
     },
@@ -64,7 +61,7 @@ function liveLine(stderr: Output, color: boolean): Progress {
     for (const { segment } of GRAPHEMES.segment(
       `${FRAMES[frame]} [${started}/${total}] ${doing}`,
     )) {
-      room -= WIDE.test(segment) ? 2 : 1;
+      room -= visibleWidth(segment);
       if (room < 0) break;
       kept.push(segment);
     }
@@ -75,6 +72,9 @@ function liveLine(stderr: Output, color: boolean): Progress {
     planned: (count) => {
       total = count;
       started = 0;
+    },
+    dropped: (count) => {
+      total -= count;
     },
     starting: (text) => {
       started += 1;

@@ -4,10 +4,12 @@ import { exportSubpaths } from "../scripts/import-exports.js";
 
 describe("exportSubpaths", () => {
   describe("when exports is a subpath map", () => {
-    it("leaves out wildcard subpaths", () => {
-      const exports = { ".": "./dist/index.js", "./features/*": "./x", "./cli": "./dist/cli.js" };
+    it("returns every subpath key", () => {
+      const exports = { ".": "./dist/index.js", "./features/*": "./x" };
 
-      expect(exportSubpaths(exports)).toStrictEqual([".", "./cli"]);
+      const subpaths = exportSubpaths(exports);
+
+      expect(subpaths).toStrictEqual([".", "./features/*"]);
     });
   });
 });

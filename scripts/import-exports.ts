@@ -11,15 +11,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function isImportable(subpath: string): boolean {
-  return !subpath.includes("*") && !subpath.endsWith(".json");
-}
-
 /**
- * List the importable subpaths of a package.json `exports` field, skipping wildcard and JSON ones.
+ * List the subpaths of a package.json `exports` field.
  *
  * @param exports - The `exports` field as parsed from package.json.
- * @returns Subpaths such as `"."` and `"./cli"`.
+ * @returns Every key of a subpath map (keys starting with `"."`), or `["."]` when `exports` is a
+ *   string or a conditions-only object.
  * @throws Error when `exports` is undefined.
  */
 export function exportSubpaths(exports: unknown): string[] {
@@ -28,7 +25,7 @@ export function exportSubpaths(exports: unknown): string[] {
   }
   const keys = isRecord(exports) ? Object.keys(exports) : [];
   const isSubpathMap = keys.some((key) => key.startsWith("."));
-  return isSubpathMap ? keys.filter(isImportable) : ["."];
+  return isSubpathMap ? keys : ["."];
 }
 
 async function importExports(name: string): Promise<void> {

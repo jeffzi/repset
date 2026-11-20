@@ -1,0 +1,17 @@
+[project]
+name = "repset-fixtures"
+version = "0"
+requires-python = "==3.14.*"
+dependencies = [
+    "numpy>=2.5,<3",
+    "scipy>=1.18,<2",
+]
+
+[tool.uv]
+package = false
+python-preference = "only-system"
+
+[dependency-groups]
+dev = [
+    "scipy-stubs>=1.18,<2",
+]

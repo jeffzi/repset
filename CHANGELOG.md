@@ -7,6 +7,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Add contests: pass `bench()` a record of functions as `fn`, and repset runs them in a random order
+  over rounds of fresh processes (`--rounds` or the `rounds` option), then ranks them and tells
+  which it can prove faster.
+
+### Changed
+
+- Fill the report's `contests[]`, each result's `contender`, `options.rounds`, `options.seed` and
+  each process's `round` and `orderInRound`, which 0.2.0 left empty, `null` or always 1.
+- Refuse to run a benchmark file that loads repset 0.2 beside this version, instead of misreading
+  its cases.
+
+### Fixed
+
+- Stop the run and exit 141 instead of crashing when stderr's reader closes early, as for stdout.
+- Stop Node from reading a benchmark that walks its state up to twice as slow in some processes.
+
 ## [0.2.0] - 2026-11-19
 
 ### Added

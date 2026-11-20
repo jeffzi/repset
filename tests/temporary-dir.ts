@@ -1,6 +1,6 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { afterAll, beforeAll, onTestFinished } from "vitest";
 
@@ -18,6 +18,17 @@ export function temporaryDir(prefix: string): string {
   onTestFinished(() => {
     removeDir(dir);
   });
+  return dir;
+}
+
+/** A fresh directory named from `prefix`, holding each of `files` at its relative path, removed when the test ends. */
+export function temporaryProject(prefix: string, files: Readonly<Record<string, string>>): string {
+  const dir = temporaryDir(prefix);
+  for (const [path, content] of Object.entries(files)) {
+    const target = join(dir, path);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, content);
+  }
   return dir;
 }
 

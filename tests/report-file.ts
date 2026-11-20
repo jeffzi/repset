@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 
 import type { Report } from "../src/report.js";
+import { isRecord } from "../src/utils.js";
 
 /** Whether `value` is a non-null object. */
 function isObject(value: unknown): value is object {
@@ -9,26 +10,24 @@ function isObject(value: unknown): value is object {
 
 /** Whether `value` is a schema-1 report document, checked on the keys the tests read. */
 function isReport(value: unknown): value is Report {
+  if (!isRecord(value)) return false;
   return (
-    isObject(value) &&
-    "schema" in value &&
-    value.schema === 1 &&
-    "options" in value &&
-    isObject(value.options) &&
-    "results" in value &&
-    Array.isArray(value.results) &&
-    "interrupted" in value &&
-    typeof value.interrupted === "boolean"
+    value["schema"] === 1 &&
+    isObject(value["options"]) &&
+    Array.isArray(value["results"]) &&
+    Array.isArray(value["contests"]) &&
+    typeof value["interrupted"] === "boolean"
   );
 }
 
 /**
- * The report `text` holds.
+ * Parses `text` as a schema-1 report document.
  *
- * @param text - The JSON the command wrote.
- * @param source - Names where `text` came from in the error thrown when it holds no report.
+ * @param text - The JSON text of the report.
+ * @param source - What `text` came from, named in the error when it holds no report.
  * @returns The parsed report.
- * @throws When `text` is not JSON, or holds no schema-1 report.
+ * @throws SyntaxError When `text` is not valid JSON.
+ * @throws Error When the parsed document is not a schema-1 report; the message names `source`.
  */
 export function parseReport(text: string, source: string): Report {
   const parsed: unknown = JSON.parse(text);
@@ -36,7 +35,15 @@ export function parseReport(text: string, source: string): Report {
   return parsed;
 }
 
-/** The report the file at `path` holds. */
+/**
+ * Reads the schema-1 report stored in a JSON file.
+ *
+ * @param path - The file to read.
+ * @returns The report the file holds.
+ * @throws Error The `readFileSync` error when the file cannot be read.
+ * @throws SyntaxError When the file is not valid JSON.
+ * @throws Error When the file does not hold a schema-1 report; the message names `path`.
+ */
 export function reportAt(path: string): Report {
   return parseReport(readFileSync(path, "utf8"), path);
 }

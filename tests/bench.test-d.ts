@@ -1,6 +1,6 @@
 import { assertType, describe, expectTypeOf, it } from "vitest";
 
-import { bench } from "../src/child.js";
+import { bench } from "../src/bench.js";
 
 /** Asserts that the `bench()` calls in `register` type-check, or fail where `@ts-expect-error` says. */
 function assertCompiles(register: () => void): void {
@@ -27,6 +27,35 @@ describe("bench", () => {
           setup: () => [3, 1, 2],
           // @ts-expect-error -- fn takes a string, setup returns numbers
           fn: (text: string) => text.length,
+        });
+      });
+    });
+  });
+
+  describe("when the benchmark object has a record of contenders", () => {
+    it("types every contender to receive what setup returns", () => {
+      bench("sort", {
+        setup: () => [3, 1, 2],
+        fn: {
+          quick: (values) => {
+            expectTypeOf(values).toEqualTypeOf<number[]>();
+          },
+          merge: (values) => {
+            expectTypeOf(values).toEqualTypeOf<number[]>();
+          },
+        },
+      });
+    });
+
+    it("rejects a contender whose parameter type differs from what setup returns", () => {
+      assertCompiles(() => {
+        bench("sort", {
+          setup: () => [3, 1, 2],
+          fn: {
+            quick: (values: number[]) => values.length,
+            // @ts-expect-error -- merge takes a string, setup returns numbers
+            merge: (text: string) => text.length,
+          },
         });
       });
     });

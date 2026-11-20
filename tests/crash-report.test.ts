@@ -1,10 +1,30 @@
 import { describe, expect, it } from "vitest";
 
-import { crashReport } from "../src/command.js";
+import { crashReport, runtimeLabel } from "../src/command.js";
+
+describe("runtimeLabel", () => {
+  const VERSIONS = { node: "24.3.0", bun: "1.3.2" };
+
+  it.each([
+    { runtime: "bun", expected: "bun 1.3.2" },
+    { runtime: "node", expected: "node 24.3.0" },
+  ] as const)("names $runtime with its own version", ({ runtime, expected }) => {
+    const label = runtimeLabel(runtime, VERSIONS);
+
+    expect(label).toBe(expected);
+  });
+
+  it("names the version as unknown when the runtime's version is missing", () => {
+    const label = runtimeLabel("bun", { node: "24.3.0" });
+
+    expect(label).toBe("bun unknown");
+  });
+});
 
 describe("crashReport", () => {
   const OS = "darwin 25.6.0 arm64";
   const RUNTIME = "node 26.1.0";
+  const PLATFORM = { version: "1.2.3", os: OS, runtime: RUNTIME };
 
   /** The last word of `text`, where the report puts its link. */
   function linkOf(text: string): string {
@@ -25,16 +45,15 @@ describe("crashReport", () => {
 
   describe("when the version was read", () => {
     const error = new Error("kiwi & banana? #1 100%");
-    const platform = { version: "1.2.3", os: OS, runtime: RUNTIME };
 
     it("prints the stack first", () => {
-      const text = crashReport(error, platform);
+      const text = crashReport(error, PLATFORM);
 
       expect(text.startsWith(error.stack ?? "")).toBe(true);
     });
 
     it("names the version and platform on its last line", () => {
-      const text = crashReport(error, platform);
+      const text = crashReport(error, PLATFORM);
 
       expect(["1.2.3", OS, RUNTIME].map((word) => readLine(text).includes(word))).toStrictEqual([
         true,
@@ -44,10 +63,9 @@ describe("crashReport", () => {
     });
 
     it("links an issue prefilled with the version, platform and message", () => {
-      const text = crashReport(error, platform);
+      const text = crashReport(error, PLATFORM);
 
       const body = issueBody(text) ?? "";
-
       expect(
         ["1.2.3", OS, RUNTIME, "kiwi & banana? #1 100%"].map((word) => body.includes(word)),
       ).toStrictEqual([true, true, true, true]);
@@ -68,22 +86,24 @@ describe("crashReport", () => {
   });
 
   describe("when the message is long", () => {
-    it("cuts it on a whole character so the link stays within 6000 characters and decodes", () => {
-      const message = Array.from({ length: 3000 }, (_, index) => `${index}🍌`).join("");
+    const message = Array.from({ length: 3000 }, (_, index) => `${index}🍌`).join("");
 
-      const text = crashReport(new Error(message), { version: "1.2.3", os: OS, runtime: RUNTIME });
+    it("keeps the link within 6000 characters, filled to within one code point", () => {
+      const text = crashReport(new Error(message), PLATFORM);
 
-      const link = linkOf(text);
-      const body = issueBody(text) ?? "";
-      const kept = body.slice(
-        body.indexOf("```text\n") + "```text\n".length,
-        body.lastIndexOf("\n```"),
-      );
+      const length = linkOf(text).length;
       // One code point encodes to at most 12 characters, so a fuller cut would not have fit.
-      expect({
-        full: link.length > 6000 - 12 && link.length <= 6000,
-        start: kept.startsWith("0🍌1🍌") && message.startsWith(kept),
-      }).toStrictEqual({ full: true, start: true });
+      expect(length > 6000 - 12 && length <= 6000).toBe(true);
+    });
+
+    it("cuts the message on a whole character", () => {
+      const text = crashReport(new Error(message), PLATFORM);
+
+      const OPENING = "```text\n";
+      // `issueBody` decodes strictly, so a cut through a code point throws here.
+      const body = issueBody(text) ?? "";
+      const kept = body.slice(body.indexOf(OPENING) + OPENING.length, body.lastIndexOf("\n```"));
+      expect(kept.startsWith("0🍌1🍌") && message.startsWith(kept)).toBe(true);
     });
   });
 });

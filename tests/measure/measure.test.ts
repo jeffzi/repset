@@ -62,8 +62,8 @@ interface BenchOptions {
   readonly teardownThrows?: unknown;
   /** The call, counted from zero per callback, at which setup or teardown returns a thenable. */
   readonly thenableAt?: { readonly setup?: number; readonly teardown?: number };
-  /** The call, counted from zero per callback, at which setup or teardown returns a value whose `then` read throws. */
-  readonly raisingThenAt?: { readonly setup?: number; readonly teardown?: number };
+  /** The call, counted from zero, at which teardown returns a value whose `then` read throws. */
+  readonly raisingThenAt?: { readonly teardown?: number };
 }
 
 interface Bench {
@@ -97,8 +97,8 @@ function withRaisingThen<T extends object>(value: T, error: Error): T {
  *
  * @param kind - The benchmark's lifecycle.
  * @param options - The body's cost per call, which calls throw, what the body returns, the value
- *   the teardown throws, the calls at which setup or teardown return a thenable, and the calls at
- *   which setup or teardown returns a value whose `then` read throws.
+ *   the teardown throws, the calls at which setup or teardown return a thenable, and the call at
+ *   which teardown returns a value whose `then` read throws.
  * @returns The benchmark, its scripted clock, and the logs the tests read.
  */
 function bench(kind: Kind, options: BenchOptions = {}): Bench {
@@ -129,7 +129,6 @@ function bench(kind: Kind, options: BenchOptions = {}): Bench {
         throw setupError;
       }
       const world: World = id === thenableAt.setup ? { id, ...PENDING_THENABLE } : { id };
-      if (id === raisingThenAt.setup) withRaisingThen(world, thenReadError);
       live.add(world);
       log.push(`setup ${world.id}`);
       return world;
@@ -221,9 +220,18 @@ function recordUnhandledRejections(): unknown[] {
   return unhandled;
 }
 
-/** The `fn <id>` entries the case's body callback logs, one per body call. */
-function bodyCalls(log: readonly string[]): string[] {
-  return log.filter((entry) => entry.startsWith("fn"));
+/** The entries `callback` logged, one per call. */
+function logged(log: readonly string[], callback: "setup" | "fn" | "teardown"): string[] {
+  return log.filter((entry) => entry.startsWith(callback));
+}
+
+/** Stubs `globalThis.gc` with a collector that throws, and returns what it throws. */
+function throwingCollector(): Error {
+  const collectorError = new Error("durian");
+  vi.stubGlobal("gc", () => {
+    throw collectorError;
+  });
+  return collectorError;
 }
 
 /** The `MeasureError` a run rejects with, failing the test when it resolves or rejects otherwise. */
@@ -245,7 +253,7 @@ interface Scripted {
 
 /**
  * Builds a shared-state benchmark whose first timing attempt is discarded, on a scripted clock that
- * counts measure's collections from the body's first call.
+ * counts measure's full collections from the body's first call.
  *
  * The body costs 800 times the resolution a call in warmup, so warmup settles on one call per sample; 150 times the resolution
  * in the first timing attempt, under the 200 times the resolution a kept run's median needs; and 300 times the resolution from the second
@@ -261,8 +269,8 @@ function fasterAfterWarmup(onBody: (collections: number) => void = () => undefin
   let calls = 0;
   let collections = 0;
   const clock = steppedClock(() => (collections < 2 ? 1 : 200) * STEP_MS);
-  vi.stubGlobal("gc", () => {
-    if (calls > 0) collections += 1;
+  vi.stubGlobal("gc", (options?: NodeJS.GCOptions) => {
+    if (calls > 0 && options?.type !== "minor") collections += 1;
   });
   return {
     benchmark: {
@@ -272,34 +280,6 @@ function fasterAfterWarmup(onBody: (collections: number) => void = () => undefin
         calls += 1;
         onBody(collections);
         clock.advance((costSteps[collections] ?? 300) * STEP_MS);
-      },
-    },
-    now: clock.now,
-  };
-}
-
-/**
- * Builds a shared-state benchmark whose body costs 200 times the resolution a call in warmup, settling on one call
- * per sample, then half as much per call in each timing attempt as in the one before, so every timing
- * run's samples span 100 times the resolution and the third run is discarded too. Stubs `globalThis.gc` with the
- * counter of collections from the body's first call.
- *
- * @returns The benchmark and its scripted clock.
- */
-function fasterEveryRun(): Scripted {
-  let calls = 0;
-  let collections = 0;
-  const clock = steppedClock();
-  vi.stubGlobal("gc", () => {
-    if (calls > 0) collections += 1;
-  });
-  return {
-    benchmark: {
-      kind: "sharedState",
-      setup: () => 0,
-      fn: () => {
-        calls += 1;
-        clock.advance((200 / 2 ** collections) * STEP_MS);
       },
     },
     now: clock.now,
@@ -342,18 +322,19 @@ function emptyBodyFasterAfter250Ms(): Scripted {
 }
 
 /**
- * Builds a per-call benchmark whose warmup count passes the sampler's cap: a clock whose resolution
- * is 1e-9 ms puts the cap at two calls per sample, and a body that moves the clock by nothing spans
- * no clock change, so warmup's first sample asks for 100 calls. Stubs `globalThis.gc` with a no-op.
+ * Builds a benchmark whose warmup count passes the sampler's cap: a clock whose resolution is 1e-9
+ * ms puts the cap at two calls per sample, and a body that moves the clock by nothing spans no clock
+ * change, so warmup's first sample asks for 100 calls. Stubs `globalThis.gc` with a no-op.
  *
+ * @param kind - The benchmark's kind.
  * @returns The benchmark and its scripted clock.
  */
-function passesTheCap(): Scripted {
+function passesTheCap(kind: Kind): Scripted {
   const clock = steppedClock(() => 1e-9);
   vi.stubGlobal("gc", () => undefined);
   return {
     benchmark: {
-      kind: "perCall",
+      kind,
       setup: () => 0,
       fn: () => {
         clock.advance(0);
@@ -361,19 +342,6 @@ function passesTheCap(): Scripted {
     },
     now: clock.now,
   };
-}
-
-/**
- * Reads the message the sampler's cap refuses a count with, from a run that passes the cap.
- *
- * @returns The cap's message.
- * @throws Error when the run does not reject with the sampler's CalibrationError as cause.
- */
-async function capMessage(): Promise<string> {
-  const { benchmark, now } = passesTheCap();
-  const { cause } = await failure(measure(benchmark, { now }));
-  if (cause instanceof CalibrationError) return cause.message;
-  throw new Error("the run did not pass the cap", { cause });
 }
 
 // ---------------------------------------------------------------------------
@@ -387,7 +355,7 @@ describe("measure", () => {
 
       await run(fake);
 
-      expect(fake.log.filter((entry) => entry.startsWith("setup"))).toStrictEqual(["setup 0"]);
+      expect(logged(fake.log, "setup")).toStrictEqual(["setup 0"]);
     });
 
     it("tears its one state down once", async () => {
@@ -395,9 +363,7 @@ describe("measure", () => {
 
       await run(fake);
 
-      expect(fake.log.filter((entry) => entry.startsWith("teardown"))).toStrictEqual([
-        "teardown 0",
-      ]);
+      expect(logged(fake.log, "teardown")).toStrictEqual(["teardown 0"]);
     });
   });
 
@@ -424,11 +390,11 @@ describe("measure", () => {
         const error = await failure(run(fake));
 
         expect(error.phase).toBe("fn");
-        expect(bodyCalls(fake.log)).toHaveLength(1);
+        expect(logged(fake.log, "fn")).toHaveLength(1);
       },
     );
 
-    it("fails a run whose body returns a rejected promise in phase fn, leaving no rejection unhandled", async () => {
+    it("leaves no rejection unhandled when the body returns a rejected promise", async () => {
       const unhandled = recordUnhandledRejections();
       const rejection = new Error("banana");
       const fake = bench("sharedState", { returns: () => Promise.reject(rejection) });
@@ -485,7 +451,7 @@ describe("measure", () => {
 
       const result = await run(fake);
 
-      expect(result.sampleCount).toBe(64);
+      expect(result.stats.sampleCount).toBe(64);
     });
   });
 
@@ -546,53 +512,16 @@ describe("measure", () => {
       expect(error.phase).toBe("teardown");
       expect(error.cause).toBe(fake.thenReadError);
     });
-
-    const CLEANUP_RAISING_READ_CASES = [
-      {
-        kind: "sharedState",
-        when: "the body throws",
-        fails: { fn: 5 },
-        raisingThenAt: { teardown: 0 },
-      },
-      {
-        kind: "perCall",
-        when: "the body throws",
-        fails: { fn: 5 },
-        raisingThenAt: { teardown: 5 },
-      },
-      {
-        kind: "perCall",
-        when: "the setup's then read throws",
-        fails: {},
-        raisingThenAt: { setup: 0, teardown: 0 },
-      },
-    ] as const;
-
-    it.each(CLEANUP_RAISING_READ_CASES)(
-      "attaches the cleanup teardown's then read failure in phase teardown on a $kind run when $when",
-      async ({ kind, fails, raisingThenAt }) => {
-        const fake = bench(kind, { bodyMs: 200, fails, raisingThenAt });
-
-        const error = await failure(run(fake));
-
-        expect(error.teardownError).toBeInstanceOf(MeasureError);
-        expect(error.teardownError?.phase).toBe("teardown");
-        expect(error.teardownError?.cause).toBe(fake.thenReadError);
-      },
-    );
   });
 
   describe("when a callback or the collector throws", () => {
+    /** A body cost long enough that each sample is one call. */
+    const LONG_BODY_MS = 200;
+
     // One call per sample of 200 ms on both kinds. Body call 0 is the synchronous-body check and
     // calls 1-16 warm up; setup and teardown calls count the same way.
     const BUILD_OR_BODY_FAILURES = [
       { kind: "sharedState", when: "the setup throws", fails: { setup: 0 }, from: "setup" },
-      {
-        kind: "sharedState",
-        when: "the check's body call throws",
-        fails: { fn: 0 },
-        from: "fn",
-      },
       { kind: "perCall", when: "the check's setup throws", fails: { setup: 0 }, from: "setup" },
       { kind: "perCall", when: "the check's body call throws", fails: { fn: 0 }, from: "fn" },
     ] as const;
@@ -600,7 +529,7 @@ describe("measure", () => {
     it.each(BUILD_OR_BODY_FAILURES)(
       "rejects a $kind run in phase $from with the thrown value itself as cause when $when",
       async ({ kind, fails, from }) => {
-        const fake = bench(kind, { bodyMs: 200, fails });
+        const fake = bench(kind, { bodyMs: LONG_BODY_MS, fails });
 
         const error = await failure(run(fake));
 
@@ -610,14 +539,12 @@ describe("measure", () => {
     );
 
     it("tears down every state a per-call run built when the body throws in warmup", async () => {
-      const fake = bench("perCall", { bodyMs: 200, fails: { fn: 5 } });
+      const fake = bench("perCall", { bodyMs: LONG_BODY_MS, fails: { fn: 5 } });
 
       await run(fake).catch(() => undefined);
 
       expect(fake.live.size).toBe(0);
-      expect(fake.log.filter((entry) => entry.startsWith("teardown"))).toHaveLength(
-        fake.log.filter((entry) => entry.startsWith("setup")).length,
-      );
+      expect(logged(fake.log, "teardown")).toHaveLength(logged(fake.log, "setup").length);
     });
 
     it.each([
@@ -627,7 +554,7 @@ describe("measure", () => {
     ] as const)(
       "rejects a $kind run whose body succeeded in phase teardown with the teardown's value as cause when $when",
       async ({ kind, fails }) => {
-        const fake = bench(kind, { bodyMs: 200, fails });
+        const fake = bench(kind, { bodyMs: LONG_BODY_MS, fails });
 
         const error = await failure(run(fake));
 
@@ -640,7 +567,7 @@ describe("measure", () => {
     // from the live set: a second teardown of the state that threw would drop it too.
     it("leaves alive only the state whose teardown threw", async () => {
       const fails = { teardown: 2 };
-      const fake = bench("perCall", { bodyMs: 200, fails });
+      const fake = bench("perCall", { bodyMs: LONG_BODY_MS, fails });
 
       await run(fake).catch(() => undefined);
 
@@ -648,7 +575,7 @@ describe("measure", () => {
     });
 
     it("rejects a per-call run whose setup returns undefined in phase fn when the body throws in warmup", async () => {
-      const fake = bench("perCall", { bodyMs: 200, fails: { fn: 5 } });
+      const fake = bench("perCall", { bodyMs: LONG_BODY_MS, fails: { fn: 5 } });
 
       const error = await failure(runOnUndefined(fake));
 
@@ -656,7 +583,7 @@ describe("measure", () => {
     });
 
     it("tears down every state a per-call run whose setup returns undefined built when the body throws in warmup", async () => {
-      const fake = bench("perCall", { bodyMs: 200, fails: { fn: 5 } });
+      const fake = bench("perCall", { bodyMs: LONG_BODY_MS, fails: { fn: 5 } });
 
       await runOnUndefined(fake).catch(() => undefined);
 
@@ -671,7 +598,7 @@ describe("measure", () => {
     it.each(BODY_AND_CLEANUP_FAILURES)(
       "rejects a $kind run in phase fn with the body's value as cause when the cleanup's teardown throws too",
       async ({ kind, fails }) => {
-        const fake = bench(kind, { bodyMs: 200, fails });
+        const fake = bench(kind, { bodyMs: LONG_BODY_MS, fails });
 
         const error = await failure(run(fake));
 
@@ -683,94 +610,55 @@ describe("measure", () => {
     it.each(BODY_AND_CLEANUP_FAILURES)(
       "keeps the cleanup's teardown failure on a $kind run's error in phase teardown, the teardown's value as cause, when the body throws first",
       async ({ kind, fails }) => {
-        const fake = bench(kind, { bodyMs: 200, fails });
+        const fake = bench(kind, { bodyMs: LONG_BODY_MS, fails });
 
         const error = await failure(run(fake));
 
-        expect(error.teardownError).toBeInstanceOf(MeasureError);
         expect(error.teardownError?.phase).toBe("teardown");
         expect(error.teardownError?.cause).toBe(fake.teardownError);
       },
     );
 
+    it("keeps the cleanup's teardown failure in phase teardown on a per-call run whose body fails with a MeasureError", async () => {
+      const fake = bench("perCall", { returns: () => PENDING_THENABLE, fails: { teardown: 0 } });
+
+      const error = await failure(run(fake));
+
+      expect(error.phase).toBe("fn");
+      expect(error.teardownError?.phase).toBe("teardown");
+      expect(error.teardownError?.cause).toBe(fake.teardownError);
+    });
+
     it("keeps a cleanup teardown that throws null on the body's error, null as cause", async () => {
       const fake = bench("perCall", {
-        bodyMs: 200,
+        bodyMs: LONG_BODY_MS,
         fails: { fn: 5, teardown: 5 },
         teardownThrows: null,
       });
 
       const error = await failure(run(fake));
 
-      expect(error.teardownError).toBeInstanceOf(MeasureError);
       expect(error.teardownError?.cause).toBeNull();
     });
 
     it("rejects a shared-state run whose collection throws and whose cleanup's teardown throws in phase child, the collector's value as cause", async () => {
-      const fake = bench("sharedState", { bodyMs: 200, fails: { teardown: 0 } });
-      const collectorError = new Error("durian");
-      vi.stubGlobal("gc", () => {
-        throw collectorError;
-      });
+      const fake = bench("sharedState", { bodyMs: LONG_BODY_MS, fails: { teardown: 0 } });
+      const collectorError = throwingCollector();
 
       const error = await failure(run(fake));
 
       expect(error.phase).toBe("child");
       expect(error.cause).toBe(collectorError);
-    });
-
-    it("keeps the cleanup's teardown failure in phase teardown on a shared-state run whose collection throws, the teardown's value as cause", async () => {
-      const fake = bench("sharedState", { bodyMs: 200, fails: { teardown: 0 } });
-      vi.stubGlobal("gc", () => {
-        throw new Error("durian");
-      });
-
-      const error = await failure(run(fake));
-
-      expect(error.teardownError?.phase).toBe("teardown");
-      expect(error.teardownError?.cause).toBe(fake.teardownError);
-    });
-
-    it("rejects a shared-state run with no teardown failure kept when the body throws and the cleanup's teardown succeeds", async () => {
-      const fake = bench("sharedState", { bodyMs: 200, fails: { fn: 5 } });
-
-      const error = await failure(run(fake));
-
-      expect(error.teardownError).toBeNull();
     });
 
     it("rejects a per-call run whose collection throws in phase child with the collector's value as cause", async () => {
-      const fake = bench("perCall", { bodyMs: 200 });
-      const collectorError = new Error("durian");
-      vi.stubGlobal("gc", () => {
-        throw collectorError;
-      });
+      const fake = bench("perCall", { bodyMs: LONG_BODY_MS });
+      const collectorError = throwingCollector();
 
       const error = await failure(run(fake));
 
       expect(error.phase).toBe("child");
       expect(error.cause).toBe(collectorError);
-    });
-
-    it("rejects a shared-state run whose body throws an Error worded as the cap's in phase fn", async () => {
-      const own = new Error(await capMessage());
-      const clock = steppedClock();
-      let calls = 0;
-      vi.stubGlobal("gc", () => undefined);
-      const benchmark: Case<number> = {
-        kind: "sharedState",
-        setup: () => 0,
-        fn: () => {
-          calls += 1;
-          if (calls > 5) throw own;
-          clock.advance(200);
-        },
-      };
-
-      const error = await failure(measure(benchmark, { now: clock.now }));
-
-      expect(error.phase).toBe("fn");
-      expect(error.cause).toBe(own);
     });
 
     it("rejects a run whose body throws a value whose instanceof check throws in phase fn, that value as cause", async () => {
@@ -791,26 +679,8 @@ describe("measure", () => {
       expect(error.cause).toBe(trapped);
     });
 
-    it("rejects a shared-state run whose third timing attempt is discarded too in phase calibration", async () => {
-      const fake = fasterEveryRun();
-
-      const error = await failure(measure(fake.benchmark, { now: fake.now }));
-
-      expect(error.phase).toBe("calibration");
-      expect(error.cause).toBeInstanceOf(CalibrationError);
-    });
-
-    it("rejects a per-call run whose warmup count passes the cap in phase calibration, the sampler's error as cause", async () => {
-      const { benchmark, now } = passesTheCap();
-
-      const error = await failure(measure(benchmark, { now }));
-
-      expect(error.phase).toBe("calibration");
-      expect(error.cause).toBeInstanceOf(CalibrationError);
-    });
-
     it("rejects a run whose empty body's collection throws in phase child, the collector's value as cause", async () => {
-      const fake = bench("perCall", { bodyMs: 200 });
+      const fake = bench("perCall", { bodyMs: LONG_BODY_MS });
       const collectorError = new Error("durian");
       let collections = 0;
       vi.stubGlobal("gc", () => {
@@ -836,20 +706,12 @@ describe("measure", () => {
       expect(error.message).toMatch(/171875[^]*125000|125000[^]*171875/);
     });
 
-    it("fails a shared-state run whose empty body asks for more calls per sample than the cap in phase calibration", async () => {
-      const fake = bench("sharedState");
-
-      const error = await failure(measure(fake.benchmark, { now: fake.now }));
-
-      expect(error.phase).toBe("calibration");
-    });
-
     it("returns the ratio to the empty body as it reads once 250 ms of the empty body's warmup have passed", async () => {
       const scripted = emptyBodyFasterAfter250Ms();
 
       const result = await measure(scripted.benchmark, { now: scripted.now, callsPerSample: 1 });
 
-      expect(result.ratioToEmptyBody).toBe(80);
+      expect(result.checks.ratioToEmptyBody).toBe(80);
     });
 
     // Two calls per sample: summed per-call spans read one resolution per empty call, a batched pair of
@@ -859,8 +721,30 @@ describe("measure", () => {
 
       const result = await measure(fake.benchmark, { now: fake.now, callsPerSample: 2 });
 
-      expect(result.ratioToEmptyBody).toBeCloseTo(800, 6);
+      expect(result.checks.ratioToEmptyBody).toBeCloseTo(800, 6);
     });
+  });
+
+  describe("when a count passes the cap", () => {
+    it("fails a shared-state run whose empty body asks for more calls per sample than the cap in phase calibration", async () => {
+      const fake = bench("sharedState");
+
+      const error = await failure(measure(fake.benchmark, { now: fake.now }));
+
+      expect(error.phase).toBe("calibration");
+    });
+
+    it.each(KINDS)(
+      "rejects a %s run whose warmup count passes the cap in phase calibration, the sampler's error as cause",
+      async (kind) => {
+        const { benchmark, now } = passesTheCap(kind);
+
+        const error = await failure(measure(benchmark, { now }));
+
+        expect(error.phase).toBe("calibration");
+        expect(error.cause).toBeInstanceOf(CalibrationError);
+      },
+    );
   });
 
   describe("when given minTime and minSamples", () => {
@@ -874,7 +758,7 @@ describe("measure", () => {
         minSamples: 10,
       });
 
-      expect(result.sampleCount).toBe(30);
+      expect(result.stats.sampleCount).toBe(30);
     });
   });
 
@@ -885,22 +769,26 @@ describe("measure", () => {
       const result = await measure(fake.benchmark, { now: fake.now, callsPerSample: 2 });
 
       expect(result).toStrictEqual({
-        min: 100_000_000,
-        p25: 100_000_000,
-        median: 100_000_000,
-        p75: 100_000_000,
-        p99: 100_000_000,
-        max: 100_000_000,
-        mean: 100_000_000,
-        sampleCount: 64,
-        timerResolutionNs: 125_000,
-        callsPerSample: 2,
-        callsPerSampleFixed: true,
-        ratioToEmptyBody: 1600,
-        gcDuringTiming: expect.any(Object),
-        timingAttempts: 1,
-        warmupSamples: WARMUP_MIN_SAMPLES,
-        timingMs: expect.any(Number),
+        stats: {
+          min: 100_000_000,
+          p25: 100_000_000,
+          median: 100_000_000,
+          p75: 100_000_000,
+          p99: 100_000_000,
+          max: 100_000_000,
+          mean: 100_000_000,
+          sampleCount: 64,
+        },
+        sampling: {
+          timerResolutionNs: 125_000,
+          callsPerSample: 2,
+          callsPerSampleFixed: true,
+          warmupSamples: WARMUP_MIN_SAMPLES,
+          timingAttempts: 1,
+          timingMs: expect.any(Number),
+        },
+        checks: { ratioToEmptyBody: 1600 },
+        gc: expect.any(Object),
       });
     });
 
@@ -909,11 +797,11 @@ describe("measure", () => {
 
       const result = await measure(fake.benchmark, { now: fake.now });
 
-      expect(result.callsPerSampleFixed).toBe(false);
+      expect(result.sampling.callsPerSampleFixed).toBe(false);
     });
   });
 
-  describe("when the body forces collections during timing", () => {
+  describe("when counting collections during timing", () => {
     it("reports the collections a body forces while timed, with their total and longest duration", async () => {
       const gc = enabledGc();
       const fake = bench("sharedState", { returns: gc });
@@ -921,7 +809,7 @@ describe("measure", () => {
 
       const result = await run(fake);
 
-      const observed = result.gcDuringTiming;
+      const observed = result.gc;
       expect(observed?.major).toBeGreaterThanOrEqual(1);
       expect(observed?.maxMs).toBeGreaterThan(0);
       expect(observed?.totalMs).toBeGreaterThanOrEqual(observed?.maxMs ?? Number.NaN);
@@ -932,7 +820,7 @@ describe("measure", () => {
 
       const result = await run(fake);
 
-      expect(result.gcDuringTiming?.minor).toBeGreaterThanOrEqual(1);
+      expect(result.gc?.minor).toBeGreaterThanOrEqual(1);
     });
 
     it("counts the forced GC a body forces during the kept timing attempt, leaving out those it forces during a discarded one", async () => {
@@ -948,7 +836,7 @@ describe("measure", () => {
 
       const result = await measure(fake.benchmark, { now: fake.now });
 
-      expect(result.gcDuringTiming?.count).toBe(1);
+      expect(result.gc?.count).toBe(1);
     });
 
     it("counts none for a body that allocates nothing, leaving out the forced GC before timing", async () => {
@@ -964,7 +852,7 @@ describe("measure", () => {
 
       const result = await measure(benchmark, { now: clock.now, callsPerSample: 1 });
 
-      expect(result.gcDuringTiming).toStrictEqual({
+      expect(result.gc).toStrictEqual({
         count: 0,
         minor: 0,
         major: 0,

@@ -18,39 +18,40 @@ import {
   parseCommand,
   REPOSITORY,
 } from "./command-line.js";
+import type { Runtime } from "./measure/runtime.js";
 import { ConfigError, failedWith, resolveOptions } from "./options.js";
 import { progressOn, type Progress } from "./progress.js";
 import type { Report } from "./report.js";
+import { packageVersion, run, type RunInput, runOnce } from "./run.js";
+import type { OnceInput } from "./schedule.js";
 import {
   type ChildFunctionOverrides,
   type ChildFunctions,
   ListingError,
-  type OnceInput,
-  packageVersion,
-  run,
-  type RunInput,
-  runOnce,
   selectCases,
   shownPath,
-} from "./run.js";
+} from "./select.js";
 import { failureLines, formatTable, paint } from "./table.js";
-import { thrownMessage } from "./utils.js";
+import { errorStack, isInstance, thrownMessage } from "./utils.js";
 
 /** Where the command prints: `process.stdout` and `process.stderr` fit. */
 export interface Output {
   /**
-   * Writes `text`; a write that fails reports its error to `done`, and a stream may report it
-   * again afterwards as an `error` event.
+   * Writes `text`.
    *
    * @param text - The text to write.
-   * @param done - Called once the write is done, with the error when it failed.
    * @returns Whatever the stream returns, such as Node's `false` when it wants a pause; the
    *   command ignores it.
    */
-  write(text: string, done?: (error?: Error | null) => void): unknown;
+  write(text: string): unknown;
   /** Whether the stream is a terminal, which shows color unless the environment turns it off. */
   readonly isTTY?: boolean | undefined;
-  /** The bits per color the terminal shows; read from the environment when absent. */
+  /**
+   * The bits per color the terminal shows, which Node's and Bun's terminals lower to one bit under
+   * `NO_COLOR` or a dumb `TERM`; a terminal without it shows color.
+   *
+   * @returns The bits per color the terminal shows.
+   */
   getColorDepth?(): number;
   /** The terminal's width in columns, which the live progress line is cut to; uncut when absent. */
   readonly columns?: number | undefined;
@@ -63,12 +64,39 @@ type Signal = (typeof SIGNALS)[number];
 
 /** What delivers the interrupting signals: `process` fits. */
 export interface SignalSource {
+  /**
+   * Listens for an interrupting signal.
+   *
+   * @param signal - The signal to listen for.
+   * @param listener - Called when the signal arrives.
+   * @returns Whatever the source returns; the command ignores it.
+   */
   on(signal: Signal, listener: () => void): unknown;
+  /**
+   * Stops listening for an interrupting signal.
+   *
+   * @param signal - The signal to stop listening for.
+   * @param listener - The listener {@link SignalSource.on} added.
+   * @returns Whatever the source returns; the command ignores it.
+   */
   off(signal: Signal, listener: () => void): unknown;
 }
 
-/** The stream the command's output goes to: `process.stdout` fits. */
-export interface Stdout extends Output {
+/**
+ * A stream the command prints to and watches for failed writes: `process.stdout` and
+ * `process.stderr` fit.
+ */
+export interface WatchedOutput extends Output {
+  /**
+   * Writes `text`; a write that fails reports its error to `done`, and a stream may report it
+   * again afterwards as an `error` event.
+   *
+   * @param text - The text to write.
+   * @param done - Called once the write is done, with the error when it failed.
+   * @returns Whatever the stream returns, such as Node's `false` when it wants a pause; the
+   *   command ignores it.
+   */
+  write(text: string, done?: (error?: Error | null) => void): unknown;
   /**
    * Listens for the error a failed write reports after it returns, such as `EPIPE` once the
    * reader went away.
@@ -82,7 +110,7 @@ export interface Stdout extends Output {
    * Stops listening for the error a failed write reports.
    *
    * @param event - The `error` event.
-   * @param listener - The listener {@link Stdout.on} added.
+   * @param listener - The listener {@link WatchedOutput.on} added.
    * @returns Whatever the stream returns; the command ignores it.
    */
   off(event: "error", listener: (error: Error) => void): unknown;
@@ -92,8 +120,8 @@ export interface Stdout extends Output {
 export interface CommandIo extends ChildFunctionOverrides {
   /** The directory positional files, `--output` and `--config` are relative to; `process.cwd()` by default. */
   readonly cwd?: string | undefined;
-  readonly stdout?: Stdout | undefined;
-  readonly stderr?: Output | undefined;
+  readonly stdout?: WatchedOutput | undefined;
+  readonly stderr?: WatchedOutput | undefined;
   readonly signals?: SignalSource | undefined;
 }
 
@@ -123,26 +151,22 @@ interface Context extends ChildFunctions {
 // Color and errors
 // ---------------------------------------------------------------------------
 
-/** The color depth of a terminal that reports none: one bit under `NO_COLOR` or a dumb `TERM`. */
-function environmentColorDepth(): number {
-  const noColor = process.env["NO_COLOR"];
-  const colorOff = (noColor !== undefined && noColor !== "") || process.env["TERM"] === "dumb";
-  return colorOff ? 1 : 4;
-}
-
 /**
  * Whether `output` shows color by `styleText`'s rules: `FORCE_COLOR` decides when set, otherwise a
- * terminal of more than one bit per color does. `styleText` judges only a real stream, so it judges
- * one that reports what `output` does.
+ * terminal of more than one bit per color does, its color depth already applying `NO_COLOR` and a
+ * dumb `TERM`. `styleText` judges only a real stream, so it judges one that reports what `output`
+ * does.
  *
  * @param output - The stream the command prints to.
  * @returns Whether text styled for `output` keeps its escape codes.
  */
 function showsColor(output: Output): boolean {
-  const stream = Object.assign(new Writable(), {
-    isTTY: output.isTTY === true,
-    getColorDepth: (): number => output.getColorDepth?.() ?? environmentColorDepth(),
-  });
+  const getColorDepth = output.getColorDepth?.bind(output);
+  const stream = Object.assign(
+    new Writable(),
+    { isTTY: output.isTTY === true },
+    getColorDepth === undefined ? {} : { getColorDepth },
+  );
   return styleText("red", "x", { stream }) !== "x";
 }
 
@@ -252,9 +276,9 @@ function writeReportOrFail(path: string, shown: string, report: Report): void {
  * @param path - The report file, as an absolute path.
  * @param shown - The report file as error messages show it.
  * @returns `onSelected`, which writes the report's head and throws when that write fails, and
- *   `onResult`, which rewrites the report with each new result once `onSelected` ran and ignores
- *   a failed write: the caller writes the report once more when the run ends, which repairs the
- *   file or reports the failure.
+ *   `onResult`, which rewrites the report with each new result and the contest entries finished so
+ *   far once `onSelected` ran and ignores a failed write: the caller writes the report once more
+ *   when the run ends, which repairs the file or reports the failure.
  * @throws {ConfigError} From `onSelected`, when writing the report's head fails.
  */
 function reportWrites(path: string, shown: string): Pick<RunInput, "onSelected" | "onResult"> {
@@ -264,9 +288,9 @@ function reportWrites(path: string, shown: string): Pick<RunInput, "onSelected" 
       current = head;
       writeReportOrFail(path, shown, head);
     },
-    onResult: (result) => {
+    onResult: (result, contests) => {
       if (current === undefined) return;
-      current = { ...current, results: [...current.results, result] };
+      current = { ...current, results: [...current.results, result], contests };
       try {
         writeReport(path, current);
       } catch {
@@ -301,15 +325,26 @@ async function measure(command: Command, context: Context): Promise<number> {
       ? undefined
       : { name: output, path: resolve(context.cwd, output) };
   const writes = file === undefined ? undefined : reportWrites(file.path, file.name);
+  const contested = new Map<Runtime, ReadonlySet<string>>();
   const report = await run({
     ...command.input,
     ...childInput(context),
     callsPerSample: command.callsPerSample,
+    onDropped: (count) => {
+      progress.dropped(count);
+    },
     ...writes,
+    onSelected: (head, contests) => {
+      const ids = new Set(contests.flat().map(({ id }) => id));
+      for (const runtime of head.options.runtimes) contested.set(runtime, ids);
+      writes?.onSelected?.(head, contests);
+    },
   });
   progress.stop();
   const tableTo = toStdout ? "stderr" : "stdout";
-  context[tableTo].write(formatTable(report.results, { color: context.colors[tableTo] }));
+  context[tableTo].write(
+    formatTable(report.results, report.contests, { color: context.colors[tableTo], contested }),
+  );
   if (toStdout) stdout.write(reportText(report));
   let written = true;
   if (file !== undefined) {
@@ -386,6 +421,11 @@ async function once(command: Command, context: Context): Promise<number> {
 // Entry point
 // ---------------------------------------------------------------------------
 
+/** `text`, with a newline at its end if it has none. */
+function withNewline(text: string): string {
+  return text.endsWith("\n") ? text : `${text}\n`;
+}
+
 /**
  * Prints a `ConfigError`; a failed listing's stack and output tail come before its message.
  *
@@ -396,7 +436,7 @@ async function once(command: Command, context: Context): Promise<number> {
 function printError(stderr: Output, error: ConfigError, color: boolean): void {
   if (error instanceof ListingError) {
     for (const text of [error.failureStack ?? "", error.output]) {
-      if (text !== "") stderr.write(text.endsWith("\n") ? text : `${text}\n`);
+      if (text !== "") stderr.write(withNewline(text));
     }
   }
   stderr.write(errorLine(error.message, color));
@@ -410,6 +450,21 @@ interface CrashAbout {
   readonly runtime: string;
   /** Whether the stream the report goes to shows color; plain when absent. */
   readonly color?: boolean | undefined;
+}
+
+/**
+ * Names a runtime with its version, as the crash report's runtime line shows it.
+ *
+ * @param runtime - The runtime running this process.
+ * @param versions - Version numbers by component name, shaped like `process.versions`.
+ * @returns `runtime`, a space, then its version from `versions`, or `unknown` when `versions` holds
+ *   none for it.
+ */
+export function runtimeLabel(
+  runtime: Runtime,
+  versions: Readonly<Record<string, string | undefined>>,
+): string {
+  return `${runtime} ${versions[runtime] ?? "unknown"}`;
 }
 
 /** The percent-encoded longest start of `text`, cut on a whole character, that fits in `room`. */
@@ -429,18 +484,19 @@ function encodedStart(text: string, room: number): string {
 
 /**
  * Builds what `repset` prints when the command fails with an error that is not a
- * {@link ConfigError}: the error's stack, then a line naming the version and the platform, ending
- * with a link that opens a GitHub issue prefilled with them and the error's message. The message
- * is cut to keep the link within {@link MAX_ISSUE_LINK} characters; the stack holds it whole.
+ * {@link ConfigError}.
  *
  * @param error - The thrown value.
  * @param about - The version, the OS, the runtime and whether the output shows color.
- * @returns The report's lines, each ending with a newline.
+ * @returns The error's stack, then a line naming the version and the platform, ending with a link
+ *   that opens a GitHub issue prefilled with them and the error's message. The message is cut to
+ *   keep the link within {@link MAX_ISSUE_LINK} characters; the stack holds it whole. Each line
+ *   ends with a newline.
  */
 export function crashReport(error: unknown, about: CrashAbout): string {
   const version = about.version ?? "unknown";
   const message = thrownMessage(error);
-  const stack = (error instanceof Error ? error.stack : undefined) ?? message;
+  const stack = errorStack(error) ?? message;
   const head = encodeURIComponent(
     `- repset: ${version}\n- OS: ${about.os}\n- Runtime: ${about.runtime}\n\n\`\`\`text\n`,
   );
@@ -448,30 +504,38 @@ export function crashReport(error: unknown, about: CrashAbout): string {
   const room = MAX_ISSUE_LINK - NEW_ISSUE.length - head.length - foot.length;
   const link = `${NEW_ISSUE}${head}${encodedStart(message, room)}${foot}`;
   const line = `version ${version} crashed on ${about.os} with ${about.runtime}; report it at ${link}`;
-  return `${stack.endsWith("\n") ? stack : `${stack}\n`}${errorLine(line, about.color === true)}`;
+  return `${withNewline(stack)}${errorLine(line, about.color === true)}`;
 }
 
-/** Stdout as the command writes to it, and what it learned of stdout's failure. */
-interface GuardedStdout {
-  /** Writes to stdout until a write fails, then drops every write. */
+/** A stream as the command writes to it, and what it learned of the stream's failure. */
+interface GuardedOutput {
+  /**
+   * Writes to the stream until a write fails, then drops every write; reads the stream's terminal
+   * traits as they are now.
+   */
   readonly output: Output;
-  /** Resolves once every write made so far is done. */
-  settled(): Promise<void>;
-  /** The first error a write to stdout failed with, or `undefined` when none failed. */
+  /** The first error a write to the stream failed with, or `undefined` when none failed. */
   failure(): Error | undefined;
-  /** Stops listening for stdout's errors, unless one arrived. */
-  release(): void;
+  /**
+   * Waits for every write made so far, then stops listening for the stream's errors unless one
+   * arrived or `keepListening` is set.
+   *
+   * @param keepListening - Whether to keep taking the stream's errors, for a stream its caller
+   *   still writes to.
+   * @returns Once every write made so far is done.
+   */
+  close(keepListening?: boolean): Promise<void>;
 }
 
 /**
- * Watches `stdout` for a failed write, which Node reports after the write returns: to the
+ * Watches `stream` for a failed write, which Node reports after the write returns: to the
  * write's callback, then as an `error` event.
  *
- * @param stdout - The stream the command's output goes to.
+ * @param stream - A stream the command prints to.
  * @param onFailure - Called once, with the first error a write failed with.
- * @returns The output to write to in place of `stdout`, and what it learned of stdout's failure.
+ * @returns The output to write to in place of `stream`, and what it learned of its failure.
  */
-function guardStdout(stdout: Stdout, onFailure: (error: Error) => void): GuardedStdout {
+function guardOutput(stream: WatchedOutput, onFailure: (error: Error) => void): GuardedOutput {
   let failure: Error | undefined;
   let pending = Promise.resolve();
   const fail = (error: Error): void => {
@@ -479,31 +543,39 @@ function guardStdout(stdout: Stdout, onFailure: (error: Error) => void): Guarded
     failure = error;
     onFailure(error);
   };
-  stdout.on("error", fail);
+  stream.on("error", fail);
   return {
     output: {
       write: (text) => {
         if (failure !== undefined) return false;
         pending = new Promise((done) => {
-          stdout.write(text, (error) => {
+          stream.write(text, (error) => {
             if (error !== undefined && error !== null) fail(error);
             done();
           });
         });
         return true;
       },
+      // Getters, not copies: a terminal's width changes as it is resized, and the live progress
+      // line is cut to the width at each redraw.
+      get isTTY() {
+        return stream.isTTY;
+      },
+      get columns() {
+        return stream.columns;
+      },
     },
-    settled: async () => pending,
     failure: () => failure,
-    release: () => {
+    close: async (keepListening = false) => {
+      await pending;
       // A failed stream emits its error after the write's callback ran, so the listener stays to
       // take it: an error event with no listener crashes the process.
-      if (failure === undefined) stdout.off("error", fail);
+      if (failure === undefined && !keepListening) stream.off("error", fail);
     },
   };
 }
 
-/** What stopped the command first: a signal, or a write to stdout that failed. */
+/** What stopped the command first: a signal, or a write to stdout or stderr that failed. */
 type Stop = { readonly signal: Signal } | { readonly error: Error };
 
 /**
@@ -514,6 +586,9 @@ const SIGNAL_NUMBERS = { SIGHUP: 1, SIGINT: 2, SIGPIPE: 13, SIGTERM: 15 } as con
   Signal | "SIGPIPE",
   number
 >;
+
+/** A shell reports a process a signal ended as this plus the signal's number. */
+const SIGNAL_EXIT_BASE = 128;
 
 /** Whether `error` says the reader of the stream went away. */
 function closedPipe(error: Error): boolean {
@@ -526,13 +601,13 @@ function closedPipe(error: Error): boolean {
  * @param stop - What stopped the command first, or `undefined` when nothing did.
  * @param code - The code the command would exit with had nothing stopped it.
  * @returns `code` when nothing stopped the command, 128 plus the number of the signal that did,
- *   128 plus `SIGPIPE`'s number when stdout's reader went away, and 1 when a write to stdout
- *   failed otherwise.
+ *   128 plus `SIGPIPE`'s number when stdout's or stderr's reader went away, and 1 when a write to
+ *   either failed otherwise.
  */
 function stoppedCode(stop: Stop | undefined, code: number): number {
   if (stop === undefined) return code;
-  if ("signal" in stop) return 128 + SIGNAL_NUMBERS[stop.signal];
-  return closedPipe(stop.error) ? 128 + SIGNAL_NUMBERS.SIGPIPE : 1;
+  if ("signal" in stop) return SIGNAL_EXIT_BASE + SIGNAL_NUMBERS[stop.signal];
+  return closedPipe(stop.error) ? SIGNAL_EXIT_BASE + SIGNAL_NUMBERS.SIGPIPE : 1;
 }
 
 /**
@@ -554,8 +629,8 @@ async function perform(args: readonly string[], context: Context): Promise<numbe
   } catch (error) {
     context.progress.stop();
     // Commander ends a run that printed the help or the version with an error of exit code 0.
-    if (error instanceof CommanderError) return 0;
-    if (!(error instanceof ConfigError)) throw error;
+    if (isInstance(error, CommanderError)) return 0;
+    if (!isInstance(error, ConfigError)) throw error;
     printError(context.stderr, error, context.colors.stderr);
     return 2;
   }
@@ -565,27 +640,27 @@ async function perform(args: readonly string[], context: Context): Promise<numbe
  * Runs the `repset` command. It sets no `process.exitCode` and never exits the process, so the
  * caller decides when to end it and stdout drains first.
  *
- * A signal or a failed write to stdout stops the run: the running child is killed, no other case
- * starts, nothing more goes to stdout, and the report file still gets the finished results.
+ * A signal or a failed write to stdout or stderr stops the run: the running child is killed, no
+ * other case starts, nothing more goes to the failed stream, and the report file still gets the
+ * finished results.
  *
  * @param args - The command's arguments, without the runtime and the script.
  * @param io - The working directory, the streams, the signal source and the child functions; the
  *   process's own by default.
  * @returns 0 when every selected case ran or `--help` or `--version` printed, 1 when one failed,
- *   the last report write failed or a write to stdout failed with an error other than `EPIPE`, 2
- *   when the command line, the config or the selection is wrong, 130, 143 or 129 when `SIGINT`,
- *   `SIGTERM` or `SIGHUP` interrupted it, and 141 when stdout's reader went away. The first of a
- *   signal and a failed write to stdout sets the code, even when a wrong selection or config
- *   follows it.
+ *   the last report write failed or a write to stdout or stderr failed with an error other than
+ *   `EPIPE`, 2 when the command line, the config or the selection is wrong, 130, 143 or 129 when
+ *   `SIGINT`, `SIGTERM` or `SIGHUP` interrupted it, and 141 when stdout's or stderr's reader went
+ *   away. The first of a signal, a failed write to stdout and a failed write to stderr sets the
+ *   code, even when a wrong selection or config follows it.
  * @throws {Error} An error that is not a {@link ConfigError}, such as one reading the package's
  *   `package.json`.
  */
 export async function main(args: readonly string[], io: CommandIo = {}): Promise<number> {
-  const stderr = io.stderr ?? process.stderr;
+  const rawStderr = io.stderr ?? process.stderr;
   const rawStdout = io.stdout ?? process.stdout;
   // Judged before the command line is checked, so a usage error honors --no-color too.
-  const colors = streamColors(args, rawStdout, stderr);
-  const progress = progressOn(stderr, colors.stderr);
+  const colors = streamColors(args, rawStdout, rawStderr);
   const controller = new AbortController();
   let stop: Stop | undefined;
   const stopWith = (cause: Stop): void => {
@@ -600,31 +675,40 @@ export async function main(args: readonly string[], io: CommandIo = {}): Promise
   });
   const signals = io.signals ?? process;
   for (const [signal, listener] of listeners) signals.on(signal, listener);
-  const stdout = guardStdout(rawStdout, (error) => {
-    stopWith({ error });
-  });
+  const guard = (stream: WatchedOutput): GuardedOutput =>
+    guardOutput(stream, (error) => {
+      stopWith({ error });
+    });
+  const stdout = guard(rawStdout);
+  const stderr = guard(rawStderr);
+  const progress = progressOn(stderr.output, colors.stderr);
   let code: number;
   try {
-    code = await perform(args, {
-      cwd: io.cwd ?? process.cwd(),
-      stdout: stdout.output,
-      stderr,
-      colors,
-      signal: controller.signal,
-      progress,
-      findRuntime: io.findRuntime ?? realFindRuntime,
-      startChild: io.startChild ?? realStartChild,
-    });
+    try {
+      code = await perform(args, {
+        cwd: io.cwd ?? process.cwd(),
+        stdout: stdout.output,
+        stderr: stderr.output,
+        colors,
+        signal: controller.signal,
+        progress,
+        findRuntime: io.findRuntime ?? realFindRuntime,
+        startChild: io.startChild ?? realStartChild,
+      });
+    } finally {
+      for (const [signal, listener] of listeners) signals.off(signal, listener);
+      // Even on a crash: a write still in flight may yet fail, and its error needs the listener.
+      await stdout.close();
+    }
+    const failure = stdout.failure();
+    if (failure !== undefined && !closedPipe(failure)) {
+      const named = "code" in failure ? String(failure.code) : failure.message;
+      stderr.output.write(errorLine(`cannot write to stdout: ${named}`, colors.stderr));
+    }
   } finally {
-    for (const [signal, listener] of listeners) signals.off(signal, listener);
-    // Even on a crash: a write still in flight may yet fail, and its error needs the listener.
-    await stdout.settled();
-    stdout.release();
-  }
-  const failure = stdout.failure();
-  if (failure !== undefined && !closedPipe(failure)) {
-    const named = "code" in failure ? String(failure.code) : failure.message;
-    stderr.write(errorLine(`cannot write to stdout: ${named}`, colors.stderr));
+    // Closed last: the line naming stdout's failure is stderr's last write. Still listened to, as
+    // the caller writes a crash report to stderr when this throws.
+    await stderr.close(true);
   }
   return stoppedCode(stop, code);
 }

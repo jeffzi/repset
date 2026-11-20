@@ -1,4 +1,0 @@
-#!/bin/sh
-# Prints a version and exits, leaving a process that holds its stdout open for 5 s.
-echo 1.3.2
-/bin/sleep 5 &

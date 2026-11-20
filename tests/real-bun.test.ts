@@ -17,13 +17,17 @@ function spawnError(code: string): NodeJS.ErrnoException {
 describe("requiresRealBun", () => {
   describe("when Bun is installed", () => {
     it("returns true without CI", () => {
-      expect(requiresRealBun(true, undefined)).toBe(true);
+      const required = requiresRealBun(true, undefined);
+
+      expect(required).toBe(true);
     });
   });
 
   describe("when Bun is missing", () => {
     it.each(CI_VALUES)("with CI=$ci, returns $isCi", ({ ci, isCi }) => {
-      expect(requiresRealBun(false, ci)).toBe(isCi);
+      const required = requiresRealBun(false, ci);
+
+      expect(required).toBe(isCi);
     });
   });
 });
@@ -33,13 +37,17 @@ describe("bunExecutableFound", () => {
     it("returns false", () => {
       const result = { error: spawnError("ENOENT") };
 
-      expect(bunExecutableFound(result)).toBe(false);
+      const executable = bunExecutableFound(result);
+
+      expect(executable).toBe(false);
     });
   });
 
   describe("when a bun executable ran", () => {
     it("returns true when the spawn reported no error", () => {
-      expect(bunExecutableFound({ error: undefined })).toBe(true);
+      const executable = bunExecutableFound({ error: undefined });
+
+      expect(executable).toBe(true);
     });
   });
 
@@ -47,7 +55,9 @@ describe("bunExecutableFound", () => {
     it("returns true", () => {
       const result = { error: spawnError("EACCES") };
 
-      expect(bunExecutableFound(result)).toBe(true);
+      const executable = bunExecutableFound(result);
+
+      expect(executable).toBe(true);
     });
   });
 });

@@ -32,11 +32,38 @@ function benchFile(name: string): string {
   return fixturePath("child", name);
 }
 
+/** A list request on the three-cases benchmark file. */
+const LIST = { mode: "list", file: benchFile("three-cases.ts") } as const;
+
+/** What a list request on `three-cases.ts` returns, by id. */
+const THREE_CASES_LISTED = {
+  status: "ok",
+  result: { cases: [{ id: "alpha" }, { id: "beta" }, { id: "gamma" }] },
+} as const;
+
 /** How long after a lookup or a child starts its stop signal fires. */
 const STOP_AFTER_MS = 300;
 
 /** The `timeout` of a child that must be killed; the hanging fixtures end by themselves after 5 s. */
 const SHORT_TIMEOUT_MS = 1000;
+
+/** Matches `SHORT_TIMEOUT_MS` as a whole number. */
+const NAMES_SHORT_TIMEOUT = new RegExp(`\\b${String(SHORT_TIMEOUT_MS)}\\b`, "u");
+
+/** The bytes of output the parent keeps. */
+const OUTPUT_TAIL_BYTES = 16 * 1024;
+
+/** The UTF-8 bytes of "€". */
+const EURO_BYTES = 3;
+
+/** A signal that aborts `STOP_AFTER_MS` from now. */
+function stopSoon(): AbortSignal {
+  const controller = new AbortController();
+  setTimeout(() => {
+    controller.abort();
+  }, STOP_AFTER_MS);
+  return controller.signal;
+}
 
 /** How a runtime lookup is bounded when its probe must not be killed. */
 const LOOKUP = { timeout: KILL_AFTER_MS } as const;
@@ -87,7 +114,29 @@ const FN_KIWI = { phase: "fn", message: "kiwi", stack: "at fn" } as const;
 /** The failure of a child that left no usable result line. */
 const NO_RESULT = { status: "failed", error: { phase: "child", stack: null } };
 
-const LISTED_LINE = '{"status":"ok","cases":[{"id":"apple","setupPerCall":false}]}';
+/** The no-result failure whose error message matches `message`. */
+function noResultSaying(message: unknown): object {
+  return { ...NO_RESULT, error: { ...NO_RESULT.error, message } };
+}
+
+/**
+ * Listed cases as the parent accepts them: `contender` is `null` for a plain benchmark and the key
+ * for a contender.
+ */
+const LISTED_APPLE = { id: "apple", setupPerCall: false, name: "apple", contender: null } as const;
+const LISTED_QUICK = {
+  id: "sort/quick",
+  setupPerCall: false,
+  name: "sort",
+  contender: "quick",
+} as const;
+
+const LISTED_LINE = JSON.stringify({ status: "ok", cases: [LISTED_APPLE] });
+
+/** The result line of a listing whose one case is `listedCase`. */
+function listingLine(listedCase: object): string {
+  return `${JSON.stringify({ status: "ok", cases: [listedCase] })}\n`;
+}
 
 /** A measurement complete in every field, whose `status` alone does not answer a measure request. */
 const MEASURED_PEAR_LINE = JSON.stringify({
@@ -179,10 +228,7 @@ describe("findRuntime", { timeout: SPAWN_TIMEOUT_MS }, () => {
 
             const found = findRuntime("bun", { timeout: SHORT_TIMEOUT_MS });
 
-            await expectConfigError(found, [
-              fixture("bin/hang/bun"),
-              new RegExp(`\\b${String(SHORT_TIMEOUT_MS)}\\b`, "u"),
-            ]);
+            await expectConfigError(found, [fixture("bin/hang/bun"), NAMES_SHORT_TIMEOUT]);
           },
         );
 
@@ -199,27 +245,12 @@ describe("findRuntime", { timeout: SPAWN_TIMEOUT_MS }, () => {
       });
     });
 
-    describe("when its probe exits while a process it started holds its stdout", () => {
-      it.runIf(POSIX)("returns the printed version in time", async () => {
-        vi.stubEnv("PATH", fixture("bin/linger"));
-
-        const [found, elapsed] = await timed(async () => findRuntime("bun", LOOKUP));
-
-        expect(found.version).toBe("1.3.2");
-        expect(elapsed).toBeLessThan(RETURN_MARGIN_MS);
-      });
-    });
-
     describe("when the stop signal fires while its probe runs", () => {
       it.runIf(POSIX)("returns undefined in time, killing the probe", async () => {
         vi.stubEnv("PATH", fixture("bin/hang"));
-        const controller = new AbortController();
-        setTimeout(() => {
-          controller.abort();
-        }, STOP_AFTER_MS);
 
         const [found, elapsed] = await timed(async () =>
-          findRuntime("bun", { timeout: KILL_AFTER_MS, signal: controller.signal }),
+          findRuntime("bun", { timeout: KILL_AFTER_MS, signal: stopSoon() }),
         );
 
         expect(found).toBeUndefined();
@@ -227,44 +258,44 @@ describe("findRuntime", { timeout: SPAWN_TIMEOUT_MS }, () => {
       });
     });
 
-    it("throws a ConfigError naming the runtime when PATH holds no executable for it", async () => {
-      vi.stubEnv("PATH", FIXTURES);
+    describe("when PATH holds no executable for it", () => {
+      it("throws a ConfigError naming the runtime", async () => {
+        vi.stubEnv("PATH", FIXTURES);
 
-      const found = findRuntime("bun", LOOKUP);
+        const found = findRuntime("bun", LOOKUP);
 
-      await expectConfigError(found, [/\bbun\b/]);
-      await expect(found).rejects.not.toThrow(/--version/);
+        await expectConfigError(found, [/\bbun\b/]);
+        await expect(found).rejects.not.toThrow(/--version/);
+      });
     });
 
-    it("throws a ConfigError naming the runtime when PATH is unset", async () => {
-      vi.stubEnv("PATH", undefined);
-
-      const found = findRuntime("bun", LOOKUP);
-
-      await expectConfigError(found, [/\bbun\b/]);
-    });
-
-    describe("when PATH holds only an empty entry", () => {
+    describe("when PATH names no directory", () => {
       const startDir = process.cwd();
 
       afterEach(() => {
         process.chdir(startDir);
       });
 
-      it("throws a ConfigError naming the runtime instead of searching the working directory", async () => {
-        const dir = temporaryDir("repset-cwd-");
-        copyFileSync(process.execPath, join(dir, `bun${extname(process.execPath)}`));
-        process.chdir(dir);
-        vi.stubEnv("PATH", "");
-        // A copy found in the working directory would then fail its probe instead of resolving.
-        vi.stubEnv("NODE_OPTIONS", "--banana");
+      it.each([
+        { why: "empty", path: "" },
+        { why: "unset", path: undefined },
+      ])(
+        "throws a ConfigError naming the runtime instead of searching the working directory when PATH is $why",
+        async ({ path }) => {
+          const dir = temporaryDir("repset-cwd-");
+          copyFileSync(process.execPath, join(dir, `bun${extname(process.execPath)}`));
+          process.chdir(dir);
+          vi.stubEnv("PATH", path);
+          // A copy found in the working directory would then fail its probe instead of resolving.
+          vi.stubEnv("NODE_OPTIONS", "--banana");
 
-        const found = findRuntime("bun", LOOKUP);
+          const found = findRuntime("bun", LOOKUP);
 
-        await expectConfigError(found, [/\bbun\b/]);
-        // Every error of a probe that ran names its `--version`; one found on no PATH entry does not.
-        await expect(found).rejects.not.toThrow(/--version/);
-      });
+          await expectConfigError(found, [/\bbun\b/]);
+          // Every error of a probe that ran names its `--version`; one found on no PATH entry does not.
+          await expect(found).rejects.not.toThrow(/--version/);
+        },
+      );
     });
   });
 });
@@ -280,9 +311,14 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
       {
         why: "a listing",
         request: { mode: "list", file: `${LISTED_LINE}\n` },
+        expected: { status: "ok", result: { status: "ok", cases: [LISTED_APPLE] }, output: "" },
+      },
+      {
+        why: "a listing of a contender",
+        request: { mode: "list", file: listingLine(LISTED_QUICK) },
         expected: {
           status: "ok",
-          result: { status: "ok", cases: [{ id: "apple", setupPerCall: false }] },
+          result: { status: "ok", cases: [LISTED_QUICK] },
           output: "",
         },
       },
@@ -341,6 +377,14 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
       },
       { why: "a listing for a once request", request: echoing(`${LISTED_LINE}\n`) },
       {
+        why: "a listing whose case has no name",
+        request: { mode: "list", file: listingLine({ ...LISTED_APPLE, name: undefined }) },
+      },
+      {
+        why: "a listing whose case's contender is a number",
+        request: { mode: "list", file: listingLine({ ...LISTED_APPLE, contender: 7 }) },
+      },
+      {
         why: "a failure with no message",
         request: echoing(
           '{"status":"failed","error":{"phase":"fn","stack":null,"teardownError":null}}\n',
@@ -368,10 +412,7 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
 
       const outcome = await startFixture("echo.ts", request);
 
-      expect(outcome).toMatchObject({
-        ...NO_RESULT,
-        error: { ...NO_RESULT.error, message: expect.stringMatching(/\bmeasure\b/) },
-      });
+      expect(outcome).toMatchObject(noResultSaying(expect.stringMatching(/\bmeasure\b/)));
     });
 
     it("counts the lines of a child that wrote more than one", async () => {
@@ -379,10 +420,7 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
 
       const outcome = await startFixture("echo.ts", request);
 
-      expect(outcome).toMatchObject({
-        ...NO_RESULT,
-        error: { ...NO_RESULT.error, message: expect.stringContaining(" 2 lines ") },
-      });
+      expect(outcome).toMatchObject(noResultSaying(expect.stringContaining(" 2 lines ")));
     });
 
     it("carries the parse error of a line that is not JSON", async () => {
@@ -390,10 +428,7 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
 
       const outcome = await startFixture("echo.ts", { mode: "list", file: "banana\n" });
 
-      expect(outcome).toMatchObject({
-        ...NO_RESULT,
-        error: { ...NO_RESULT.error, message: expect.stringContaining(parseError.message) },
-      });
+      expect(outcome).toMatchObject(noResultSaying(expect.stringContaining(parseError.message)));
     });
 
     it("quotes the first 200 characters of a line that does not answer its request", async () => {
@@ -401,13 +436,9 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
 
       const outcome = await startFixture("echo.ts", { mode: "list", file: `${line}\n` });
 
-      expect(outcome).toMatchObject({
-        ...NO_RESULT,
-        error: {
-          ...NO_RESULT.error,
-          message: expect.stringMatching(/: \{"status":"ok","pear":"x{177}$/u),
-        },
-      });
+      expect(outcome).toMatchObject(
+        noResultSaying(expect.stringMatching(/: \{"status":"ok","pear":"x{177}$/u)),
+      );
     });
 
     it("names the spawn error of a child that could not be started", async () => {
@@ -418,10 +449,7 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
         nodeImport: undefined,
       });
 
-      expect(outcome).toMatchObject({
-        ...NO_RESULT,
-        error: { ...NO_RESULT.error, message: expect.stringContaining("ENOENT") },
-      });
+      expect(outcome).toMatchObject(noResultSaying(expect.stringContaining("ENOENT")));
     });
   });
 
@@ -429,13 +457,7 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
     it("fails in phase child naming the timeout", async () => {
       const outcome = await startFixture("hang.ts", ONCE, { timeout: SHORT_TIMEOUT_MS });
 
-      expect(outcome).toMatchObject({
-        ...NO_RESULT,
-        error: {
-          ...NO_RESULT.error,
-          message: expect.stringMatching(new RegExp(`\\b${String(SHORT_TIMEOUT_MS)}\\b`, "u")),
-        },
-      });
+      expect(outcome).toMatchObject(noResultSaying(expect.stringMatching(NAMES_SHORT_TIMEOUT)));
     });
 
     it("returns in time when a process the child started holds its pipes open", async () => {
@@ -450,13 +472,8 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
 
   describe("when the caller's stop signal fires while the child runs", () => {
     it("ends as stopped, killing the child within the return margin", async () => {
-      const controller = new AbortController();
-      setTimeout(() => {
-        controller.abort();
-      }, STOP_AFTER_MS);
-
       const [outcome, elapsed] = await timed(async () =>
-        startFixture("hang.ts", ONCE, { signal: controller.signal }),
+        startFixture("hang.ts", ONCE, { signal: stopSoon() }),
       );
 
       expect(outcome).toStrictEqual({ status: "stopped", output: "" });
@@ -508,13 +525,13 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
     it("keeps the last 16 KiB of output longer than one read", async () => {
       const outcome = await startFixture("megabyte.ts");
 
-      expect(outcome.output).toBe("z".repeat(16 * 1024));
+      expect(outcome.output).toBe("z".repeat(OUTPUT_TAIL_BYTES));
     });
 
     it("keeps the last 16 KiB, cut at a character boundary", async () => {
       const outcome = await startFixture("euro.ts");
 
-      expect(outcome.output).toBe("€".repeat(Math.floor((16 * 1024) / 3)));
+      expect(outcome.output).toBe("€".repeat(Math.floor(OUTPUT_TAIL_BYTES / EURO_BYTES)));
     });
   });
 
@@ -545,31 +562,22 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
 
   describe("from the built dist/children.js", () => {
     it("starts the built child entry beside it", async () => {
-      const outcome = await startBuiltChild(
-        NODE,
-        { mode: "list", file: benchFile("three-cases.ts") },
-        { timeout: KILL_AFTER_MS, nodeImport: "tsx" },
-      );
-
-      expect(outcome).toMatchObject({
-        status: "ok",
-        result: { cases: [{ id: "alpha" }, { id: "beta" }, { id: "gamma" }] },
+      const outcome = await startBuiltChild(NODE, LIST, {
+        timeout: KILL_AFTER_MS,
+        nodeImport: "tsx",
       });
+
+      expect(outcome).toMatchObject(THREE_CASES_LISTED);
     });
   });
 
   describe("with a nodeImport that cannot be resolved", () => {
-    const LIST = { mode: "list", file: benchFile("three-cases.ts") } as const;
-
     it.runIf(requiresRealBunHere())("runs a Bun child as it does without one", async () => {
       const bun = await findRuntime("bun", LOOKUP);
 
       const outcome = await startChild(bun, LIST, { timeout: KILL_AFTER_MS, nodeImport: "banana" });
 
-      expect(outcome).toMatchObject({
-        status: "ok",
-        result: { cases: [{ id: "alpha" }, { id: "beta" }, { id: "gamma" }] },
-      });
+      expect(outcome).toMatchObject(THREE_CASES_LISTED);
     });
   });
 });

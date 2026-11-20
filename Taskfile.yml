@@ -56,6 +56,13 @@ tasks:
         task: "_{{.ITEM}}"
       - "{{.MISE}} npx fallow fix --yes --no-create-config"
 
+  fixtures:
+    desc: Regenerate tests/fixtures/signed-rank.json with scipy
+    deps: [_deps]
+    cmds:
+      - "{{.MISE}} uv run --locked scripts/signed-rank-fixtures.py tests/fixtures/signed-rank.json"
+      - "{{.MISE}} npx oxfmt tests/fixtures/signed-rank.json"
+
   check-overhead:
     desc: Build, then compare repset's timings with a baseline loop; run alone, before a release
     deps: [_deps]
@@ -127,7 +134,7 @@ tasks:
       - task: _on-files
         vars:
           PATTERN: '\.md$'
-          CMD: "{{.MISE}} node --import tsx scripts/embed-code.ts"
+          CMD: "{{.MISE}} node scripts/embed-code.ts"
 
   _md:
     internal: true

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { bench, registeredCases } from "../src/child.js";
+import { bench, registeredCases } from "../src/bench.js";
 import { errorOf } from "./error-of.js";
 import { REGISTRY, resetRegistry } from "./registry.js";
 
@@ -55,7 +55,12 @@ describe("bench", () => {
       bench("sort", fn);
 
       expect(registeredCases()).toStrictEqual([
-        { id: "sort", case: { kind: "sharedState", setup: expect.any(Function), fn } },
+        {
+          id: "sort",
+          name: "sort",
+          contender: null,
+          case: { kind: "sharedState", setup: expect.any(Function), fn },
+        },
       ]);
     });
   });
@@ -71,7 +76,12 @@ describe("bench", () => {
       bench("sort", { setup, fn, teardown });
 
       expect(registeredCases()).toStrictEqual([
-        { id: "sort", case: { kind: "sharedState", setup, fn, teardown } },
+        {
+          id: "sort",
+          name: "sort",
+          contender: null,
+          case: { kind: "sharedState", setup, fn, teardown },
+        },
       ]);
     });
 
@@ -86,25 +96,78 @@ describe("bench", () => {
 
     it("registers the default setup when it has no setup", () => {
       bench("bare", () => 1);
+
       bench("object", { fn: () => 1 });
 
       const [bare, object] = registeredCases();
-
       expect([bare?.id, object?.id]).toStrictEqual(["bare", "object"]);
       expect(object?.case.setup()).toBe(bare?.case.setup());
     });
 
     it("registers what their absence registers for fields set to undefined", () => {
       const fn = (): number => 1;
+      bench("absent", { fn });
 
-      bench("object", { setup: undefined, fn, teardown: undefined, setupPerCall: undefined });
+      bench("undefined", { setup: undefined, fn, teardown: undefined, setupPerCall: undefined });
+
+      const [absent, given] = registeredCases();
+      expect(given?.case).toStrictEqual(absent?.case);
+    });
+  });
+
+  describe("when given a benchmark object whose fn is a record of contenders", () => {
+    it("registers one case per contender in key order, sharing setup and teardown", () => {
+      const setup = (): number[] => [3, 1, 2];
+      const quick = (values: number[]): number => values.length;
+      const merge = (values: number[]): number => values.length + 1;
+      const teardown = (values: number[]): void => {
+        values.length = 0;
+      };
+
+      bench("sort", { setup, fn: { quick, merge }, teardown });
 
       expect(registeredCases()).toStrictEqual([
         {
-          id: "object",
-          case: { kind: "sharedState", setup: expect.any(Function), fn },
+          id: "sort/quick",
+          name: "sort",
+          contender: "quick",
+          case: { kind: "sharedState", setup, fn: quick, teardown },
+        },
+        {
+          id: "sort/merge",
+          name: "sort",
+          contender: "merge",
+          case: { kind: "sharedState", setup, fn: merge, teardown },
         },
       ]);
+    });
+  });
+
+  describe("when given a record of contenders that breaks a contender rule", () => {
+    it.each([
+      { contenders: { quick: sync }, why: "a single contender", fragments: ["sort"] },
+      {
+        contenders: { quick: sync, "merge/fast": sync },
+        why: "a key holding a /",
+        fragments: ["sort", JSON.stringify("merge/fast")],
+      },
+      {
+        contenders: { quick: sync, merge: asyncFunction },
+        why: "an async contender",
+        fragments: ["sort", "merge"],
+      },
+    ])("throws a TypeError for $why", ({ contenders, fragments }) => {
+      const error = rejectionOf("sort", { fn: contenders });
+
+      expectTypeErrorHolding(error, fragments);
+    });
+
+    it("registers none of its contenders", () => {
+      errorOf(() => {
+        benchUnchecked("sort", { fn: { quick: sync, merge: 42 } });
+      });
+
+      expect(registeredCases()).toStrictEqual([]);
     });
   });
 
@@ -118,7 +181,7 @@ describe("bench", () => {
 
   describe("when given a name that breaks the name rule", () => {
     it.each([
-      { name: "", why: "empty" },
+      { name: "", why: "no characters" },
       { name: "/sort", why: "a leading /" },
       { name: "sort/", why: "a trailing /" },
       { name: "sort//fast", why: "a doubled /" },
@@ -211,23 +274,7 @@ describe("bench", () => {
 });
 
 describe("registeredCases", () => {
-  describe("before any bench call", () => {
-    it("returns no case", () => {
-      expect(registeredCases()).toStrictEqual([]);
-    });
-  });
-
   describe("after several bench calls", () => {
-    it("returns the cases in registration order", () => {
-      bench("sort", () => 1);
-      bench("search", () => 2);
-      bench("concat", () => 3);
-
-      const ids = registeredIds();
-
-      expect(ids).toStrictEqual(["sort", "search", "concat"]);
-    });
-
     it("returns both cases registered under one name, in order", () => {
       const first = (): number => 1;
       const second = (): number => 2;
@@ -246,9 +293,9 @@ describe("registeredCases", () => {
   describe("when two copies of the module are loaded", () => {
     it("returns a case registered through the other copy", async () => {
       vi.resetModules();
-      const writer = await import("../src/child.js");
+      const writer = await import("../src/bench.js");
       vi.resetModules();
-      const reader = await import("../src/child.js");
+      const reader = await import("../src/bench.js");
       expect(reader.registeredCases).not.toBe(writer.registeredCases);
       const fn = (): number => 1;
 

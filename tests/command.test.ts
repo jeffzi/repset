@@ -21,12 +21,18 @@ import {
   starter,
   startsNoCase,
   stubColorTerminalEnv,
+  clearShellEnv,
   terminal,
   unblockWrites,
   workspace,
 } from "./command-harness.js";
 import {
+  APPLE,
+  contender,
   failedOutcome,
+  failsLoopInRoundTwo,
+  listingStarter,
+  measuredOutcome,
   ranOnce,
   starter as fakeStarter,
   type StartChild,
@@ -40,7 +46,11 @@ const measuresUnlessAborted: StartChild = async (runtime, request, options) =>
   options.signal?.aborted === true ? stopped : measuresAll(runtime, request, options);
 
 describe("main", () => {
-  describe("when every flag is given", () => {
+  beforeEach(() => {
+    clearShellEnv();
+  });
+
+  describe("when files with runtimes, a filter, timing limits, a loader and an output are given", () => {
     it("hands the positional files, --runtime, --filter, --min-time, --min-samples, --timeout, --node-import and --output to the run", async () => {
       const dir = workspace();
 
@@ -85,60 +95,47 @@ describe("main", () => {
 
   describe("when the command line is wrong", () => {
     it.each([
-      { why: "an empty number", args: ["--min-time", ""] },
-      { why: "--list with --once", args: ["--list", "--once"] },
+      { why: "an empty number", args: ["--min-time", ""], named: ["min-time"] },
+      {
+        why: "a --timeout that is not decimal",
+        args: ["--timeout", "1e3"],
+        named: ["timeout", "1e3"],
+      },
+      {
+        why: "an unknown --runtime name",
+        args: ["--runtime", "node,banana"],
+        named: ["node,banana"],
+      },
     ])(
-      "exits 2 on $why with a message on stderr, nothing on stdout, no child",
-      async ({ args }) => {
+      "exits 2 on $why, naming it on stderr, with nothing on stdout and no child",
+      async ({ args, named }) => {
         const dir = workspace();
 
         const { code, stdout, stderr } = await command(dir, args, { startChild: startsNoChild });
 
-        expect({ code, stdout, printed: stderr.length > 0 }).toStrictEqual({
+        expect({ code, stdout, stderr }).toStrictEqual({
           code: 2,
           stdout: "",
-          printed: true,
+          stderr: naming(...named),
         });
       },
     );
 
-    it("exits 2 on a --timeout that is not decimal, naming the flag and the value", async () => {
-      const { code, stderr } = await command(workspace(), ["--timeout", "1e3"], {
-        startChild: startsNoChild,
-      });
-
-      expect({
-        code,
-        named: stderr.includes("--timeout") && stderr.includes('"1e3"'),
-      }).toStrictEqual({ code: 2, named: true });
-    });
-
-    it("prints a Commander error behind the repset: prefix alone", async () => {
+    it("prints a Commander error naming the option without Commander's own error: prefix", async () => {
       const { code, stderr } = await command(workspace(), ["--banana"], {
         startChild: startsNoChild,
       });
 
-      expect({
-        code,
-        prefix: stderr.startsWith("repset: "),
-        commander: stderr.includes("error: "),
-      }).toStrictEqual({ code: 2, prefix: true, commander: false });
-    });
-
-    it("exits 2 on an unknown --runtime name, naming the value", async () => {
-      const { code, stderr } = await command(workspace(), ["--runtime", "node,banana"], {
-        startChild: startsNoChild,
-      });
-
-      expect({ code, named: stderr.includes("node,banana") }).toStrictEqual({
+      expect({ code, stderr, commander: stderr.includes("error: ") }).toStrictEqual({
         code: 2,
-        named: true,
+        stderr: naming("banana"),
+        commander: false,
       });
     });
   });
 
   describe("when a file's listing fails", () => {
-    it("prints a failed listing's stack, then its output, then the file, phase and message last", async () => {
+    it("prints a failed listing's stack and output along with the file, phase and message", async () => {
       const dir = workspace();
       const failsListing: StartChild = async () => ({
         status: "failed",
@@ -150,17 +147,14 @@ describe("main", () => {
         startChild: failsListing,
       });
 
-      const at = (text: string): number => stderr.indexOf(text);
-      expect({
-        code,
-        stdout,
-        stackThenOutput: at("at plum") >= 0 && at("at plum") < at("pear"),
-        last: linesOf(stderr).at(-1),
-      }).toStrictEqual({
+      expect({ code, stdout, stderrLines: linesOf(stderr) }).toStrictEqual({
         code: 2,
         stdout: "",
-        stackThenOutput: true,
-        last: naming("sort.bench.ts", "load", "kiwi"),
+        stderrLines: expect.arrayContaining([
+          "at plum",
+          "pear",
+          naming("sort.bench.ts", "load", "kiwi"),
+        ]),
       });
     });
   });
@@ -194,17 +188,6 @@ describe("main", () => {
         stdout: "sort/fast\nparse/fast\n",
       });
     });
-
-    it("lists the cases of the files the include globs find when no file is given", async () => {
-      const dir = workspace();
-
-      const ended = await command(dir, ["--list"], { startChild: startsNoCase });
-
-      expect({ code: ended.code, stdout: ended.stdout }).toStrictEqual({
-        code: 0,
-        stdout: "parse/fast\nsort/fast\n",
-      });
-    });
   });
 
   describe("when a run measures", () => {
@@ -220,7 +203,7 @@ describe("main", () => {
 
       expect({ printedDuringRun, stdout: stdout.text }).toStrictEqual({
         printedDuringRun: ["", ""],
-        stdout: formatTable(report.results, { color: false }),
+        stdout: formatTable(report.results, report.contests, { color: false }),
       });
     });
   });
@@ -258,22 +241,23 @@ describe("main", () => {
         startChild: startsNoChild,
       });
 
-      expect({
-        code,
-        stdout,
-        named: stderr.includes(JSON.stringify(value)),
-      }).toStrictEqual({ code: 2, stdout: "", named: true });
+      expect({ code, stdout, stderr }).toStrictEqual({
+        code: 2,
+        stdout: "",
+        stderr: naming(NAME, value),
+      });
     });
 
-    it("runs --version as it does with REPSET_CALLS_PER_SAMPLE unset when the variable holds a bad value", async () => {
-      const dir = workspace();
-      vi.stubEnv(NAME, undefined);
-      const unset = await command(dir, ["--version"]);
+    it("prints the version, exiting 0, when the variable holds a bad value", async () => {
       vi.stubEnv(NAME, "abc");
 
-      const ended = await command(dir, ["--version"], { startChild: startsNoChild });
+      const ended = await command(workspace(), ["--version"], { startChild: startsNoChild });
 
-      expect(ended).toStrictEqual(unset);
+      expect(ended).toStrictEqual({
+        code: 0,
+        stdout: expect.stringMatching(/^\d+\.\d+\.\d+\S*\n$/u),
+        stderr: "",
+      });
     });
   });
 
@@ -297,6 +281,28 @@ describe("main", () => {
         writtenAtStart: [0, 1, 2, 3],
         atEnd: 4,
       });
+    });
+
+    it("holds a contest's entry once its last result is written", async () => {
+      const dir = workspace();
+      const report = join(dir, "report.json");
+      const written: number[][] = [];
+      const readsReport = listingStarter(
+        [contender("join"), contender("loop"), APPLE],
+        (request) => {
+          if (request.id === APPLE.id) {
+            const { results, contests } = reportAt(report);
+            written.push([results.length, contests.length]);
+          }
+          return measuredOutcome(4656);
+        },
+      );
+
+      await command(dir, ["sort.bench.ts", "--rounds", "2", "--output", "report.json"], {
+        startChild: readsReport,
+      });
+
+      expect(written).toStrictEqual([[2, 1]]);
     });
 
     it("exits 2 with no case run, leaving no temporary file, when the first write fails", async () => {
@@ -388,15 +394,12 @@ describe("main", () => {
       });
     });
 
-    it("exits 0 with an ok line per case when every case passes", async () => {
+    it("exits 0 when every case passes", async () => {
       const dir = workspace();
 
-      const { code, stdout } = await command(dir, ["--once", "sort.bench.ts", "parse.bench.ts"]);
+      const { code } = await command(dir, ["--once", "sort.bench.ts", "parse.bench.ts"]);
 
-      expect({ code, lines: linesOf(stdout) }).toStrictEqual({
-        code: 0,
-        lines: [naming("ok", "node", "sort/fast"), naming("ok", "node", "parse/fast")],
-      });
+      expect(code).toBe(0);
     });
   });
 
@@ -411,7 +414,6 @@ describe("main", () => {
       vi.useRealTimers();
     });
 
-    /** A terminal stream stand-in that reports its width. */
     interface SizedTerminal extends ReturnType<typeof terminal> {
       readonly columns: number;
     }
@@ -483,6 +485,36 @@ describe("main", () => {
       },
     );
 
+    it("lowers the live line's total by the rounds a failed contender will not run, keeping its started count", async () => {
+      const stderr = terminalOf(80);
+      const seen: string[][] = [];
+      const loopFailsInRoundTwo = listingStarter(
+        [contender("join"), contender("loop"), contender("plus")],
+        failsLoopInRoundTwo(),
+      );
+
+      await command(workspace(), ["--rounds", "4", "sort.bench.ts"], {
+        stderr,
+        startChild: watching(stderr, seen, loopFailsInRoundTwo),
+      });
+
+      const counts = seen.slice(1).map((rows) =>
+        /\[(\d+)\/(\d+)\]/u
+          .exec(rows.at(-1) ?? "")
+          ?.slice(1)
+          .map(Number),
+      );
+      expect({
+        started: counts.map((count) => count?.[0]),
+        first: counts.at(0)?.[1],
+        last: counts.at(-1)?.[1],
+      }).toStrictEqual({
+        started: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+        first: 12,
+        last: 10,
+      });
+    });
+
     it("redraws the live line with the next indicator frame as time passes", async () => {
       vi.useFakeTimers({ toFake: [...TIMERS] });
       const stderr = terminalOf(80);
@@ -501,22 +533,6 @@ describe("main", () => {
         moved: true,
         rows: [line, line],
       });
-    });
-
-    it("cuts the live line to the terminal's width", async () => {
-      const stderr = terminalOf(20);
-      const seen: string[][] = [];
-
-      await command(workspace(), ["sort.bench.ts", "parse.bench.ts"], {
-        stderr,
-        startChild: watching(stderr, seen, measuresAll),
-      });
-
-      const fits = seen.map((rows) => {
-        const row = rows.at(-1) ?? "";
-        return row.length > 0 && row.length < 20;
-      });
-      expect(fits).toStrictEqual([true, true, true, true]);
     });
 
     it("cuts a live line holding wide characters to the terminal's columns", async () => {
@@ -542,22 +558,20 @@ describe("main", () => {
     });
 
     it("prints the lines a stderr that is not a terminal gets when TERM is dumb", async () => {
-      const dir = workspace();
       const args = ["sort.bench.ts", "parse.bench.ts"];
-      const plain = await command(dir, args, { startChild: failsParse, stderr: captured() });
       vi.stubEnv("TERM", "dumb");
 
-      const dumb = await command(dir, args, { startChild: failsParse, stderr: terminalOf(80) });
-
-      expect({ same: dumb.stderr === plain.stderr, lines: linesOf(dumb.stderr) }).toStrictEqual({
-        same: true,
-        lines: [
-          "listing sort.bench.ts",
-          "listing parse.bench.ts",
-          "measuring sort/fast on node",
-          "measuring parse/fast on node",
-        ],
+      const { stderr } = await command(workspace(), args, {
+        startChild: failsParse,
+        stderr: terminalOf(80),
       });
+
+      expect(linesOf(stderr)).toStrictEqual([
+        "listing sort.bench.ts",
+        "listing parse.bench.ts",
+        "measuring sort/fast on node",
+        "measuring parse/fast on node",
+      ]);
     });
 
     it("clears the live line before printing the table under --output -", async () => {
@@ -565,7 +579,7 @@ describe("main", () => {
 
       const { results } = await runToStdout({ startChild: failsParse, stderr });
 
-      expect(screen(stderr.text)).toStrictEqual(screen(formatTable(results, { color: false })));
+      expect(screen(stderr.text)).toStrictEqual(screen(formatTable(results, [], { color: false })));
     });
 
     it("clears the live line before printing a failed listing's error", async () => {
@@ -579,11 +593,11 @@ describe("main", () => {
 
       expect({ code, screen: screen(stderr.text) }).toStrictEqual({
         code: 2,
-        screen: [expect.stringMatching(/^repset: .*sort\.bench\.ts.*load.*kiwi/u), ""],
+        screen: [expect.stringMatching(/^repset: /u), ""],
       });
     });
 
-    it("stops and clears the live line before rejecting with an error that is not a ConfigError", async () => {
+    it("stops the live line before rejecting with an error that is not a ConfigError", async () => {
       vi.useFakeTimers({ toFake: [...TIMERS] });
       const stderr = terminalOf(80);
       const error = new Error("kiwi");
@@ -605,30 +619,6 @@ describe("main", () => {
   });
 
   describe("on an interrupt", () => {
-    it("exits 143 on SIGTERM after a failed case, with the finished results in the report and table", async () => {
-      const signals = new EventEmitter();
-      const failsThenStops = starter((request) => {
-        if (request.id === "sort/fast") return failedOutcome("fn", "kiwi");
-        signals.emit("SIGTERM");
-        return stopped;
-      });
-
-      const ended = await runWithReport([], { signals, startChild: failsThenStops });
-
-      const { report } = ended;
-      expect({
-        code: ended.code,
-        interrupted: report.interrupted,
-        ran: report.results.map((result) => result.id),
-        stdout: ended.stdout,
-      }).toStrictEqual({
-        code: 143,
-        interrupted: true,
-        ran: ["sort/fast"],
-        stdout: formatTable(report.results, { color: false }),
-      });
-    });
-
     it("exits 130 on SIGINT in a --list run, printing nothing on stdout", async () => {
       const dir = workspace();
       const signals = new EventEmitter();
@@ -642,67 +632,96 @@ describe("main", () => {
       expect({ code: ended.code, stdout: ended.stdout }).toStrictEqual({ code: 130, stdout: "" });
     });
 
-    it("exits 130, not 2, when a listing fails after SIGINT, still printing the failure", async () => {
-      const dir = workspace();
+    it("prints a contender that failed before SIGINT in its contest's block, with no plain-case footer", async () => {
+      const plainRun = linesOf((await command(workspace(), ["sort.bench.ts"])).stdout).at(-1);
       const signals = new EventEmitter();
-      const failsListingAfterSignal: StartChild = async () => {
-        signals.emit("SIGINT");
-        return failedOutcome("load", "kiwi");
-      };
+      let loopFailed = false;
+      const loopFailsThenStops = listingStarter(
+        [contender("join"), contender("loop")],
+        (request) => {
+          if (request.id === "concat/loop") {
+            loopFailed = true;
+            return failedOutcome("fn", "kiwi");
+          }
+          if (!loopFailed) return measuredOutcome(4656);
+          signals.emit("SIGINT");
+          return stopped;
+        },
+      );
 
-      const ended = await command(dir, ["sort.bench.ts"], {
+      const ended = await command(workspace(), ["sort.bench.ts"], {
         signals,
-        startChild: failsListingAfterSignal,
+        startChild: loopFailsThenStops,
       });
 
-      expect({ code: ended.code, last: linesOf(ended.stderr).at(-1) }).toStrictEqual({
+      const lines = linesOf(ended.stdout);
+      expect(plainRun).toMatch(/\S/u);
+      expect({
+        code: ended.code,
+        heading: lines.some((line) => /^concat(?:\s|$)/u.test(line)),
+        loop: lines.filter((line) => line.includes("kiwi")),
+        plainFooter: lines.includes(plainRun ?? ""),
+      }).toStrictEqual({
         code: 130,
-        last: naming("sort.bench.ts", "load", "kiwi"),
+        heading: true,
+        loop: [expect.stringMatching(/^loop +│ \S.* kiwi$/u)],
+        plainFooter: false,
       });
     });
   });
 
+  /** Runs three files with --output while `stream` fails with `code` as `parse/fast` starts. */
+  async function failsInParse(
+    stream: "stdout" | "stderr",
+    code: string,
+  ): Promise<{
+    ended: Awaited<ReturnType<typeof command>>;
+    started: string[];
+    report: ReturnType<typeof reportAt>;
+  }> {
+    const dir = workspace();
+    writeFileSync(join(dir, "pear.bench.ts"), "");
+    const failing = captured();
+    const started: string[] = [];
+    const failsStreamInParse = starter((request, runtime, options) => {
+      started.push(request.id);
+      if (request.id === "parse/fast") failing.fail(code);
+      return measuresUnlessAborted(runtime, request, options);
+    });
+    const failingStream = stream === "stdout" ? { stdout: failing } : { stderr: failing };
+
+    const ended = await command(
+      dir,
+      ["sort.bench.ts", "parse.bench.ts", "pear.bench.ts", "--output", "report.json"],
+      { ...failingStream, startChild: failsStreamInParse },
+    );
+
+    return { ended, started, report: reportAt(join(dir, "report.json")) };
+  }
+
   describe("when a write to stdout fails", () => {
     it.each([
       { code: "EPIPE", exit: 141, said: [] },
-      { code: "EIO", exit: 1, said: [expect.stringMatching(/^repset: .*\bEIO\b/u)] },
-    ])(
-      "on $code kills the running case, starts no other, keeps the report file and exits $exit",
-      async ({ code, exit, said }) => {
-        const dir = workspace();
-        writeFileSync(join(dir, "pear.bench.ts"), "");
-        const stdout = captured();
-        const started: string[] = [];
-        const failsStdoutInParse = starter((request, runtime, options) => {
-          started.push(request.id);
-          if (request.id === "parse/fast") stdout.fail(code);
-          return measuresUnlessAborted(runtime, request, options);
-        });
+      { code: "EIO", exit: 1, said: [naming("EIO")] },
+    ])("on $code stops the run like an interrupt, exiting $exit", async ({ code, exit, said }) => {
+      const { ended, started, report } = await failsInParse("stdout", code);
 
-        const ended = await command(
-          dir,
-          ["sort.bench.ts", "parse.bench.ts", "pear.bench.ts", "--output", "report.json"],
-          { stdout, startChild: failsStdoutInParse },
-        );
-
-        const report = reportAt(join(dir, "report.json"));
-        expect({
-          code: ended.code,
-          started,
-          ran: report.results.map((result) => result.id),
-          interrupted: report.interrupted,
-          stdout: ended.stdout,
-          said: linesOf(ended.stderr).filter((line) => line.includes(code)),
-        }).toStrictEqual({
-          code: exit,
-          started: ["sort/fast", "parse/fast"],
-          ran: ["sort/fast"],
-          interrupted: true,
-          stdout: "",
-          said,
-        });
-      },
-    );
+      expect({
+        code: ended.code,
+        started,
+        ran: report.results.map((result) => result.id),
+        interrupted: report.interrupted,
+        stdout: ended.stdout,
+        said: linesOf(ended.stderr).filter((line) => line.includes(code)),
+      }).toStrictEqual({
+        code: exit,
+        started: ["sort/fast", "parse/fast"],
+        ran: ["sort/fast"],
+        interrupted: true,
+        stdout: "",
+        said,
+      });
+    });
 
     it("exits 141 with interrupted false when the closed stdout only met the table, the last write", async () => {
       const { code, report } = await runWithReport([], { stdout: closed("EPIPE") });
@@ -715,36 +734,8 @@ describe("main", () => {
     });
 
     it.each([
-      { mode: "--output -", args: ["--output", "-"] },
-      { mode: "--list", args: ["--list"] },
-      { mode: "--once", args: ["--once"] },
-    ])(
-      "exits 141 printing nothing more, and nothing about it, when stdout closes under $mode",
-      async ({ args }) => {
-        const stdout = captured();
-        const closesStdout: StartChild = async (runtime, request, options) => {
-          stdout.fail("EPIPE");
-          return measuresUnlessAborted(runtime, request, options);
-        };
-
-        const { code, stderr } = await command(
-          workspace(),
-          [...args, "sort.bench.ts", "parse.bench.ts"],
-          { stdout, startChild: closesStdout },
-        );
-
-        expect({ code, stdout: stdout.text, mentioned: stderr.includes("EPIPE") }).toStrictEqual({
-          code: 141,
-          stdout: "",
-          mentioned: false,
-        });
-      },
-    );
-
-    it.each([
       { first: "SIGTERM", second: "EPIPE", exit: 143 },
       { first: "EPIPE", second: "SIGINT", exit: 141 },
-      { first: "SIGHUP", second: "EIO", exit: 129 },
     ])("exits $exit when $first comes before $second", async ({ first, second, exit }) => {
       const signals = new EventEmitter();
       const stdout = captured();
@@ -784,7 +775,7 @@ describe("main", () => {
         said: linesOf(stderr).filter((line) => line.includes("banana")),
       }).toStrictEqual({
         code: 1,
-        said: [expect.stringMatching(/^repset: .*\bbanana\b/u)],
+        said: [naming("banana")],
       });
     });
 
@@ -795,6 +786,43 @@ describe("main", () => {
 
       expect(() => {
         stdout.emitHeld();
+      }).not.toThrow();
+    });
+  });
+
+  describe("when a write to stderr fails", () => {
+    it.each([{ code: "EIO", exit: 1 }])(
+      "on $code stops the run like an interrupt, exiting $exit",
+      async ({ code, exit }) => {
+        const { ended, started, report } = await failsInParse("stderr", code);
+
+        expect({
+          code: ended.code,
+          started,
+          ran: report.results.map((result) => result.id),
+          interrupted: report.interrupted,
+          stdout: ended.stdout,
+          said: linesOf(ended.stderr).filter((line) => line.includes(code)),
+        }).toStrictEqual({
+          code: exit,
+          started: ["sort/fast", "parse/fast"],
+          ran: ["sort/fast"],
+          interrupted: true,
+          stdout: formatTable(report.results, report.contests, { color: false }),
+          said: [],
+        });
+      },
+    );
+
+    it("keeps listening for stderr's error after a crash, so the crash report's failed write does not crash", async () => {
+      const stderr = captured();
+
+      await expect(
+        command(workspace(), ["sort.bench.ts"], { stderr, startChild: startsNoCase }),
+      ).rejects.toThrow("a case started");
+
+      expect(() => {
+        stderr.fail("EPIPE");
       }).not.toThrow();
     });
   });

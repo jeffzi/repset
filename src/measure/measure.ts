@@ -10,7 +10,7 @@
  * under Bun.
  */
 
-import { isInstance, thrownMessage, timerResolutionMs, valueAt } from "../utils.js";
+import { isInstance, quantile, thrownMessage, timerResolutionMs } from "../utils.js";
 import { type GcDuringTiming, observeCollections, type TimingWindow } from "./collections.js";
 import { runningRuntime } from "./runtime.js";
 import {
@@ -63,19 +63,19 @@ export interface Case<State> {
 
 export interface MeasureOptions {
   /** Calls per sample to run instead of calibrating one, for the empty body and the body alike. */
-  readonly callsPerSample?: number;
+  readonly callsPerSample?: number | undefined;
   /** The clock, in milliseconds; defaults to `performance.now()`. */
-  readonly now?: () => number;
+  readonly now?: (() => number) | undefined;
   /**
    * The time, in milliseconds, the body's timed samples span at least; defaults to
    * {@link DEFAULT_MIN_TIME}. Not validated: the caller passes a finite number of 0 or more.
    */
-  readonly minTime?: number;
+  readonly minTime?: number | undefined;
   /**
    * The fewest timed samples the body runs; defaults to {@link DEFAULT_MIN_SAMPLES}. Not
    * validated: the caller passes an integer of 1 or more.
    */
-  readonly minSamples?: number;
+  readonly minSamples?: number | undefined;
 }
 
 /** Per-call statistics of the timed samples in nanoseconds, named as the report prints them. */
@@ -90,21 +90,28 @@ export interface Statistics {
   readonly sampleCount: number;
 }
 
-export interface Measurement extends Statistics {
+/** How the body's samples were taken, named and ordered as the report prints them. */
+export interface SamplingReport {
   readonly timerResolutionNs: number;
   readonly callsPerSample: number;
   /** Whether `callsPerSample` was given rather than calibrated by warmup. */
   readonly callsPerSampleFixed: boolean;
-  /** The body's mean per call divided by the empty body's. */
-  readonly ratioToEmptyBody: number;
-  /** Present only where the runtime delivers `gc` performance entries, as Node does. */
-  readonly gcDuringTiming?: GcDuringTiming;
-  /** How many timing attempts the body's sampler took, the kept one included. */
-  readonly timingAttempts: number;
   /** The body's samples before its kept run: warmup's, plus every discarded timing attempt's. */
   readonly warmupSamples: number;
+  /** How many timing attempts the body's sampler took, the kept one included. */
+  readonly timingAttempts: number;
   /** The body's kept timing attempt's length on the clock, in milliseconds. */
   readonly timingMs: number;
+}
+
+/** A measurement in the shape of the report's per-process fields. */
+export interface Measurement {
+  readonly stats: Statistics;
+  readonly sampling: SamplingReport;
+  /** The body's mean per call divided by the empty body's. */
+  readonly checks: { readonly ratioToEmptyBody: number };
+  /** The collections seen during timing, or `null` where the runtime delivers no `gc` entries. */
+  readonly gc: GcDuringTiming | null;
 }
 
 /**
@@ -175,7 +182,8 @@ function performanceNow(): number {
  *   `minSamples` the body's timing attempts must pass, {@link DEFAULT_MIN_TIME} and
  *   {@link DEFAULT_MIN_SAMPLES} when absent; the empty body always takes the fixed count of timed
  *   samples {@link sampleEmpty} runs.
- * @returns The body's per-call statistics in nanoseconds and how they were taken.
+ * @returns The measurement in the report's shape: the body's per-call statistics in nanoseconds,
+ *   how they were taken, its ratio to the empty body and the collections seen during timing.
  * @throws MeasureError in phase `child` when no garbage collector is exposed, or when Bun is
  *   running but `bun:jsc` cannot be loaded, with the loader's value as cause, before anything runs;
  *   and when the forced GC throws, with the collector's value as cause, after every state left
@@ -236,24 +244,26 @@ export async function measure<State>(
     observer?.disconnect();
   }
 
-  const statistics = summarize(run.spans, run.sampleCount, run.callsPerSample);
+  const stats = summarize(run.spans, run.sampleCount, run.callsPerSample);
   // The body's timing window has closed, so the empty run's collection only collects.
-  const ratioToEmptyBody = checkedRatioToEmptyBody(statistics.mean, benchmark.kind, {
+  const ratioToEmptyBody = checkedRatioToEmptyBody(stats.mean, benchmark.kind, {
     ...sampling,
     collect: () => {
       collectGarbage(gc);
     },
   });
   return {
-    ...statistics,
-    timerResolutionNs: resolutionMs * NS_PER_MS,
-    callsPerSample: run.callsPerSample,
-    callsPerSampleFixed: options.callsPerSample !== undefined,
-    ratioToEmptyBody,
-    ...(gcDuringTiming === undefined ? {} : { gcDuringTiming }),
-    timingAttempts: run.timingAttempts,
-    warmupSamples: run.warmupSamples,
-    timingMs: run.timingMs,
+    stats,
+    sampling: {
+      timerResolutionNs: resolutionMs * NS_PER_MS,
+      callsPerSample: run.callsPerSample,
+      callsPerSampleFixed: options.callsPerSample !== undefined,
+      warmupSamples: run.warmupSamples,
+      timingAttempts: run.timingAttempts,
+      timingMs: run.timingMs,
+    },
+    checks: { ratioToEmptyBody },
+    gc: gcDuringTiming ?? null,
   };
 }
 
@@ -292,13 +302,19 @@ function checkedRatioToEmptyBody(bodyMeanNs: number, kind: Lifecycle, sampling: 
 }
 
 /**
- * Runs the exposed collector, outside every timed sample.
+ * Runs the exposed collector, outside every timed sample: a minor collection, then a full one.
  *
- * @param gc - The collector `measure` read from the runtime.
+ * On Node, a full collection that finds the benchmark's state still in the young generation
+ * promotes it straight to the old one, often spread over many pages, and a body that walks that
+ * state then reads up to 2.3 times slower in that process. The minor collection first compacts the
+ * state, so the full one moves it as a block.
+ *
+ * @param gc - The runtime's exposed collector.
  * @throws MeasureError in phase `child` when the collector throws, with its value as cause.
  */
-function collectGarbage(gc: NonNullable<typeof globalThis.gc>): void {
+export function collectGarbage(gc: NonNullable<typeof globalThis.gc>): void {
   try {
+    gc({ type: "minor" });
     gc();
   } catch (error) {
     throw new MeasureError("child", error);
@@ -306,7 +322,7 @@ function collectGarbage(gc: NonNullable<typeof globalThis.gc>): void {
 }
 
 /**
- * Keeps a `MeasureError` a collection already raised, and wraps any other thrown value.
+ * Keeps a `MeasureError` already raised as it is, and wraps any other thrown value.
  *
  * @param phase - Where the case failed when `error` is neither a `MeasureError` nor a
  *   `CalibrationError`.
@@ -335,9 +351,9 @@ function failedIn(
 }
 
 /**
- * Reads the garbage collector the runtime exposes.
+ * Reads the collector `measure` runs between samples.
  *
- * @returns `globalThis.gc`.
+ * @returns The collector, which exists only when the process starts with `--expose-gc`.
  * @throws MeasureError in phase `child` when no collector is exposed.
  */
 export function exposedGc(): NonNullable<typeof globalThis.gc> {
@@ -491,20 +507,19 @@ function measurePerCall<State>(
   const trackedTeardown =
     caseTeardown === undefined
       ? keep
-      : (state: State): void => {
+      : (state: State): unknown => {
           tearingDown = true;
-          caseTeardown(state);
+          const returned = caseTeardown(state);
           tearingDown = false;
+          return returned;
         };
   const inFlight: InFlight<State> = { held: false, state: undefined };
   try {
-    const checked = setup();
-    holdInFlight(inFlight, checked);
-    requireSynchronous(checked, "setup");
-    requireSynchronous(fn(checked), "fn");
-    tearingDown = true;
-    const returned: unknown = teardown(checked);
-    tearingDown = false;
+    const firstState = setup();
+    holdInFlight(inFlight, firstState);
+    requireSynchronous(firstState, "setup");
+    requireSynchronous(fn(firstState), "fn");
+    const returned: unknown = trackedTeardown(firstState);
     releaseInFlight(inFlight);
     requireSynchronous(returned, "teardown");
     const run = samplePerCall({ ...sampling, setup, fn, teardown: trackedTeardown, inFlight });
@@ -534,13 +549,13 @@ function holds<State>(inFlight: InFlight<State>): inFlight is { held: true; stat
  * Names the phase a per-call case failed in from the sampler's state when the error reached
  * `measure`, for {@link failedIn} to fall back to: it maps the sampler's `CalibrationError` itself.
  *
- * @param inFlight - Whether a state was built and not torn down.
+ * @param held - Whether a state was built and not torn down.
  * @param tearingDown - Whether the case's teardown had started and not returned.
  * @returns `setup` with no state in flight, `teardown` while one was being torn down, and `fn` for
  *   the rest.
  */
-function perCallPhase(inFlight: boolean, tearingDown: boolean): Phase {
-  if (!inFlight) return "setup";
+function perCallPhase(held: boolean, tearingDown: boolean): Phase {
+  if (!held) return "setup";
   return tearingDown ? "teardown" : "fn";
 }
 
@@ -734,23 +749,6 @@ function sampleEmpty(options: EmptyOptions): EmptyResult {
 // ---------------------------------------------------------------------------
 // Statistics
 // ---------------------------------------------------------------------------
-
-/**
- * Reads quantile `q` of the ascending per-call times, linearly interpolated between the two
- * nearest ranks.
- *
- * @param sorted - The per-call times, ascending.
- * @param q - The quantile, from 0 to 1.
- * @returns The interpolated time.
- * @throws RangeError when no span was stored.
- */
-export function quantile(sorted: ArrayLike<number>, q: number): number {
-  const position = (sorted.length - 1) * q;
-  const lowerRank = Math.floor(position);
-  const lowTime = valueAt(sorted, lowerRank);
-  const highTime = valueAt(sorted, Math.ceil(position));
-  return lowTime + (highTime - lowTime) * (position - lowerRank);
-}
 
 /**
  * Summarizes a sampler's timed spans as per-call statistics in nanoseconds.

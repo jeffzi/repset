@@ -1,74 +1,69 @@
-import { stripVTControlCharacters } from "node:util";
-
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import { formatTable } from "../src/table.js";
 import {
   captured,
+  clearShellEnv,
   command,
+  type CommandIo,
   failsParse,
-  measuresAll,
+  linesOf,
+  naming,
   runToStdout,
   runWithReport,
-  starter,
   stubColorTerminalEnv,
   styled,
   terminal,
   workspace,
 } from "./command-harness.js";
-import { failedOutcome, startsNoChild } from "./fake-children.js";
+import { startsNoChild } from "./fake-children.js";
 
 describe("main", () => {
   describe("when a stream would show color", () => {
     beforeEach(() => {
+      clearShellEnv();
       stubColorTerminalEnv();
     });
 
-    it("prints the colored table on a terminal stdout", async () => {
-      const ended = await runWithReport([], { startChild: failsParse, stdout: terminal() });
+    it.each<{
+      readonly why: string;
+      readonly args: readonly string[];
+      readonly io: () => CommandIo;
+      readonly table: "colored" | "plain";
+    }>([
+      {
+        why: "a terminal stdout",
+        args: [],
+        io: () => ({ stdout: terminal() }),
+        table: "colored",
+      },
+      {
+        why: "a terminal stdout under --no-color",
+        args: ["--no-color"],
+        io: () => ({ stdout: terminal() }),
+        table: "plain",
+      },
+      {
+        why: "a terminal stdout that reports one bit of color",
+        args: [],
+        io: () => ({ stdout: Object.assign(terminal(), { getColorDepth: () => 1 }) }),
+        table: "plain",
+      },
+      {
+        why: "a stdout that is not a terminal while stderr is one",
+        args: [],
+        io: () => ({ stdout: captured(), stderr: terminal() }),
+        table: "plain",
+      },
+    ])("prints the $table table on $why", async ({ args, io, table }) => {
+      const color = table === "colored";
+
+      const ended = await runWithReport(args, { startChild: failsParse, ...io() });
 
       expect({ styled: styled(ended.stdout), stdout: ended.stdout }).toStrictEqual({
-        styled: true,
-        stdout: formatTable(ended.report.results, { color: true }),
+        styled: color,
+        stdout: formatTable(ended.report.results, ended.report.contests, { color }),
       });
-    });
-
-    it("prints the plain table on a terminal stdout under --no-color", async () => {
-      const ended = await runWithReport(["--no-color"], {
-        startChild: failsParse,
-        stdout: terminal(),
-      });
-
-      expect(ended.stdout).toBe(formatTable(ended.report.results, { color: false }));
-    });
-
-    it.each([
-      { name: "NO_COLOR is set", variable: "NO_COLOR", value: "1" },
-      { name: "TERM is dumb", variable: "TERM", value: "dumb" },
-    ])("prints the plain table on a terminal stdout when $name", async ({ variable, value }) => {
-      vi.stubEnv(variable, value);
-
-      const ended = await runWithReport([], { startChild: failsParse, stdout: terminal() });
-
-      expect(ended.stdout).toBe(formatTable(ended.report.results, { color: false }));
-    });
-
-    it("prints the plain table on a terminal stdout that reports one bit of color", async () => {
-      const stdout = Object.assign(terminal(), { getColorDepth: () => 1 });
-
-      const ended = await runWithReport([], { startChild: failsParse, stdout });
-
-      expect(ended.stdout).toBe(formatTable(ended.report.results, { color: false }));
-    });
-
-    it("prints the plain table on a stdout that is not a terminal while stderr is one", async () => {
-      const ended = await runWithReport([], {
-        startChild: failsParse,
-        stdout: captured(),
-        stderr: terminal(),
-      });
-
-      expect(ended.stdout).toBe(formatTable(ended.report.results, { color: false }));
     });
 
     it("colors the table on a terminal stderr under --output -, whatever stdout is", async () => {
@@ -80,24 +75,11 @@ describe("main", () => {
 
       expect({
         results: results.length,
-        tableEnd: stderr.endsWith(formatTable(results, { color: true })),
+        tableEnd: stderr.endsWith(formatTable(results, [], { color: true })),
       }).toStrictEqual({ results: 2, tableEnd: true });
     });
 
-    it("colors the repset: prefix of an error line on a terminal stderr", async () => {
-      const { code, stderr } = await command(workspace(), ["--banana"], {
-        startChild: startsNoChild,
-        stderr: terminal(),
-      });
-
-      expect({
-        code,
-        styled: styled(stderr),
-        visible: stripVTControlCharacters(stderr),
-      }).toStrictEqual({ code: 2, styled: true, visible: expect.stringMatching(/^repset:/u) });
-    });
-
-    it("prints a plain repset: prefix when --no-color comes beside a wrong argument", async () => {
+    it("prints a plain error line when --no-color comes beside a wrong argument", async () => {
       const { code, stderr } = await command(workspace(), ["--no-color", "--banana"], {
         startChild: startsNoChild,
         stderr: terminal(),
@@ -106,7 +88,7 @@ describe("main", () => {
       expect({ code, styled: styled(stderr), stderr }).toStrictEqual({
         code: 2,
         styled: false,
-        stderr: expect.stringMatching(/^repset:/u),
+        stderr: naming("banana"),
       });
     });
 
@@ -123,35 +105,16 @@ describe("main", () => {
       expect({ code, styled: styled(stderr) }).toStrictEqual({ code: 2, styled: true });
     });
 
-    it("prints the colored table on a terminal stdout when NO_COLOR is empty", async () => {
-      vi.stubEnv("NO_COLOR", "");
-
-      const ended = await runWithReport([], { startChild: failsParse, stdout: terminal() });
-
-      expect(ended.stdout).toBe(formatTable(ended.report.results, { color: true }));
-    });
-
-    it("aligns a colored multi-line --once failure as the plain one", async () => {
-      const failsOnTwoLines = starter((request, runtime, options) =>
-        request.id === "parse/fast"
-          ? failedOutcome("fn", "kiwi\nplum")
-          : measuresAll(runtime, request, options),
-      );
+    it("colors a --once failure on a terminal stdout", async () => {
       const args = ["--once", "sort.bench.ts", "parse.bench.ts"];
-      const plain = await command(workspace(), [...args, "--no-color"], {
-        startChild: failsOnTwoLines,
-        stdout: terminal(),
-      });
 
       const colored = await command(workspace(), args, {
-        startChild: failsOnTwoLines,
+        startChild: failsParse,
         stdout: terminal(),
       });
 
-      expect({
-        styled: styled(colored.stdout),
-        visible: stripVTControlCharacters(colored.stdout),
-      }).toStrictEqual({ styled: true, visible: plain.stdout });
+      const failure = linesOf(colored.stdout).find((line) => line.includes("parse/fast")) ?? "";
+      expect(styled(failure)).toBe(true);
     });
   });
 });

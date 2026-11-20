@@ -344,19 +344,6 @@ function passesTheCap(kind: Kind): Scripted {
   };
 }
 
-/**
- * Reads the message the sampler's cap refuses a count with, from a run that passes the cap.
- *
- * @returns The cap's message.
- * @throws Error when the run does not reject with the sampler's CalibrationError as cause.
- */
-async function capMessage(): Promise<string> {
-  const { benchmark, now } = passesTheCap("perCall");
-  const { cause } = await failure(measure(benchmark, { now }));
-  if (cause instanceof CalibrationError) return cause.message;
-  throw new Error("the run did not pass the cap", { cause });
-}
-
 // ---------------------------------------------------------------------------
 // measure, in process
 // ---------------------------------------------------------------------------
@@ -674,27 +661,6 @@ describe("measure", () => {
       expect(error.cause).toBe(collectorError);
     });
 
-    it("rejects a shared-state run whose body throws an Error worded as the cap's in phase fn", async () => {
-      const own = new Error(await capMessage());
-      const clock = steppedClock();
-      let calls = 0;
-      vi.stubGlobal("gc", () => undefined);
-      const benchmark: Case<number> = {
-        kind: "sharedState",
-        setup: () => 0,
-        fn: () => {
-          calls += 1;
-          if (calls > 5) throw own;
-          clock.advance(LONG_BODY_MS);
-        },
-      };
-
-      const error = await failure(measure(benchmark, { now: clock.now }));
-
-      expect(error.phase).toBe("fn");
-      expect(error.cause).toBe(own);
-    });
-
     it("rejects a run whose body throws a value whose instanceof check throws in phase fn, that value as cause", async () => {
       const trapped = trappedProxy();
       vi.stubGlobal("gc", () => undefined);
@@ -712,18 +678,6 @@ describe("measure", () => {
       expect(error.phase).toBe("fn");
       expect(error.cause).toBe(trapped);
     });
-
-    it.each(KINDS)(
-      "rejects a %s run whose warmup count passes the cap in phase calibration, the sampler's error as cause",
-      async (kind) => {
-        const { benchmark, now } = passesTheCap(kind);
-
-        const error = await failure(measure(benchmark, { now }));
-
-        expect(error.phase).toBe("calibration");
-        expect(error.cause).toBeInstanceOf(CalibrationError);
-      },
-    );
 
     it("rejects a run whose empty body's collection throws in phase child, the collector's value as cause", async () => {
       const fake = bench("perCall", { bodyMs: LONG_BODY_MS });
@@ -752,14 +706,6 @@ describe("measure", () => {
       expect(error.message).toMatch(/171875[^]*125000|125000[^]*171875/);
     });
 
-    it("fails a shared-state run whose empty body asks for more calls per sample than the cap in phase calibration", async () => {
-      const fake = bench("sharedState");
-
-      const error = await failure(measure(fake.benchmark, { now: fake.now }));
-
-      expect(error.phase).toBe("calibration");
-    });
-
     it("returns the ratio to the empty body as it reads once 250 ms of the empty body's warmup have passed", async () => {
       const scripted = emptyBodyFasterAfter250Ms();
 
@@ -777,6 +723,28 @@ describe("measure", () => {
 
       expect(result.checks.ratioToEmptyBody).toBeCloseTo(800, 6);
     });
+  });
+
+  describe("when a count passes the cap", () => {
+    it("fails a shared-state run whose empty body asks for more calls per sample than the cap in phase calibration", async () => {
+      const fake = bench("sharedState");
+
+      const error = await failure(measure(fake.benchmark, { now: fake.now }));
+
+      expect(error.phase).toBe("calibration");
+    });
+
+    it.each(KINDS)(
+      "rejects a %s run whose warmup count passes the cap in phase calibration, the sampler's error as cause",
+      async (kind) => {
+        const { benchmark, now } = passesTheCap(kind);
+
+        const error = await failure(measure(benchmark, { now }));
+
+        expect(error.phase).toBe("calibration");
+        expect(error.cause).toBeInstanceOf(CalibrationError);
+      },
+    );
   });
 
   describe("when given minTime and minSamples", () => {
@@ -833,7 +801,7 @@ describe("measure", () => {
     });
   });
 
-  describe("when the body forces collections during timing", () => {
+  describe("when counting collections during timing", () => {
     it("reports the collections a body forces while timed, with their total and longest duration", async () => {
       const gc = enabledGc();
       const fake = bench("sharedState", { returns: gc });

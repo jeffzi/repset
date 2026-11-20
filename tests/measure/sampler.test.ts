@@ -264,7 +264,7 @@ describe("sampleSharedState", () => {
       expect(result.callsPerSample).toBe(400);
     });
 
-    describe("when the count would exceed 200 times the resolution of a 0.1 ns body", () => {
+    describe("when warmup's count would pass the cap", () => {
       it("fails naming the count asked for and the cap", () => {
         const fake = harness(() => 0);
 

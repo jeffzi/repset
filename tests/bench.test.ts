@@ -96,10 +96,10 @@ describe("bench", () => {
 
     it("registers the default setup when it has no setup", () => {
       bench("bare", () => 1);
+
       bench("object", { fn: () => 1 });
 
       const [bare, object] = registeredCases();
-
       expect([bare?.id, object?.id]).toStrictEqual(["bare", "object"]);
       expect(object?.case.setup()).toBe(bare?.case.setup());
     });

@@ -5,6 +5,7 @@ import { crashReport } from "../src/command.js";
 describe("crashReport", () => {
   const OS = "darwin 25.6.0 arm64";
   const RUNTIME = "node 26.1.0";
+  const PLATFORM = { version: "1.2.3", os: OS, runtime: RUNTIME };
 
   /** The last word of `text`, where the report puts its link. */
   function linkOf(text: string): string {
@@ -25,16 +26,15 @@ describe("crashReport", () => {
 
   describe("when the version was read", () => {
     const error = new Error("kiwi & banana? #1 100%");
-    const platform = { version: "1.2.3", os: OS, runtime: RUNTIME };
 
     it("prints the stack first", () => {
-      const text = crashReport(error, platform);
+      const text = crashReport(error, PLATFORM);
 
       expect(text.startsWith(error.stack ?? "")).toBe(true);
     });
 
     it("names the version and platform on its last line", () => {
-      const text = crashReport(error, platform);
+      const text = crashReport(error, PLATFORM);
 
       expect(["1.2.3", OS, RUNTIME].map((word) => readLine(text).includes(word))).toStrictEqual([
         true,
@@ -44,7 +44,7 @@ describe("crashReport", () => {
     });
 
     it("links an issue prefilled with the version, platform and message", () => {
-      const text = crashReport(error, platform);
+      const text = crashReport(error, PLATFORM);
 
       const body = issueBody(text) ?? "";
       expect(
@@ -68,10 +68,9 @@ describe("crashReport", () => {
 
   describe("when the message is long", () => {
     const message = Array.from({ length: 3000 }, (_, index) => `${index}🍌`).join("");
-    const platform = { version: "1.2.3", os: OS, runtime: RUNTIME };
 
     it("keeps the link within 6000 characters, filled to within one code point", () => {
-      const text = crashReport(new Error(message), platform);
+      const text = crashReport(new Error(message), PLATFORM);
 
       const length = linkOf(text).length;
       // One code point encodes to at most 12 characters, so a fuller cut would not have fit.
@@ -79,14 +78,12 @@ describe("crashReport", () => {
     });
 
     it("cuts the message on a whole character", () => {
-      const text = crashReport(new Error(message), platform);
+      const text = crashReport(new Error(message), PLATFORM);
+      const OPENING = "```text\n";
 
       // `issueBody` decodes strictly, so a cut through a code point throws here.
       const body = issueBody(text) ?? "";
-      const kept = body.slice(
-        body.indexOf("```text\n") + "```text\n".length,
-        body.lastIndexOf("\n```"),
-      );
+      const kept = body.slice(body.indexOf(OPENING) + OPENING.length, body.lastIndexOf("\n```"));
       expect(kept.startsWith("0🍌1🍌") && message.startsWith(kept)).toBe(true);
     });
   });

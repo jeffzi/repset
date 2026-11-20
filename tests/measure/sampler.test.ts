@@ -288,10 +288,9 @@ describe("sampleSharedState", () => {
     it("runs every warmup and timed sample at that count", () => {
       const fake = harness(() => COARSE_RESOLUTION);
 
-      const result = run(fake, COARSE_RESOLUTION, { callsPerSample: 7 });
+      run(fake, COARSE_RESOLUTION, { callsPerSample: 7 });
 
       expect(new Set(fake.sampleCalls)).toStrictEqual(new Set([7]));
-      expect(result.callsPerSample).toBe(7);
     });
 
     describe("when its samples get shorter than warmup's", () => {
@@ -322,12 +321,12 @@ describe("sampleSharedState", () => {
   });
 
   describe("when calibrating the count", () => {
-    it("sizes the store to `minTime` in samples of 200 times the resolution, rounded up, plus `minSamples`", () => {
-      const fake = harness(() => 100);
+    it("stops a run that cannot pass `minTime` at the store's size, `minTime` in samples of 200 times the resolution, rounded up, plus `minSamples`", () => {
+      const fake = harness((_sample, _timed, timingRun) => (timingRun === 1 ? 0.125 : 100));
 
-      const result = run(fake, FINE_RESOLUTION, { minTime: 100.1, minSamples: 10 });
+      run(fake, FINE_RESOLUTION, { minTime: 100.1, minSamples: 10 });
 
-      expect(result.spans).toHaveLength(523);
+      expect(fake.sampleCalls.slice(fake.collectsAt[0], fake.collectsAt[1])).toHaveLength(523);
     });
 
     it("keeps a run of exactly `minSamples` samples at `minTime` 0 whose median spans 200 times the resolution", () => {
@@ -451,10 +450,9 @@ describe("sampleSharedState", () => {
       it("reads only the discarded run's samples, not an earlier run's left in the store", () => {
         const fake = harness(discardedTwice);
 
-        const result = run(fake, COARSE_RESOLUTION);
+        run(fake, COARSE_RESOLUTION);
 
         expect(new Set(fake.sampleCalls.slice(fake.collectsAt[2]))).toStrictEqual(new Set([27]));
-        expect(result.timingAttempts).toBe(3);
       });
     });
 

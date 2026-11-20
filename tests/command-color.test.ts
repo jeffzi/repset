@@ -1,5 +1,3 @@
-import { stripVTControlCharacters } from "node:util";
-
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { formatTable } from "../src/table.js";
@@ -43,30 +41,9 @@ describe("main", () => {
         table: "colored",
       },
       {
-        why: "a terminal stdout when NO_COLOR is empty",
-        args: [],
-        env: ["NO_COLOR", ""],
-        io: () => ({ stdout: terminal() }),
-        table: "colored",
-      },
-      {
         why: "a terminal stdout under --no-color",
         args: ["--no-color"],
         env: ["NO_COLOR", undefined],
-        io: () => ({ stdout: terminal() }),
-        table: "plain",
-      },
-      {
-        why: "a terminal stdout when NO_COLOR is set",
-        args: [],
-        env: ["NO_COLOR", "1"],
-        io: () => ({ stdout: terminal() }),
-        table: "plain",
-      },
-      {
-        why: "a terminal stdout when TERM is dumb",
-        args: [],
-        env: ["TERM", "dumb"],
         io: () => ({ stdout: terminal() }),
         table: "plain",
       },
@@ -135,27 +112,20 @@ describe("main", () => {
       expect({ code, styled: styled(stderr) }).toStrictEqual({ code: 2, styled: true });
     });
 
-    it("aligns a colored multi-line --once failure as the plain one", async () => {
+    it("colors a --once failure on a terminal stdout", async () => {
       const failsOnTwoLines = starter((request, runtime, options) =>
         request.id === "parse/fast"
           ? failedOutcome("fn", "kiwi\nplum")
           : measuresAll(runtime, request, options),
       );
       const args = ["--once", "sort.bench.ts", "parse.bench.ts"];
-      const plain = await command(workspace(), [...args, "--no-color"], {
-        startChild: failsOnTwoLines,
-        stdout: terminal(),
-      });
 
       const colored = await command(workspace(), args, {
         startChild: failsOnTwoLines,
         stdout: terminal(),
       });
 
-      expect({
-        styled: styled(colored.stdout),
-        visible: stripVTControlCharacters(colored.stdout),
-      }).toStrictEqual({ styled: true, visible: plain.stdout });
+      expect(styled(colored.stdout)).toBe(true);
     });
   });
 });

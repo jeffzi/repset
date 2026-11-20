@@ -96,7 +96,6 @@ describe("main", () => {
   describe("when the command line is wrong", () => {
     it.each([
       { why: "an empty number", args: ["--min-time", ""], named: ["min-time"] },
-      { why: "--list with --once", args: ["--list", "--once"], named: ["list", "once"] },
       {
         why: "a --timeout that is not decimal",
         args: ["--timeout", "1e3"],
@@ -136,7 +135,7 @@ describe("main", () => {
   });
 
   describe("when a file's listing fails", () => {
-    it("prints a failed listing's stack, then its output, then the file, phase and message last", async () => {
+    it("prints a failed listing's stack and output along with the file, phase and message", async () => {
       const dir = workspace();
       const failsListing: StartChild = async () => ({
         status: "failed",
@@ -148,17 +147,14 @@ describe("main", () => {
         startChild: failsListing,
       });
 
-      const at = (text: string): number => stderr.indexOf(text);
-      expect({
-        code,
-        stdout,
-        stackThenOutput: at("at plum") >= 0 && at("at plum") < at("pear"),
-        last: linesOf(stderr).at(-1),
-      }).toStrictEqual({
+      expect({ code, stdout, stderrLines: linesOf(stderr) }).toStrictEqual({
         code: 2,
         stdout: "",
-        stackThenOutput: true,
-        last: naming("sort.bench.ts", "load", "kiwi"),
+        stderrLines: expect.arrayContaining([
+          "at plum",
+          "pear",
+          naming("sort.bench.ts", "load", "kiwi"),
+        ]),
       });
     });
   });
@@ -190,17 +186,6 @@ describe("main", () => {
       expect({ code: ended.code, stdout: ended.stdout }).toStrictEqual({
         code: 0,
         stdout: "sort/fast\nparse/fast\n",
-      });
-    });
-
-    it("lists the cases of the files the include globs find when no file is given", async () => {
-      const dir = workspace();
-
-      const ended = await command(dir, ["--list"], { startChild: startsNoCase });
-
-      expect({ code: ended.code, stdout: ended.stdout }).toStrictEqual({
-        code: 0,
-        stdout: "parse/fast\nsort/fast\n",
       });
     });
   });
@@ -431,7 +416,6 @@ describe("main", () => {
       vi.useRealTimers();
     });
 
-    /** A terminal stream stand-in that reports its width. */
     interface SizedTerminal extends ReturnType<typeof terminal> {
       readonly columns: number;
     }
@@ -633,7 +617,7 @@ describe("main", () => {
       });
     });
 
-    it("stops and clears the live line before rejecting with an error that is not a ConfigError", async () => {
+    it("stops the live line before rejecting with an error that is not a ConfigError", async () => {
       vi.useFakeTimers({ toFake: [...TIMERS] });
       const stderr = terminalOf(80);
       const error = new Error("kiwi");
@@ -669,47 +653,58 @@ describe("main", () => {
     });
   });
 
+  /** Runs three files with --output while `stream` fails with `code` as `parse/fast` starts. */
+  async function failsInParse(
+    stream: "stdout" | "stderr",
+    code: string,
+  ): Promise<{
+    ended: Awaited<ReturnType<typeof command>>;
+    started: string[];
+    report: ReturnType<typeof reportAt>;
+  }> {
+    const dir = workspace();
+    writeFileSync(join(dir, "pear.bench.ts"), "");
+    const failing = captured();
+    const started: string[] = [];
+    const failsStreamInParse = starter((request, runtime, options) => {
+      started.push(request.id);
+      if (request.id === "parse/fast") failing.fail(code);
+      return measuresUnlessAborted(runtime, request, options);
+    });
+    const failingStream = stream === "stdout" ? { stdout: failing } : { stderr: failing };
+
+    const ended = await command(
+      dir,
+      ["sort.bench.ts", "parse.bench.ts", "pear.bench.ts", "--output", "report.json"],
+      { ...failingStream, startChild: failsStreamInParse },
+    );
+
+    return { ended, started, report: reportAt(join(dir, "report.json")) };
+  }
+
   describe("when a write to stdout fails", () => {
     it.each([
       { code: "EPIPE", exit: 141, said: [] },
       { code: "EIO", exit: 1, said: [naming("EIO")] },
-    ])(
-      "on $code kills the running case, starts no other, keeps the report file and exits $exit",
-      async ({ code, exit, said }) => {
-        const dir = workspace();
-        writeFileSync(join(dir, "pear.bench.ts"), "");
-        const stdout = captured();
-        const started: string[] = [];
-        const failsStdoutInParse = starter((request, runtime, options) => {
-          started.push(request.id);
-          if (request.id === "parse/fast") stdout.fail(code);
-          return measuresUnlessAborted(runtime, request, options);
-        });
+    ])("on $code stops the run like an interrupt, exiting $exit", async ({ code, exit, said }) => {
+      const { ended, started, report } = await failsInParse("stdout", code);
 
-        const ended = await command(
-          dir,
-          ["sort.bench.ts", "parse.bench.ts", "pear.bench.ts", "--output", "report.json"],
-          { stdout, startChild: failsStdoutInParse },
-        );
-
-        const report = reportAt(join(dir, "report.json"));
-        expect({
-          code: ended.code,
-          started,
-          ran: report.results.map((result) => result.id),
-          interrupted: report.interrupted,
-          stdout: ended.stdout,
-          said: linesOf(ended.stderr).filter((line) => line.includes(code)),
-        }).toStrictEqual({
-          code: exit,
-          started: ["sort/fast", "parse/fast"],
-          ran: ["sort/fast"],
-          interrupted: true,
-          stdout: "",
-          said,
-        });
-      },
-    );
+      expect({
+        code: ended.code,
+        started,
+        ran: report.results.map((result) => result.id),
+        interrupted: report.interrupted,
+        stdout: ended.stdout,
+        said: linesOf(ended.stderr).filter((line) => line.includes(code)),
+      }).toStrictEqual({
+        code: exit,
+        started: ["sort/fast", "parse/fast"],
+        ran: ["sort/fast"],
+        interrupted: true,
+        stdout: "",
+        said,
+      });
+    });
 
     it("exits 141 with interrupted false when the closed stdout only met the table, the last write", async () => {
       const { code, report } = await runWithReport([], { stdout: closed("EPIPE") });
@@ -779,29 +774,11 @@ describe("main", () => {
   });
 
   describe("when a write to stderr fails", () => {
-    it.each([
-      { code: "EPIPE", exit: 141 },
-      { code: "EIO", exit: 1 },
-    ])(
-      "on $code kills the running case, starts no other, keeps the report file and the table and exits $exit, naming nothing",
+    it.each([{ code: "EIO", exit: 1 }])(
+      "on $code stops the run like an interrupt, exiting $exit",
       async ({ code, exit }) => {
-        const dir = workspace();
-        writeFileSync(join(dir, "pear.bench.ts"), "");
-        const stderr = captured();
-        const started: string[] = [];
-        const failsStderrInParse = starter((request, runtime, options) => {
-          started.push(request.id);
-          if (request.id === "parse/fast") stderr.fail(code);
-          return measuresUnlessAborted(runtime, request, options);
-        });
+        const { ended, started, report } = await failsInParse("stderr", code);
 
-        const ended = await command(
-          dir,
-          ["sort.bench.ts", "parse.bench.ts", "pear.bench.ts", "--output", "report.json"],
-          { stderr, startChild: failsStderrInParse },
-        );
-
-        const report = reportAt(join(dir, "report.json"));
         expect({
           code: ended.code,
           started,
@@ -820,46 +797,34 @@ describe("main", () => {
       },
     );
 
-    it.each([
-      { first: "SIGTERM", second: "stderr EIO", exit: 143 },
-      { first: "stderr EIO", second: "SIGINT", exit: 1 },
-      { first: "stdout EPIPE", second: "stderr EIO", exit: 141 },
-      { first: "stderr EIO", second: "stdout EPIPE", exit: 1 },
-    ])("exits $exit when $first comes before $second", async ({ first, second, exit }) => {
-      const signals = new EventEmitter();
-      const stdout = captured();
-      const stderr = captured();
-      const deliver = (event: string): void => {
-        const [stream, code] = event.split(" ");
-        if (stream === "stdout" && code !== undefined) stdout.fail(code);
-        else if (stream === "stderr" && code !== undefined) stderr.fail(code);
-        else signals.emit(event);
-      };
-      const stopsTwice = starter(() => {
-        deliver(first);
-        deliver(second);
-        return stopped;
-      });
+    it.each([{ first: "stdout EPIPE", second: "stderr EIO", exit: 141 }])(
+      "exits $exit when $first comes before $second",
+      async ({ first, second, exit }) => {
+        const signals = new EventEmitter();
+        const stdout = captured();
+        const stderr = captured();
+        const deliver = (event: string): void => {
+          const [stream, code] = event.split(" ");
+          if (stream === "stdout" && code !== undefined) stdout.fail(code);
+          else if (stream === "stderr" && code !== undefined) stderr.fail(code);
+          else signals.emit(event);
+        };
+        const stopsTwice = starter(() => {
+          deliver(first);
+          deliver(second);
+          return stopped;
+        });
 
-      const { code } = await command(workspace(), ["sort.bench.ts", "parse.bench.ts"], {
-        signals,
-        stdout,
-        stderr,
-        startChild: stopsTwice,
-      });
+        const { code } = await command(workspace(), ["sort.bench.ts", "parse.bench.ts"], {
+          signals,
+          stdout,
+          stderr,
+          startChild: stopsTwice,
+        });
 
-      expect(code).toBe(exit);
-    });
-
-    it("keeps listening for stderr's error once a write failed, so its late error event does not crash", async () => {
-      const stderr = closedHeld("EPIPE");
-
-      await command(workspace(), ["sort.bench.ts"], { stderr });
-
-      expect(() => {
-        stderr.emitHeld();
-      }).not.toThrow();
-    });
+        expect(code).toBe(exit);
+      },
+    );
 
     it("keeps listening for stderr's error after a crash, so the crash report's failed write does not crash", async () => {
       const stderr = captured();

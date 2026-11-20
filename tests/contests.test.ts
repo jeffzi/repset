@@ -81,16 +81,35 @@ function repeated<T>(value: T, count: number): T[] {
   return Array<T>(count).fill(value);
 }
 
+/** A counter of the calls made per id: each call returns the zero-based count before it. */
+function callCounter(): (id: string) => number {
+  const calls = new Map<string, number>();
+  return (id) => {
+    const call = calls.get(id) ?? 0;
+    calls.set(id, call + 1);
+    return call;
+  };
+}
+
+/** The pairs of the first contest of `report`, sorted by their contenders. */
+function sortedPairs(report: Report): ContestPair[] {
+  return byContenders(report.contests[0]?.pairs ?? []);
+}
+
+/** How many of `items` equal `item`. */
+function countOf(items: readonly string[], item: string): number {
+  return items.filter((candidate) => candidate === item).length;
+}
+
 /** Runs the contest `concat`, its contenders listed in key order, each child answered by round. */
 async function judge(
   byRound: Readonly<Record<string, readonly Answered[]>>,
   input: Partial<RunInput> = {},
   cases: readonly CaseToList[] = Object.keys(byRound).map((key) => contender(key)),
 ): Promise<Report> {
-  const calls = new Map<string, number>();
+  const nextCall = callCounter();
   const { report } = await runCases([...cases], input, (request) => {
-    const call = calls.get(request.id) ?? 0;
-    calls.set(request.id, call + 1);
+    const call = nextCall(request.id);
     const scheduled = byRound[request.id.slice("concat/".length)]?.[call];
     const answered = scheduled === undefined ? 4656 : scheduled;
     if (answered === null) return failedOutcome("fn", "kiwi");
@@ -144,26 +163,23 @@ const THREE_PROVEN_PAIRS = [
   ["loop", "join"],
 ] as const;
 
-/** The per-round log ratios of each pair of `THREE_PROVEN`. */
 const THREE_PROVEN_DIFFERENCES = THREE_PROVEN_PAIRS.map(([a, b]) =>
   logRatios(THREE_PROVEN[a], THREE_PROVEN[b]),
 );
 
 describe("run", () => {
   describe("when a contest runs", () => {
-    describe("onPlanned", () => {
-      it("counts every round of each contest among the measuring children", async () => {
-        const planned: number[] = [];
+    it("reports to onPlanned every round of each contest among the measuring children", async () => {
+      const planned: number[] = [];
 
-        await runCases([APPLE, JOIN, LOOP], {
-          runtimes: ["node", "bun"],
-          onPlanned: (total) => {
-            planned.push(total);
-          },
-        });
-
-        expect(planned.at(-1)).toBe(30);
+      await runCases([APPLE, JOIN, LOOP], {
+        runtimes: ["node", "bun"],
+        onPlanned: (total) => {
+          planned.push(total);
+        },
       });
+
+      expect(planned.at(-1)).toBe(30);
     });
 
     it("runs all of a contest's rounds at its first contender's place, one child per contender back to back, on each runtime", async () => {
@@ -228,10 +244,9 @@ describe("run", () => {
           "concat/join": [50, 10, 40, 20],
           "concat/loop": [30, 60, 5, 70],
         };
-        const calls = new Map<string, number>();
+        const nextCall = callCounter();
         const answer: Answer = (request) => {
-          const call = calls.get(request.id) ?? 0;
-          calls.set(request.id, call + 1);
+          const call = nextCall(request.id);
           return measuredOutcome(byRound[request.id]?.[call] ?? 0);
         };
 
@@ -291,6 +306,7 @@ describe("run", () => {
 
       it("draws the orders uniformly from the permutations of the contenders", async () => {
         const started: string[] = [];
+
         for (let seed = 1; seed <= 1000; seed += 1) {
           const seeded = await runCases([JOIN, LOOP, PLUS], { rounds: 6, drawSeed: () => seed });
           started.push(...seeded.started);
@@ -307,7 +323,7 @@ describe("run", () => {
 
     describe("when a contender's child fails", () => {
       /** Runs `concat` over 4 rounds with `concat/loop` failing in round 2, logging starts and results. */
-      async function failLoopInRoundTwo(input: Partial<RunInput> = {}): Promise<{
+      async function runWithLoopFailingInRoundTwo(input: Partial<RunInput> = {}): Promise<{
         report: Report;
         started: string[];
         events: string[];
@@ -332,7 +348,7 @@ describe("run", () => {
       }
 
       it("gives it a failed result holding the processes that ran, the failed one last", async () => {
-        const { report, started } = await failLoopInRoundTwo();
+        const { report, started } = await runWithLoopFailingInRoundTwo();
 
         const orders = started.flatMap((id, index) =>
           id === "concat/loop" ? [(index % 3) + 1] : [],
@@ -355,29 +371,29 @@ describe("run", () => {
       });
 
       it("emits its result before the next child starts", async () => {
-        const { events } = await failLoopInRoundTwo();
+        const { events } = await runWithLoopFailingInRoundTwo();
 
         const failedAt = events.lastIndexOf("start concat/loop");
         expect(events[failedAt + 1]).toBe("result concat/loop");
       });
 
       it("runs it in no later round while the rest run every round", async () => {
-        const { started } = await failLoopInRoundTwo();
+        const { started } = await runWithLoopFailingInRoundTwo();
 
         expect({
-          join: started.filter((id) => id === "concat/join").length,
-          loop: started.filter((id) => id === "concat/loop").length,
-          plus: started.filter((id) => id === "concat/plus").length,
+          join: countOf(started, "concat/join"),
+          loop: countOf(started, "concat/loop"),
+          plus: countOf(started, "concat/plus"),
         }).toStrictEqual({ join: 4, loop: 2, plus: 4 });
       });
 
       it("gives every contender exactly one result", async () => {
-        const { events } = await failLoopInRoundTwo();
+        const { events } = await runWithLoopFailingInRoundTwo();
 
         expect({
-          join: events.filter((event) => event === "result concat/join").length,
-          loop: events.filter((event) => event === "result concat/loop").length,
-          plus: events.filter((event) => event === "result concat/plus").length,
+          join: countOf(events, "result concat/join"),
+          loop: countOf(events, "result concat/loop"),
+          plus: countOf(events, "result concat/plus"),
         }).toStrictEqual({ join: 1, loop: 1, plus: 1 });
       });
 
@@ -385,7 +401,7 @@ describe("run", () => {
         const planned: number[] = [];
         const dropped: number[] = [];
 
-        const { started } = await failLoopInRoundTwo({
+        const { started } = await runWithLoopFailingInRoundTwo({
           onPlanned: (total) => {
             planned.push(total);
           },
@@ -455,7 +471,7 @@ describe("run", () => {
   });
 
   describe("when a contest is judged", () => {
-    it("reports each contender's median, ratio and rank and the pair's verdict, the faster first", async () => {
+    it("reports the contest judged from the contenders' per-round medians", async () => {
       const join = [800, 810, 812, 815, 820, 805, 812];
       const loop = [1850, 1880, 1904.5, 1920, 1890, 1910, 1904.5];
       const differences = logRatios(join, loop);
@@ -563,7 +579,7 @@ describe("run", () => {
       const report = await judge(THREE_PROVEN);
 
       expect(
-        byContenders(report.contests[0]?.pairs ?? []).map(({ a, b, p, pAdjusted }) => ({
+        sortedPairs(report).map(({ a, b, p, pAdjusted }) => ({
           a,
           b,
           p,
@@ -585,7 +601,7 @@ describe("run", () => {
       const report = await judge(THREE_PROVEN);
 
       expect(
-        byContenders(report.contests[0]?.pairs ?? []).map(({ a, b, interval }) => ({
+        sortedPairs(report).map(({ a, b, interval }) => ({
           a,
           b,
           interval,
@@ -695,7 +711,7 @@ describe("run", () => {
       });
 
       expect(
-        byContenders(report.contests[0]?.pairs ?? []).map(({ p, faster, tie }) => ({
+        sortedPairs(report).map(({ p, faster, tie }) => ({
           p,
           faster,
           tie,

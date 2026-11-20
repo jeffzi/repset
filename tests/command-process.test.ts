@@ -16,25 +16,22 @@ function commandFixture(name: string): string {
   return fixturePath("command", name);
 }
 
-/** A fresh directory for a spawned command's report, removed when the test ends. */
-function reportDir(): string {
-  return temporaryDir("repset-command-e2e-");
+/** The report path inside a fresh directory, removed when the test ends. */
+function reportPath(): string {
+  return join(temporaryDir("repset-command-e2e-"), "report.json");
+}
+
+/** The command's arguments for the fixture `fixture`, with `--min-time` `minTime` and the report at `out`. */
+function argsFor(fixture: string, minTime: string, out: string): string[] {
+  return [commandFixture(fixture), "--node-import", "tsx", "--min-time", minTime, "--output", out];
 }
 
 describe("the command started as a process", { timeout: SPAWN_TIMEOUT_MS }, () => {
   describe("when a case throws", () => {
     it("exits 1 with the error in the result", async () => {
-      const out = join(reportDir(), "report.json");
+      const out = reportPath();
 
-      const { code } = await spawnCommand(ROOT, [
-        commandFixture("throws.bench.ts"),
-        "--node-import",
-        "tsx",
-        "--min-time",
-        "1",
-        "--output",
-        out,
-      ]);
+      const { code } = await spawnCommand(ROOT, argsFor("throws.bench.ts", "1", out));
 
       expect({
         code,
@@ -45,19 +42,11 @@ describe("the command started as a process", { timeout: SPAWN_TIMEOUT_MS }, () =
 
   describe("on SIGINT", () => {
     it.runIf(POSIX)("exits 130, killing the running case", async () => {
-      const out = join(reportDir(), "report.json");
+      const out = reportPath();
 
       const { code } = await spawnCommand(
         ROOT,
-        [
-          commandFixture("sum.bench.ts"),
-          "--node-import",
-          "tsx",
-          "--min-time",
-          "600000",
-          "--output",
-          out,
-        ],
+        argsFor("sum.bench.ts", "600000", out),
         (stderr, stop) => {
           if (stderr.includes("sum/small")) stop("SIGINT");
         },

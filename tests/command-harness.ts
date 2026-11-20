@@ -25,6 +25,9 @@ type Io = NonNullable<Parameters<typeof main>[1]>;
 /** The benchmark files every workspace holds; the fake children never import them. */
 const FILES = ["sort.bench.ts", "parse.bench.ts"];
 
+/** The file `runWithReport` writes the report to, relative to the workspace. */
+const REPORT_FILE = "report.json";
+
 /** The one case the fake listing child finds in `file`. */
 function caseOf(file: string): string {
   return `${basename(file, ".bench.ts")}/fast`;
@@ -187,20 +190,26 @@ export async function command(
   return { code, stdout: stdout.text, stderr: stderr.text };
 }
 
+interface EndedWithReport extends Ended {
+  readonly report: Report;
+}
+
+interface EndedWithResults extends Ended {
+  readonly results: readonly Result[];
+}
+
 /** Runs the two workspace files with `args` and `--output report.json`, returning what ended and the report. */
 export async function runWithReport(
   args: readonly string[],
   io: CommandIo = {},
-): Promise<Ended & { readonly report: Report }> {
+): Promise<EndedWithReport> {
   const dir = workspace();
-  const ended = await command(dir, [...FILES, ...args, "--output", "report.json"], io);
-  return { ...ended, report: reportAt(join(dir, "report.json")) };
+  const ended = await command(dir, [...FILES, ...args, "--output", REPORT_FILE], io);
+  return { ...ended, report: reportAt(join(dir, REPORT_FILE)) };
 }
 
 /** Runs the two workspace files with `--output -`, returning what ended and the results stdout holds. */
-export async function runToStdout(
-  io: CommandIo = {},
-): Promise<Ended & { readonly results: readonly Result[] }> {
+export async function runToStdout(io: CommandIo = {}): Promise<EndedWithResults> {
   const ended = await command(workspace(), [...FILES, "--output", "-"], io);
   return { ...ended, results: parseReport(ended.stdout, "stdout").results };
 }

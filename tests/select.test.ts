@@ -75,6 +75,7 @@ async function select(
     signal?: AbortSignal;
     startChild?: StartChild;
     findRuntime?: FindRuntime;
+    onPlanned?: (total: number) => void;
   } = {},
 ): Promise<Selection> {
   return selectCases({
@@ -84,6 +85,7 @@ async function select(
     findRuntime: input.findRuntime ?? findAny,
     startChild: input.startChild ?? onePerFile,
     ...(input.signal === undefined ? {} : { signal: input.signal }),
+    ...(input.onPlanned === undefined ? {} : { onPlanned: input.onPlanned }),
   });
 }
 
@@ -108,11 +110,8 @@ describe("selectCases", () => {
     it("receives the number of files to list before the first listing child starts", async () => {
       const events: string[] = [];
 
-      await selectCases({
-        options: optionsWith(),
+      await select({
         files: ["zeta.bench.ts", "a.bench.ts", "alpha.bench.mts"],
-        cwd: FIXTURES,
-        findRuntime: findAny,
         startChild: async (runtime, request, options) => {
           events.push(request.mode);
           return onePerFile(runtime, request, options);

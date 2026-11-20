@@ -121,25 +121,25 @@ describe("isRecord", () => {
 });
 
 describe("thrownMessage", () => {
-  describe("when the value has no string form", () => {
-    it("returns a string instead of throwing", () => {
-      const unprintable: unknown = Object.create(null);
-
-      const message = (): string => thrownMessage(unprintable);
-
-      expect(message).not.toThrow();
-    });
-  });
-
-  describe("when the value is an Error whose message cannot be read", () => {
-    it("returns a string instead of throwing", () => {
-      const unreadable = Object.defineProperty(new Error("plum"), "message", {
-        get: () => {
-          throw new Error("kiwi");
-        },
-      });
-
-      const message = (): string => thrownMessage(unreadable);
+  describe("when reading or converting the value throws", () => {
+    it.each([
+      { thrown: "a value with no string form", value: Object.create(null) as unknown },
+      {
+        thrown: "an Error whose message getter throws",
+        value: Object.defineProperty(new Error("plum"), "message", {
+          get: () => {
+            throw new Error("kiwi");
+          },
+        }) as unknown,
+      },
+      {
+        thrown: "an Error whose message has no string form",
+        value: Object.defineProperty(new Error("cherry"), "message", {
+          value: Object.create(null) as unknown,
+        }) as unknown,
+      },
+    ])("returns a string instead of throwing for $thrown", ({ value }) => {
+      const message = (): string => thrownMessage(value);
 
       expect(message).not.toThrow();
     });
@@ -152,17 +152,6 @@ describe("thrownMessage", () => {
       const read = thrownMessage(error);
 
       expect(read).toBe("42");
-    });
-  });
-
-  describe("when the value is an Error whose message has no string form", () => {
-    it("returns a string instead of throwing", () => {
-      const unprintable: unknown = Object.create(null);
-      const error = Object.defineProperty(new Error("cherry"), "message", { value: unprintable });
-
-      const message = (): string => thrownMessage(error);
-
-      expect(message).not.toThrow();
     });
   });
 });

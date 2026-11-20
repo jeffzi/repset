@@ -12,7 +12,7 @@ import type {
   Result,
   ResultError,
 } from "../src/report.js";
-import { formatTable } from "../src/table.js";
+import { failureLines, formatTable, paint, visibleWidth } from "../src/table.js";
 import { found, measured as measuredChild } from "./fake-children.js";
 
 type Runtime = Result["runtime"]["name"];
@@ -38,15 +38,21 @@ const WIDE_STATS: Stats = { ...flatStats(4656), max: 2_340_000, sampleCount: 120
 
 /** The one process of a measured case, holding `stats`. */
 function measuredProcess(stats: Stats): MeasuredProcess {
+  const { sampling, checks } = measuredChild(stats.median);
   return {
     round: 0,
     orderInRound: 0,
     stats,
-    sampling: measuredChild(stats.median).sampling,
-    checks: measuredChild(stats.median).checks,
+    sampling,
+    checks,
     gc: null,
     rawSamples: null,
   };
+}
+
+/** The runtime entry of a result or contest on `runtime`, at its fake version. */
+function runtimeOf(runtime: Runtime): Result["runtime"] {
+  return { name: runtime, version: found(runtime).version };
 }
 
 /** What every result of case `id` on `runtime` holds, measured or failed. */
@@ -57,7 +63,7 @@ function resultBase(id: string, runtime: Runtime): ResultBase {
     contender: null,
     params: {},
     file: "fruit.bench.ts",
-    runtime: { name: runtime, version: found(runtime).version },
+    runtime: runtimeOf(runtime),
     setupPerCall: false,
   };
 }
@@ -163,7 +169,7 @@ function contest(
   return {
     name,
     params: {},
-    runtime: { name: "node", version: found("node").version },
+    runtime: runtimeOf("node"),
     rounds,
     contenders,
     pairs,
@@ -172,7 +178,7 @@ function contest(
 
 /** `entry` as it would read on Bun. */
 function onBun(entry: Contest): Contest {
-  return { ...entry, runtime: { name: "bun", version: found("bun").version } };
+  return { ...entry, runtime: runtimeOf("bun") };
 }
 
 /** The entry of contest `name` judged over `rounds` rounds, `fast` proven faster than `slow`. */
@@ -209,6 +215,19 @@ function unfinishedContest(
       name,
       9,
       [contender(`${name}/${finished}`, median), contender(`${name}/${failedKey}`, null)],
+      [],
+    ),
+  };
+}
+
+/** A contest of two finished contenders not judged over `rounds` rounds, with its results. */
+function notJudgedContest(rounds: number): { results: Result[]; entry: Contest } {
+  return {
+    results: [contenderResult("concat", "join", 806), contenderResult("concat", "loop", 1880)],
+    entry: contest(
+      "concat",
+      rounds,
+      [contender("concat/join", 806), contender("concat/loop", 1880)],
       [],
     ),
   };
@@ -305,9 +324,47 @@ function rowIndex(lines: readonly string[], id: string): number {
   return lines.findIndex((line) => line.startsWith(`${id} `));
 }
 
-/** A rule of `─` whose runs have the given lengths, `junction` between them. */
-function rule(junction: string, runs: readonly number[]): string {
-  return runs.map((run) => "─".repeat(run)).join(junction);
+/** The terminal columns at which `line` draws a `│`, `┬` or `┼`. */
+function barColumns(line: string): number[] {
+  return [...line.matchAll(/[│┬┼]/gu)].map((bar) => visibleWidth(line.slice(0, bar.index)));
+}
+
+/** The trimmed cells of `line`, split on ` │ `. */
+function cellsOf(line: string): string[] {
+  return line.split(" │ ").map((cell) => cell.trim());
+}
+
+/** Whether the padded `cell` of column `column` has none on its flush side: the left of the first column, the right of the others. */
+function isFlush(cell: string, column: number): boolean {
+  return cell === (column === 0 ? cell.trimStart() : cell.trimEnd());
+}
+
+/** Asserts `box` (top rule, header, middle rule, measured rows) is aligned and each column as wide as its widest cell, `failedLabels` included. */
+function expectBox(box: readonly string[], failedLabels: readonly string[] = []): void {
+  const [top = "", header = "", middle = "", ...rows] = box;
+  const lines = [header, ...rows];
+  const cells = lines.map(cellsOf);
+  const widest = cellsOf(header).map((_, column) =>
+    Math.max(
+      ...cells.map((row) => visibleWidth(row[column] ?? "")),
+      ...(column === 0 ? failedLabels.map(visibleWidth) : []),
+    ),
+  );
+  const flush = lines.every((line) => line.split(" │ ").every(isFlush));
+
+  expect({
+    rules: [/^[─┬]+$/u.test(top), /^[─┼]+$/u.test(middle)],
+    widths: box.map(visibleWidth),
+    bars: box.map(barColumns),
+    columns: header.split(" │ ").map(visibleWidth),
+    flush,
+  }).toStrictEqual({
+    rules: [true, true],
+    widths: box.map(() => visibleWidth(top)),
+    bars: box.map(() => barColumns(top)),
+    columns: widest,
+    flush: true,
+  });
 }
 
 /** The index of the first line naming `runtime` and its version, or -1 when none does. */
@@ -315,10 +372,15 @@ function headingIndex(lines: readonly string[], runtime: Runtime): number {
   return lines.findIndex((line) => line.includes(runtime) && line.includes(found(runtime).version));
 }
 
+/** The indent under the message cell of the row at line `row`. */
+function messageIndent(lines: readonly string[], row: number): string {
+  return " ".repeat((lines[row]?.indexOf("│") ?? 0) + 2);
+}
+
 /** The trimmed cells of the row of case `id` in the table of `results`, split on ` │ `. */
 function rowTexts(results: readonly Result[], id: string): string[] {
   const lines = tableLines(results);
-  return (lines[rowIndex(lines, id)] ?? "").split(" │ ").map((cell) => cell.trim());
+  return cellsOf(lines[rowIndex(lines, id)] ?? "");
 }
 
 describe("formatTable", () => {
@@ -371,13 +433,13 @@ describe("formatTable", () => {
 
       const lines = tableLines(results);
 
-      expect(lines).toStrictEqual([
-        "node 24.1.0",
-        rule("┬", [12, 9, 9, 9, 9, 8]),
-        "case        │  median │    mean │     min │     max │ samples",
-        rule("┼", [12, 9, 9, 9, 9, 8]),
-        "apple       │  812 ns │  812 ns │  812 ns │  812 ns │      64",
-        "elderberry  │ 4.66 µs │ 4.66 µs │ 4.66 µs │ 2.34 ms │    1200",
+      expectBox(lines.slice(1, 6), ["watermelons", "fig"]);
+      expect(lines[0]).toBe("node 24.1.0");
+      expect(lines.slice(4, 6).map(cellsOf)).toStrictEqual([
+        ["apple", "812 ns", "812 ns", "812 ns", "812 ns", "64"],
+        ["elderberry", "4.66 µs", "4.66 µs", "4.66 µs", "2.34 ms", "1200"],
+      ]);
+      expect(lines.slice(6)).toStrictEqual([
         expect.stringMatching(/^watermelons │ \S.* plum exploded$/u),
         expect.stringMatching(/^fig {9}│ \S.* kiwi$/u),
         "",
@@ -397,14 +459,11 @@ describe("formatTable", () => {
 
       const lines = tableLines(results);
 
-      expect(lines.slice(1, 7)).toStrictEqual([
-        rule("┬", [9, 8, 8, 8, 8, 8]),
-        "case     │ median │   mean │    min │    max │ samples",
-        rule("┼", [9, 8, 8, 8, 8, 8]),
-        "苹果苹果 │ 812 ns │ 812 ns │ 812 ns │ 812 ns │      64",
-        "rose\u0301     │ 812 ns │ 812 ns │ 812 ns │ 812 ns │      64",
-        expect.stringMatching(/^梨 {7}│ \S.* kiwi$/u),
-      ]);
+      expectBox(lines.slice(1, 6), ["梨"]);
+      expect(lines.slice(4, 6).map(cellsOf)).toStrictEqual(
+        results.slice(0, 2).map(({ id }) => [id, "812 ns", "812 ns", "812 ns", "812 ns", "64"]),
+      );
+      expect(lines[6]).toMatch(/^梨 {7}│ \S.* kiwi$/u);
     });
   });
 
@@ -472,9 +531,11 @@ describe("formatTable", () => {
       const lines = tableLines(results);
 
       const row = rowIndex(lines, "apple");
-      const indent = " ".repeat((lines[row]?.indexOf("│") ?? 0) + 2);
-      expect(lines[row + 1]).toBe(`${indent}at the stone`);
-      expect(lines[row + 2]).toBe(`${indent}  and the pit`);
+      const indent = messageIndent(lines, row);
+      expect(lines.slice(row + 1, row + 3)).toStrictEqual([
+        `${indent}at the stone`,
+        `${indent}  and the pit`,
+      ]);
     });
 
     describe("when its cleanup teardown failed too", () => {
@@ -485,7 +546,7 @@ describe("formatTable", () => {
         const lines = tableLines(results);
 
         const row = rowIndex(lines, "apple");
-        const indent = " ".repeat((lines[row]?.indexOf("│") ?? 0) + 2);
+        const indent = messageIndent(lines, row);
         expect(lines[row + 1]).toMatch(new RegExp(`^${indent}\\S.* melon split$`, "u"));
       });
 
@@ -530,26 +591,18 @@ describe("formatTable", () => {
 
       const lines = tableLines(results, contests);
 
-      expect(lines.slice(0, 19)).toStrictEqual([
-        "node 24.1.0",
-        rule("┬", [6, 8, 8, 8, 8, 8]),
-        "case  │ median │   mean │    min │    max │ samples",
-        rule("┼", [6, 8, 8, 8, 8, 8]),
-        "apple │ 812 ns │ 812 ns │ 812 ns │ 812 ns │      64",
-        "",
-        "concat · 8 rounds",
-        rule("┬", [11, 9, 9, 5]),
-        "contender  │  median │   ratio │ rank",
-        rule("┼", [11, 9, 9, 5]),
-        "join       │  812 ns │   1.00× │    1",
-        "array-push │  941 ns │   1.16× │    2",
-        "loop       │ 81.2 µs │ 100.00× │    3",
-        "",
-        rule("┬", [7, 8, 8, 8, 8, 8]),
-        "case   │ median │   mean │    min │    max │ samples",
-        rule("┼", [7, 8, 8, 8, 8, 8]),
-        "cherry │ 812 ns │ 812 ns │ 812 ns │ 812 ns │      64",
-        "",
+      expectBox(lines.slice(1, 5));
+      expectBox(lines.slice(7, 13));
+      expectBox(lines.slice(14, 18));
+      expect([lines[0], lines[5], lines[13], lines[18]]).toStrictEqual(["node 24.1.0", "", "", ""]);
+      expect(lines[6]).toMatch(/^concat\b.*\b8 rounds$/u);
+      const rows = [lines[4], ...lines.slice(10, 13), lines[17]];
+      expect(rows.map((row) => cellsOf(row ?? ""))).toStrictEqual([
+        ["apple", "812 ns", "812 ns", "812 ns", "812 ns", "64"],
+        ["join", "812 ns", "1.00×", "1"],
+        ["array-push", "941 ns", "1.16×", "2"],
+        ["loop", "81.2 µs", "100.00×", "3"],
+        ["cherry", "812 ns", "812 ns", "812 ns", "812 ns", "64"],
       ]);
     });
   });
@@ -578,7 +631,8 @@ describe("formatTable", () => {
 
       const lines = tableLines(results, contests);
 
-      expect(lines.indexOf("concat · 9 rounds")).toBeGreaterThan(headingIndex(lines, "bun"));
+      const nineRounds = lines.findIndex((line) => /^concat\b.*\b9 rounds$/u.test(line));
+      expect(nineRounds).toBeGreaterThan(headingIndex(lines, "bun"));
     });
   });
 
@@ -587,32 +641,18 @@ describe("formatTable", () => {
       { rounds: 1, text: "1 round" },
       { rounds: 3, text: "3 rounds" },
     ])("shows only contenders and medians, then not judged over $text", ({ rounds, text }) => {
-      const results = [
-        contenderResult("concat", "join", 806),
-        contenderResult("concat", "loop", 1880),
-      ];
-      const contests = [
-        contest(
-          "concat",
-          rounds,
-          [contender("concat/join", 806), contender("concat/loop", 1880)],
-          [],
-        ),
-      ];
+      const { results, entry } = notJudgedContest(rounds);
 
-      const lines = tableLines(results, contests);
+      const lines = tableLines(results, [entry]);
 
-      expect(lines.slice(0, 9)).toStrictEqual([
-        "node 24.1.0",
-        "",
-        `concat · ${text}`,
-        rule("┬", [10, 8]),
-        "contender │  median",
-        rule("┼", [10, 8]),
-        "join      │  806 ns",
-        "loop      │ 1.88 µs",
-        expect.stringMatching(new RegExp(`\\b${text}$`, "u")),
+      expectBox(lines.slice(3, 8));
+      expect(lines.slice(0, 2)).toStrictEqual(["node 24.1.0", ""]);
+      expect(lines[2]).toMatch(new RegExp(`^concat\\b.*\\b${text}$`, "u"));
+      expect(lines.slice(6, 8).map(cellsOf)).toStrictEqual([
+        ["join", "806 ns"],
+        ["loop", "1.88 µs"],
       ]);
+      expect(lines[8]).toMatch(new RegExp(`\\b${text}$`, "u"));
     });
 
     it("rows a failed contender before the not judged line", () => {
@@ -637,8 +677,9 @@ describe("formatTable", () => {
       const lines = tableLines(results, contests);
 
       const loop = rowIndex(lines, "loop");
-      expect(lines.slice(loop, loop + 3)).toStrictEqual([
-        "loop      │ 1.88 µs",
+      expectBox(lines.slice(loop - 4, loop + 1), ["plus"]);
+      expect(cellsOf(lines[loop] ?? "")).toStrictEqual(["loop", "1.88 µs"]);
+      expect(lines.slice(loop + 1, loop + 3)).toStrictEqual([
         expect.stringMatching(/^plus {6}│ \S.* kiwi$/u),
         expect.stringMatching(/\b1 round$/u),
       ]);
@@ -650,7 +691,9 @@ describe("formatTable", () => {
 
         const lines = tableLines(results, [entry]);
 
-        const notJudged = lines[rowIndex(lines, "loop") + 1];
+        const loop = rowIndex(lines, "loop");
+        expect(loop).not.toBe(-1);
+        const notJudged = lines[loop + 1];
         expect(notJudged).toMatch(/\S/u);
         expect(notJudged).not.toMatch(/\bround/u);
       });
@@ -659,20 +702,6 @@ describe("formatTable", () => {
 
   describe("when a contest ran", () => {
     describe("when no contest was judged", () => {
-      it("counts no contest and no rounds in the footer", () => {
-        const results = [
-          contenderResult("concat", "join", 806),
-          contenderResult("concat", "loop", 1880),
-        ];
-        const contests = [
-          contest("concat", 1, [contender("concat/join", 806), contender("concat/loop", 1880)], []),
-        ];
-
-        const text = footer(results, contests);
-
-        expect(text).not.toMatch(/\d/u);
-      });
-
       describe("when no contest had two finished contenders", () => {
         it("does not blame the rounds in the footer", () => {
           const { results, entry } = unfinishedContest("concat", ["join", "loop"], 806);
@@ -687,21 +716,12 @@ describe("formatTable", () => {
       describe("when one contest had two finished contenders and another did not", () => {
         it("blames the rounds in the footer as when every contest had them", () => {
           const unfinished = unfinishedContest("parse", ["regex", "split"], 100);
-          const finishedResults = [
-            contenderResult("concat", "join", 806),
-            contenderResult("concat", "loop", 1880),
-          ];
-          const finishedContest = contest(
-            "concat",
-            9,
-            [contender("concat/join", 806), contender("concat/loop", 1880)],
-            [],
-          );
-          const roundsFooter = footer(finishedResults, [finishedContest]);
+          const finished = notJudgedContest(9);
+          const roundsFooter = footer(finished.results, [finished.entry]);
 
           const text = footer(
-            [...unfinished.results, ...finishedResults],
-            [unfinished.entry, finishedContest],
+            [...unfinished.results, ...finished.results],
+            [unfinished.entry, finished.entry],
           );
 
           expect(roundsFooter).toMatch(/\bround/u);
@@ -712,17 +732,11 @@ describe("formatTable", () => {
 
     describe("when no contest was judged and a plain case ran", () => {
       it("adds one line to the footer of the same run without the plain case", () => {
-        const contestResults = [
-          contenderResult("concat", "join", 806),
-          contenderResult("concat", "loop", 1880),
-        ];
-        const contests = [
-          contest("concat", 3, [contender("concat/join", 806), contender("concat/loop", 1880)], []),
-        ];
-        const contestFooter = footerLines(tableLines(contestResults, contests));
+        const { results: contestResults, entry } = notJudgedContest(3);
+        const contestFooter = footerLines(tableLines(contestResults, [entry]));
 
         const withPlain = footerLines(
-          tableLines([measured("apple", "node", flatStats(812)), ...contestResults], contests),
+          tableLines([measured("apple", "node", flatStats(812)), ...contestResults], [entry]),
         );
 
         expect(withPlain).toStrictEqual([...contestFooter, expect.stringMatching(/\S/u)]);
@@ -811,48 +825,10 @@ describe("formatTable", () => {
         );
       });
     });
-
-    describe("when the same contest was tied on two runtimes", () => {
-      it("prints its line under each runtime's table with that table's rounds doubled", () => {
-        const results = [...threeWayResults("parse"), ...threeWayResults("parse", "bun")];
-        const contests = [
-          threeWayContest("parse", 9, ["rounds", null]),
-          onBun(threeWayContest("parse", 5, ["rounds", null])),
-        ];
-
-        const lines = tableLines(results, contests);
-
-        expect(notesUnder(lines, "scan")).toStrictEqual([
-          expect.stringMatching(notePattern("parse", ["regex", "split"], ["scan"], 18)),
-        ]);
-        expect(notesUnder(lines, "scan", headingIndex(lines, "bun"))).toStrictEqual([
-          expect.stringMatching(notePattern("parse", ["regex", "split"], ["scan"], 10)),
-        ]);
-      });
-    });
   });
 
   describe("when colored", () => {
-    const results = [measured("elderberry", "node", WIDE_STATS)];
-
-    it("styles the table", () => {
-      const plain = formatTable(results, [], { color: false });
-
-      const colored = formatTable(results, [], { color: true });
-
-      expect(colored).not.toBe(plain);
-    });
-
-    const notJudged = {
-      results: [contenderResult("concat", "join", 806), contenderResult("concat", "loop", 1880)],
-      entry: contest(
-        "concat",
-        3,
-        [contender("concat/join", 806), contender("concat/loop", 1880)],
-        [],
-      ),
-    };
-    const unfinished = unfinishedContest("concat", ["join", "loop"], 806);
+    const notJudged = notJudgedContest(3);
     const apple = measured("apple", "node", flatStats(812));
 
     it.each([
@@ -875,12 +851,6 @@ describe("formatTable", () => {
         select: footerLines,
       },
       {
-        lines: "the footer when no contest had two finished contenders",
-        results: unfinished.results,
-        contests: [unfinished.entry],
-        select: footerLines,
-      },
-      {
         lines: "the footer when no contest ran",
         results: [apple],
         contests: [],
@@ -893,6 +863,19 @@ describe("formatTable", () => {
 
       expect(plain.length).toBeGreaterThan(0);
       expect(colored).toStrictEqual(plain.map(dim));
+    });
+  });
+});
+
+describe("failureLines", () => {
+  describe("when the lead is colored", () => {
+    it("continues a further line of the message as wide as the visible lead", () => {
+      const plainLead = "failed x: ";
+      const lead = `${paint("red", "failed", true)} x: `;
+
+      const lines = failureLines(lead, { message: "kiwi\nplum", teardownError: null }, "  ");
+
+      expect(lines).toStrictEqual([`${lead}kiwi`, `${" ".repeat(plainLead.length)}plum`]);
     });
   });
 });

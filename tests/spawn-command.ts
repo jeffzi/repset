@@ -7,7 +7,6 @@ import { onTestFinished } from "vitest";
 
 import { POSIX } from "./spawn-limits.js";
 
-/** The command's source entry. */
 const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 
 /** The `tsx` loader as a URL, which `--import` resolves from any working directory. */

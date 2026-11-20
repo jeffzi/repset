@@ -28,7 +28,6 @@ export function found(runtime: Runtime): FoundRuntime {
   };
 }
 
-/** A runtime lookup that finds every runtime. */
 export const findAny: FindRuntime = async (runtime) => found(runtime);
 
 /** A measurement whose median is `median`. */
@@ -54,12 +53,13 @@ export function measuredOutcome(median: number): Outcome {
   return { status: "ok", result: measured(median), output: "" };
 }
 
-/** An outcome in which the child ran its case once. */
 export const ranOnce: Outcome = { status: "ok", result: { status: "ok" }, output: "" };
 
 /** A case to list, whose benchmark name defaults to its id and whose contender defaults to `null`. */
-export type CaseToList = Pick<ListedCase, "id" | "setupPerCall"> &
-  Partial<Pick<ListedCase, "name" | "contender">>;
+export interface CaseToList
+  extends
+    Pick<ListedCase, "id" | "setupPerCall">,
+    Partial<Pick<ListedCase, "name" | "contender">> {}
 
 /** The contender `key` of the contest `concat`. */
 export function contender(key: string): CaseToList {

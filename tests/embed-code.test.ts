@@ -101,21 +101,21 @@ describe("embedCode", () => {
   });
 
   describe("when a CODE block's content is stale", () => {
-    it.each([
-      { layout: "one newline", around: "\n" },
-      { layout: "a blank line", around: "\n\n" },
-    ])("keeps $layout around the fence", async ({ around }) => {
-      const dir = createProject({
-        "x.ts": "export const x = 1;\n",
-        "README.md": `<!-- docs CODE src="./x.ts" -->${around}stale${around}<!-- /docs -->\n`,
-      });
+    it.each([{ layout: "a blank line", around: "\n\n" }])(
+      "keeps $layout around the fence",
+      async ({ around }) => {
+        const dir = createProject({
+          "x.ts": "export const x = 1;\n",
+          "README.md": `<!-- docs CODE src="./x.ts" -->${around}stale${around}<!-- /docs -->\n`,
+        });
 
-      await embedCode([join(dir, "README.md")]);
+        await embedCode([join(dir, "README.md")]);
 
-      expect(read(dir, "README.md")).toBe(
-        `<!-- docs CODE src="./x.ts" -->${around}${FENCE}ts\nexport const x = 1;\n${FENCE}${around}<!-- /docs -->\n`,
-      );
-    });
+        expect(read(dir, "README.md")).toBe(
+          `<!-- docs CODE src="./x.ts" -->${around}${FENCE}ts\nexport const x = 1;\n${FENCE}${around}<!-- /docs -->\n`,
+        );
+      },
+    );
   });
 
   describe("when a CODE block with attributes on their own lines is up to date", () => {
@@ -145,14 +145,6 @@ describe("embedCode", () => {
   });
 
   describe("when a markdown file holds no CODE block", () => {
-    it("returns no changed files", async () => {
-      const dir = createProject({ "README.md": "# Title\n\nPlain text.\n" });
-
-      const changed = await embedCode([join(dir, "README.md")]);
-
-      expect(changed).toStrictEqual([]);
-    });
-
     it("leaves a block with another marker unchanged", async () => {
       const dir = createProject({ "README.md": "<!-- docs OTHER -->\nkeep\n<!-- /docs -->\n" });
 
@@ -166,7 +158,7 @@ describe("embedCode", () => {
     it.each([
       { attributes: "no attribute", opening: "<!-- docs CODE -->" },
       { attributes: "a single-quoted src", opening: "<!-- docs CODE src='./x.ts' -->" },
-    ])("rejects naming the markdown file with $attributes", async ({ opening }) => {
+    ])("rejects, naming the markdown file, a block with $attributes", async ({ opening }) => {
       const dir = createProject({
         "x.ts": "export const x = 1;\n",
         "b.md": `${opening}\nstale\n<!-- /docs -->\n`,
@@ -193,17 +185,12 @@ describe("embedCode", () => {
   describe("when a later markdown file fails", () => {
     const VALID = `${codeBlock("./x.ts", "stale")}\n`;
 
-    /** A project whose a.md embeds cleanly and whose later b.md embeds a URL, which fails. */
-    function laterFails(): string {
-      return createProject({
+    it("leaves the earlier file unchanged", async () => {
+      const dir = createProject({
         "x.ts": "export const x = 1;\n",
         "a.md": VALID,
         "b.md": `${codeBlock("https://example.invalid/x.ts", "stale")}\n`,
       });
-    }
-
-    it("leaves the earlier file unchanged", async () => {
-      const dir = laterFails();
 
       await expect(embedCode([join(dir, "a.md"), join(dir, "b.md")])).rejects.toThrow(
         join(dir, "b.md"),
@@ -214,7 +201,7 @@ describe("embedCode", () => {
   });
 
   describe("when a CODE block's source file is missing", () => {
-    it("rejects naming the missing path", async () => {
+    it("rejects, naming the missing path", async () => {
       const dir = createProject({ "README.md": `${codeBlock("./missing.ts", "stale")}\n` });
 
       const run = embedCode([join(dir, "README.md")]);

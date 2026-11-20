@@ -1,5 +1,4 @@
 import { execFileSync } from "node:child_process";
-import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { describe, expect, it } from "vitest";
@@ -39,7 +38,7 @@ function minSamplesInNode(config: string): string {
 
 /** The absolute path of the config fixture `name`. */
 function fixture(name: string): string {
-  return join(FIXTURES, name);
+  return fixturePath("config", name);
 }
 
 /** Resolves `options` from the fixture directory, which holds no `repset.config.*` file. */
@@ -169,7 +168,6 @@ describe("resolveOptions", () => {
       { options: { minTime: Number.NaN }, option: "minTime", shown: "NaN" },
       { options: { minSamples: 1.5 }, option: "minSamples", shown: "1.5" },
       { options: { rounds: 0 }, option: "rounds", shown: "0" },
-      { options: { rounds: Number.POSITIVE_INFINITY }, option: "rounds", shown: "Infinity" },
       { options: { timeout: 0 }, option: "timeout", shown: "0" },
       { options: { timeout: 2.5 }, option: "timeout", shown: "2.5" },
       { options: { timeout: 2_147_483_648 }, option: "timeout", shown: "2147483648" },

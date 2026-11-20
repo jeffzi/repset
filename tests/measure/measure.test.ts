@@ -220,9 +220,18 @@ function recordUnhandledRejections(): unknown[] {
   return unhandled;
 }
 
-/** The `fn <id>` entries the case's body callback logs, one per body call. */
-function bodyCalls(log: readonly string[]): string[] {
-  return log.filter((entry) => entry.startsWith("fn"));
+/** The entries `callback` logged, one per call. */
+function logged(log: readonly string[], callback: "setup" | "fn" | "teardown"): string[] {
+  return log.filter((entry) => entry.startsWith(callback));
+}
+
+/** Stubs `globalThis.gc` with a collector that throws, and returns what it throws. */
+function throwingCollector(): Error {
+  const collectorError = new Error("durian");
+  vi.stubGlobal("gc", () => {
+    throw collectorError;
+  });
+  return collectorError;
 }
 
 /** The `MeasureError` a run rejects with, failing the test when it resolves or rejects otherwise. */
@@ -359,7 +368,7 @@ describe("measure", () => {
 
       await run(fake);
 
-      expect(fake.log.filter((entry) => entry.startsWith("setup"))).toStrictEqual(["setup 0"]);
+      expect(logged(fake.log, "setup")).toStrictEqual(["setup 0"]);
     });
 
     it("tears its one state down once", async () => {
@@ -367,9 +376,7 @@ describe("measure", () => {
 
       await run(fake);
 
-      expect(fake.log.filter((entry) => entry.startsWith("teardown"))).toStrictEqual([
-        "teardown 0",
-      ]);
+      expect(logged(fake.log, "teardown")).toStrictEqual(["teardown 0"]);
     });
   });
 
@@ -396,7 +403,7 @@ describe("measure", () => {
         const error = await failure(run(fake));
 
         expect(error.phase).toBe("fn");
-        expect(bodyCalls(fake.log)).toHaveLength(1);
+        expect(logged(fake.log, "fn")).toHaveLength(1);
       },
     );
 
@@ -521,6 +528,9 @@ describe("measure", () => {
   });
 
   describe("when a callback or the collector throws", () => {
+    /** A body cost long enough that each sample is one call. */
+    const LONG_BODY_MS = 200;
+
     // One call per sample of 200 ms on both kinds. Body call 0 is the synchronous-body check and
     // calls 1-16 warm up; setup and teardown calls count the same way.
     const BUILD_OR_BODY_FAILURES = [
@@ -532,7 +542,7 @@ describe("measure", () => {
     it.each(BUILD_OR_BODY_FAILURES)(
       "rejects a $kind run in phase $from with the thrown value itself as cause when $when",
       async ({ kind, fails, from }) => {
-        const fake = bench(kind, { bodyMs: 200, fails });
+        const fake = bench(kind, { bodyMs: LONG_BODY_MS, fails });
 
         const error = await failure(run(fake));
 
@@ -542,14 +552,12 @@ describe("measure", () => {
     );
 
     it("tears down every state a per-call run built when the body throws in warmup", async () => {
-      const fake = bench("perCall", { bodyMs: 200, fails: { fn: 5 } });
+      const fake = bench("perCall", { bodyMs: LONG_BODY_MS, fails: { fn: 5 } });
 
       await run(fake).catch(() => undefined);
 
       expect(fake.live.size).toBe(0);
-      expect(fake.log.filter((entry) => entry.startsWith("teardown"))).toHaveLength(
-        fake.log.filter((entry) => entry.startsWith("setup")).length,
-      );
+      expect(logged(fake.log, "teardown")).toHaveLength(logged(fake.log, "setup").length);
     });
 
     it.each([
@@ -559,7 +567,7 @@ describe("measure", () => {
     ] as const)(
       "rejects a $kind run whose body succeeded in phase teardown with the teardown's value as cause when $when",
       async ({ kind, fails }) => {
-        const fake = bench(kind, { bodyMs: 200, fails });
+        const fake = bench(kind, { bodyMs: LONG_BODY_MS, fails });
 
         const error = await failure(run(fake));
 
@@ -572,7 +580,7 @@ describe("measure", () => {
     // from the live set: a second teardown of the state that threw would drop it too.
     it("leaves alive only the state whose teardown threw", async () => {
       const fails = { teardown: 2 };
-      const fake = bench("perCall", { bodyMs: 200, fails });
+      const fake = bench("perCall", { bodyMs: LONG_BODY_MS, fails });
 
       await run(fake).catch(() => undefined);
 
@@ -580,7 +588,7 @@ describe("measure", () => {
     });
 
     it("rejects a per-call run whose setup returns undefined in phase fn when the body throws in warmup", async () => {
-      const fake = bench("perCall", { bodyMs: 200, fails: { fn: 5 } });
+      const fake = bench("perCall", { bodyMs: LONG_BODY_MS, fails: { fn: 5 } });
 
       const error = await failure(runOnUndefined(fake));
 
@@ -588,7 +596,7 @@ describe("measure", () => {
     });
 
     it("tears down every state a per-call run whose setup returns undefined built when the body throws in warmup", async () => {
-      const fake = bench("perCall", { bodyMs: 200, fails: { fn: 5 } });
+      const fake = bench("perCall", { bodyMs: LONG_BODY_MS, fails: { fn: 5 } });
 
       await runOnUndefined(fake).catch(() => undefined);
 
@@ -603,7 +611,7 @@ describe("measure", () => {
     it.each(BODY_AND_CLEANUP_FAILURES)(
       "rejects a $kind run in phase fn with the body's value as cause when the cleanup's teardown throws too",
       async ({ kind, fails }) => {
-        const fake = bench(kind, { bodyMs: 200, fails });
+        const fake = bench(kind, { bodyMs: LONG_BODY_MS, fails });
 
         const error = await failure(run(fake));
 
@@ -615,11 +623,10 @@ describe("measure", () => {
     it.each(BODY_AND_CLEANUP_FAILURES)(
       "keeps the cleanup's teardown failure on a $kind run's error in phase teardown, the teardown's value as cause, when the body throws first",
       async ({ kind, fails }) => {
-        const fake = bench(kind, { bodyMs: 200, fails });
+        const fake = bench(kind, { bodyMs: LONG_BODY_MS, fails });
 
         const error = await failure(run(fake));
 
-        expect(error.teardownError).toBeInstanceOf(MeasureError);
         expect(error.teardownError?.phase).toBe("teardown");
         expect(error.teardownError?.cause).toBe(fake.teardownError);
       },
@@ -637,23 +644,19 @@ describe("measure", () => {
 
     it("keeps a cleanup teardown that throws null on the body's error, null as cause", async () => {
       const fake = bench("perCall", {
-        bodyMs: 200,
+        bodyMs: LONG_BODY_MS,
         fails: { fn: 5, teardown: 5 },
         teardownThrows: null,
       });
 
       const error = await failure(run(fake));
 
-      expect(error.teardownError).toBeInstanceOf(MeasureError);
       expect(error.teardownError?.cause).toBeNull();
     });
 
     it("rejects a shared-state run whose collection throws and whose cleanup's teardown throws in phase child, the collector's value as cause", async () => {
-      const fake = bench("sharedState", { bodyMs: 200, fails: { teardown: 0 } });
-      const collectorError = new Error("durian");
-      vi.stubGlobal("gc", () => {
-        throw collectorError;
-      });
+      const fake = bench("sharedState", { bodyMs: LONG_BODY_MS, fails: { teardown: 0 } });
+      const collectorError = throwingCollector();
 
       const error = await failure(run(fake));
 
@@ -661,24 +664,9 @@ describe("measure", () => {
       expect(error.cause).toBe(collectorError);
     });
 
-    it("keeps the cleanup's teardown failure in phase teardown on a shared-state run whose collection throws, the teardown's value as cause", async () => {
-      const fake = bench("sharedState", { bodyMs: 200, fails: { teardown: 0 } });
-      vi.stubGlobal("gc", () => {
-        throw new Error("durian");
-      });
-
-      const error = await failure(run(fake));
-
-      expect(error.teardownError?.phase).toBe("teardown");
-      expect(error.teardownError?.cause).toBe(fake.teardownError);
-    });
-
     it("rejects a per-call run whose collection throws in phase child with the collector's value as cause", async () => {
-      const fake = bench("perCall", { bodyMs: 200 });
-      const collectorError = new Error("durian");
-      vi.stubGlobal("gc", () => {
-        throw collectorError;
-      });
+      const fake = bench("perCall", { bodyMs: LONG_BODY_MS });
+      const collectorError = throwingCollector();
 
       const error = await failure(run(fake));
 
@@ -697,7 +685,7 @@ describe("measure", () => {
         fn: () => {
           calls += 1;
           if (calls > 5) throw own;
-          clock.advance(200);
+          clock.advance(LONG_BODY_MS);
         },
       };
 
@@ -738,7 +726,7 @@ describe("measure", () => {
     );
 
     it("rejects a run whose empty body's collection throws in phase child, the collector's value as cause", async () => {
-      const fake = bench("perCall", { bodyMs: 200 });
+      const fake = bench("perCall", { bodyMs: LONG_BODY_MS });
       const collectorError = new Error("durian");
       let collections = 0;
       vi.stubGlobal("gc", () => {

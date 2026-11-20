@@ -134,12 +134,12 @@ function contender(
   return { id, median, ratio, rank };
 }
 
-/** The verdict of contenders `a` and `b` of contest `name`, `faster` the faster's key or null for a tie. */
+/** The verdict of contenders `a` and `b` of contest `name`: the faster's key, or the kind of tie. */
 function pair(
   name: string,
   [a, b]: readonly [string, string],
   [ratio, interval]: readonly [number, readonly [number, number]],
-  faster: string | null,
+  verdict: { readonly faster: string } | { readonly tie: "rounds" | "timer" },
 ): ContestPair {
   return {
     a: `${name}/${a}`,
@@ -148,8 +148,8 @@ function pair(
     interval,
     p: 0.01,
     pAdjusted: 0.01,
-    faster: faster === null ? null : `${name}/${faster}`,
-    tie: faster === null ? "rounds" : null,
+    faster: "faster" in verdict ? `${name}/${verdict.faster}` : null,
+    tie: "tie" in verdict ? verdict.tie : null,
   };
 }
 
@@ -185,7 +185,7 @@ function judgedContest(
     name,
     rounds,
     [contender(`${name}/${fast}`, 100, 1, 1), contender(`${name}/${slow}`, 200, 2, 2)],
-    [pair(name, [fast, slow], [2, [1.9, 2.1]], fast)],
+    [pair(name, [fast, slow], [2, [1.9, 2.1]], { faster: fast })],
   );
 }
 
@@ -214,15 +214,90 @@ function unfinishedContest(
   };
 }
 
+/** The keys of the contenders of `threeWayContest`, fastest first. */
+const THREE_WAY = ["regex", "split", "scan"] as const;
+
+/** The results of the contenders of `threeWayContest(name, …)` measured on `runtime`. */
+function threeWayResults(name: string, runtime: Runtime = "node"): MeasuredResult[] {
+  return THREE_WAY.map((key, index) => contenderResult(name, key, 100 + index, runtime));
+}
+
+/** A contest `name` over `rounds` rounds among regex, split and scan, its regex–split and split–scan pairs tied by the given kinds, or proven for the first when null. */
+function threeWayContest(
+  name: string,
+  rounds: number,
+  [regexSplit, splitScan]: readonly [ContestPair["tie"], ContestPair["tie"]],
+): Contest {
+  return contest(
+    name,
+    rounds,
+    [
+      contender(`${name}/regex`, 100, 1, 1),
+      contender(`${name}/split`, 101, 1.01, 1),
+      contender(`${name}/scan`, 102, 1.02, 2),
+    ],
+    [
+      pair(
+        name,
+        ["regex", "split"],
+        [1.01, [0.98, 1.03]],
+        regexSplit === null ? { faster: "regex" } : { tie: regexSplit },
+      ),
+      pair(
+        name,
+        ["split", "scan"],
+        [1.01, [0.98, 1.03]],
+        splitScan === null ? { faster: "split" } : { tie: splitScan },
+      ),
+      pair(name, ["regex", "scan"], [1.02, [1.01, 1.03]], { faster: "regex" }),
+    ],
+  );
+}
+
+/** A pattern for a note line of contest `name` naming every key of `named`, none of `unnamed` and no case id, with `--rounds rounds` advice, or none when null. */
+function notePattern(
+  name: string,
+  named: readonly string[],
+  unnamed: readonly string[],
+  rounds: number | null,
+): RegExp {
+  const keys = [
+    ...named.map((key) => `(?=.*\\b${key}\\b)`),
+    ...unnamed.map((key) => `(?!.*\\b${key}\\b)`),
+  ];
+  const advice = rounds === null ? "(?!.*--rounds)" : `(?=.*--rounds ${rounds}\\b)`;
+  return new RegExp(`^${keys.join("")}(?!.*${name}/)${advice}.*\\S`, "u");
+}
+
 /** The lines of the table of `results` and `contests`, the last one empty after the closing newline. */
-function tableLines(results: readonly Result[], contests: readonly Contest[] = []): string[] {
-  return formatTable(results, contests, { color: false }).split("\n");
+function tableLines(
+  results: readonly Result[],
+  contests: readonly Contest[] = [],
+  color = false,
+): string[] {
+  return formatTable(results, contests, { color }).split("\n");
+}
+
+/** The footer of `lines`: its lines after the last blank line before the closing one. */
+function footerLines(lines: readonly string[]): string[] {
+  return lines.slice(lines.lastIndexOf("", -2) + 1, -1);
 }
 
 /** The footer of the table of `results` and `contests`: its lines after the last block, joined. */
 function footer(results: readonly Result[], contests: readonly Contest[]): string {
-  const lines = tableLines(results, contests);
-  return lines.slice(lines.lastIndexOf("", -2) + 1, -1).join("\n");
+  return footerLines(tableLines(results, contests)).join("\n");
+}
+
+/** The lines between the first row of `key` at or after line `from` and the next blank line. */
+function notesUnder(lines: readonly string[], key: string, from = 0): string[] {
+  const row = lines.findIndex((line, index) => index >= from && line.startsWith(`${key} `));
+  if (row === -1) throw new Error(`no row of ${key} at or after line ${from}`);
+  return lines.slice(row + 1, lines.indexOf("", row));
+}
+
+/** `line` dimmed as a styled terminal prints it. */
+function dim(line: string): string {
+  return `\u001B[2m${line}\u001B[22m`;
 }
 
 /** The index of the first line that starts with `id` and a space, or -1 when no row does. */
@@ -431,7 +506,7 @@ describe("formatTable", () => {
     it("lays the contest's sub-table out between the plain cases", () => {
       const results = [
         measured("apple", "node", flatStats(812)),
-        contenderResult("concat", "loop", 1900),
+        contenderResult("concat", "loop", 81_200),
         contenderResult("concat", "join", 812),
         contenderResult("concat", "array-push", 941),
         measured("cherry", "node", flatStats(812)),
@@ -443,12 +518,12 @@ describe("formatTable", () => {
           [
             contender("concat/join", 812, 1, 1),
             contender("concat/array-push", 941, 1.16, 2),
-            contender("concat/loop", 1900, 2.31, 3),
+            contender("concat/loop", 81_200, 100, 3),
           ],
           [
-            pair("concat", ["join", "array-push"], [1.16, [1.12, 1.19]], "join"),
-            pair("concat", ["join", "loop"], [2.31, [2.18, 2.47]], "join"),
-            pair("concat", ["array-push", "loop"], [1.99, [1.9, 2.1]], "array-push"),
+            pair("concat", ["join", "array-push"], [1.16, [1.12, 1.19]], { faster: "join" }),
+            pair("concat", ["join", "loop"], [100, [98.1, 102]], { faster: "join" }),
+            pair("concat", ["array-push", "loop"], [86.3, [84.2, 88.5]], { faster: "array-push" }),
           ],
         ),
       ];
@@ -463,12 +538,12 @@ describe("formatTable", () => {
         "apple │ 812 ns │ 812 ns │ 812 ns │ 812 ns │      64",
         "",
         "concat · 8 rounds",
-        rule("┬", [11, 9, 19, 5]),
-        "contender  │  median │ ratio             │ rank",
-        rule("┼", [11, 9, 19, 5]),
-        "join       │  812 ns │ 1.00×             │    1",
-        "array-push │  941 ns │ 1.16× (1.12–1.19) │    2",
-        "loop       │ 1.90 µs │ 2.31× (2.18–2.47) │    3",
+        rule("┬", [11, 9, 9, 5]),
+        "contender  │  median │   ratio │ rank",
+        rule("┼", [11, 9, 9, 5]),
+        "join       │  812 ns │   1.00× │    1",
+        "array-push │  941 ns │   1.16× │    2",
+        "loop       │ 81.2 µs │ 100.00× │    3",
         "",
         rule("┬", [7, 8, 8, 8, 8, 8]),
         "case   │ median │   mean │    min │    max │ samples",
@@ -635,49 +710,27 @@ describe("formatTable", () => {
       });
     });
 
-    describe("when another contest was not judged", () => {
-      it("counts only the judged contests in the footer", () => {
-        const results = [
-          ...judgedResults("concat", ["join", "loop"]),
-          ...judgedResults("parse", ["regex", "split"]),
-          contenderResult("sort", "quick", 100),
-          contenderResult("sort", "merge", 200),
+    describe("when no contest was judged and a plain case ran", () => {
+      it("adds one line to the footer of the same run without the plain case", () => {
+        const contestResults = [
+          contenderResult("concat", "join", 806),
+          contenderResult("concat", "loop", 1880),
         ];
         const contests = [
-          judgedContest("concat", 9, ["join", "loop"]),
-          judgedContest("parse", 9, ["regex", "split"]),
-          contest("sort", 9, [contender("sort/quick", 100), contender("sort/merge", 200)], []),
+          contest("concat", 3, [contender("concat/join", 806), contender("concat/loop", 1880)], []),
         ];
+        const contestFooter = footerLines(tableLines(contestResults, contests));
 
-        const text = footer(results, contests);
+        const withPlain = footerLines(
+          tableLines([measured("apple", "node", flatStats(812)), ...contestResults], contests),
+        );
 
-        expect(text).toMatch(/\b2\b/u);
-        expect(text).not.toMatch(/\b3\b/u);
+        expect(withPlain).toStrictEqual([...contestFooter, expect.stringMatching(/\S/u)]);
       });
     });
 
-    describe("when the judged contests ran one round count and a contest not judged ran another", () => {
-      it("states the judged contests' round count alone in the footer", () => {
-        const results = [
-          ...judgedResults("concat", ["join", "loop"]),
-          ...judgedResults("parse", ["regex", "split"]),
-          contenderResult("sort", "quick", 100),
-          contenderResult("sort", "merge", 200),
-        ];
-        const contests = [
-          judgedContest("concat", 9, ["join", "loop"]),
-          judgedContest("parse", 9, ["regex", "split"]),
-          contest("sort", 4, [contender("sort/quick", 100), contender("sort/merge", 200)], []),
-        ];
-
-        const text = footer(results, contests);
-
-        expect(text.match(/[\d–]+ rounds?\b/gu)).toStrictEqual(["9 rounds"]);
-      });
-    });
-
-    describe("when contests ran different round counts", () => {
-      it("states each round count in the footer", () => {
+    describe("when every contest was judged with no tie", () => {
+      it("ends after the last table when no plain case ran", () => {
         const results = [
           ...judgedResults("concat", ["join", "loop"]),
           ...judgedResults("parse", ["regex", "split"]),
@@ -687,53 +740,94 @@ describe("formatTable", () => {
           judgedContest("parse", 8, ["regex", "split"]),
         ];
 
-        const text = footer(results, contests);
+        const lines = tableLines(results, contests);
 
-        expect(text).toMatch(/\b7\b/u);
-        expect(text).toMatch(/\b8\b/u);
+        expect(lines.slice(-2)).toStrictEqual([expect.stringMatching(/^split /u), ""]);
       });
-    });
 
-    describe("when a contest was tied", () => {
-      it("recommends twice its rounds in the footer", () => {
-        const results = [
-          ...judgedResults("concat", ["join", "loop"]),
-          ...judgedResults("parse", ["regex", "split"]),
-        ];
-        const contests = [
-          judgedContest("concat", 7, ["join", "loop"]),
-          contest(
-            "parse",
-            9,
-            [contender("parse/regex", 100, 1, 1), contender("parse/split", 101, 1.01, 1)],
-            [pair("parse", ["regex", "split"], [1.01, [0.98, 1.03]], null)],
-          ),
-        ];
+      it("ends with the plain-case sentence alone when a plain case ran", () => {
+        const apple = measured("apple", "node", flatStats(812));
+        const notJudged = tableLines(
+          [apple, contenderResult("sort", "quick", 100), contenderResult("sort", "merge", 200)],
+          [contest("sort", 3, [contender("sort/quick", 100), contender("sort/merge", 200)], [])],
+        );
+        const plainSentence = footerLines(notJudged).at(-1);
 
-        const text = footer(results, contests);
-
-        expect(text).toMatch(/\b18\b/u);
-        expect(text).not.toMatch(/\b14\b/u);
-      });
-    });
-
-    describe("when a plain case ran too", () => {
-      it("adds the plain-case sentence to the footer", () => {
-        const contestResults = judgedResults("concat", ["join", "loop"]);
-        const contests = [judgedContest("concat", 7, ["join", "loop"])];
-        const contestFooter = footer(contestResults, contests);
-
-        const withPlain = footer(
-          [measured("apple", "node", flatStats(812)), ...contestResults],
-          contests,
+        const lines = tableLines(
+          [apple, ...judgedResults("concat", ["join", "loop"])],
+          [judgedContest("concat", 7, ["join", "loop"])],
         );
 
-        const added = withPlain.slice(contestFooter.length).trim();
-        expect({
-          extendsContestFooter: withPlain.startsWith(contestFooter),
-          addsText: added.length > 0,
-          contestFooterHasIt: contestFooter.includes(added),
-        }).toStrictEqual({ extendsContestFooter: true, addsText: true, contestFooterHasIt: false });
+        expect(plainSentence).toMatch(/\S/u);
+        expect(lines.slice(rowIndex(lines, "loop") + 1)).toStrictEqual(["", plainSentence, ""]);
+      });
+    });
+
+    describe("when a judged contest had pairs the rounds did not settle", () => {
+      it("names them by contender key under its table, recommending twice its rounds", () => {
+        const results = [...judgedResults("concat", ["join", "loop"]), ...threeWayResults("parse")];
+        const contests = [
+          judgedContest("concat", 7, ["join", "loop"]),
+          threeWayContest("parse", 9, ["rounds", "rounds"]),
+        ];
+
+        const lines = tableLines(results, contests);
+
+        expect(notesUnder(lines, "loop")).toStrictEqual([]);
+        expect(notesUnder(lines, "scan")).toStrictEqual([
+          expect.stringMatching(notePattern("parse", ["regex", "split", "scan"], [], 18)),
+        ]);
+      });
+    });
+
+    describe("when a judged contest had pairs within the timer's resolution", () => {
+      it("names them by contender key under its table with no rounds advice", () => {
+        const lines = tableLines(threeWayResults("parse"), [
+          threeWayContest("parse", 9, [null, "timer"]),
+        ]);
+
+        const notes = notesUnder(lines, "scan");
+
+        expect(notes).toStrictEqual([
+          expect.stringMatching(notePattern("parse", ["split", "scan"], ["regex"], null)),
+        ]);
+      });
+    });
+
+    describe("when a judged contest had both kinds of tie", () => {
+      it("prints a line for each kind under its table, each naming only its own pairs", () => {
+        const lines = tableLines(threeWayResults("parse"), [
+          threeWayContest("parse", 9, ["rounds", "timer"]),
+        ]);
+
+        const notes = notesUnder(lines, "scan");
+
+        expect(notes).toHaveLength(2);
+        expect(notes).toStrictEqual(
+          expect.arrayContaining([
+            expect.stringMatching(notePattern("parse", ["regex", "split"], ["scan"], 18)),
+            expect.stringMatching(notePattern("parse", ["split", "scan"], ["regex"], null)),
+          ]),
+        );
+      });
+    });
+
+    describe("when the same contest was tied on two runtimes", () => {
+      it("prints its line under each runtime's table with that table's rounds doubled", () => {
+        const results = [...threeWayResults("parse"), ...threeWayResults("parse", "bun")];
+        const contests = [
+          threeWayContest("parse", 9, ["rounds", null]),
+          onBun(threeWayContest("parse", 5, ["rounds", null])),
+        ];
+
+        const lines = tableLines(results, contests);
+
+        expect(notesUnder(lines, "scan")).toStrictEqual([
+          expect.stringMatching(notePattern("parse", ["regex", "split"], ["scan"], 18)),
+        ]);
+        expect(notesUnder(lines, "scan", headingIndex(lines, "bun"))).toStrictEqual([
+          expect.stringMatching(notePattern("parse", ["regex", "split"], ["scan"], 10)),
+        ]);
       });
     });
   });
@@ -747,6 +841,58 @@ describe("formatTable", () => {
       const colored = formatTable(results, [], { color: true });
 
       expect(colored).not.toBe(plain);
+    });
+
+    const notJudged = {
+      results: [contenderResult("concat", "join", 806), contenderResult("concat", "loop", 1880)],
+      entry: contest(
+        "concat",
+        3,
+        [contender("concat/join", 806), contender("concat/loop", 1880)],
+        [],
+      ),
+    };
+    const unfinished = unfinishedContest("concat", ["join", "loop"], 806);
+    const apple = measured("apple", "node", flatStats(812));
+
+    it.each([
+      {
+        lines: "each tie line",
+        results: threeWayResults("parse"),
+        contests: [threeWayContest("parse", 9, ["rounds", "timer"])],
+        select: (lines: readonly string[]) => notesUnder(lines, "scan"),
+      },
+      {
+        lines: "the not judged line",
+        results: notJudged.results,
+        contests: [notJudged.entry],
+        select: (lines: readonly string[]) => notesUnder(lines, "loop"),
+      },
+      {
+        lines: "the footer when no contest was judged and a plain case ran",
+        results: [apple, ...notJudged.results],
+        contests: [notJudged.entry],
+        select: footerLines,
+      },
+      {
+        lines: "the footer when no contest had two finished contenders",
+        results: unfinished.results,
+        contests: [unfinished.entry],
+        select: footerLines,
+      },
+      {
+        lines: "the footer when no contest ran",
+        results: [apple],
+        contests: [],
+        select: footerLines,
+      },
+    ])("dims $lines, printed with no escape codes when not colored", (scenario) => {
+      const plain = scenario.select(tableLines(scenario.results, scenario.contests));
+
+      const colored = scenario.select(tableLines(scenario.results, scenario.contests, true));
+
+      expect(plain.length).toBeGreaterThan(0);
+      expect(colored).toStrictEqual(plain.map(dim));
     });
   });
 });

@@ -6,7 +6,7 @@
 import { stripVTControlCharacters, styleText } from "node:util";
 
 import type { ChildError } from "./child.js";
-import type { Contest, FailedResult, MeasuredResult, Result } from "./report.js";
+import type { Contest, ContestPair, FailedResult, MeasuredResult, Result } from "./report.js";
 
 /** Time units from nanoseconds up, each a thousand of the one before. */
 const TIME_UNITS = ["ns", "µs", "ms", "s"] as const;
@@ -24,16 +24,13 @@ const ALIGN = ["left", "right", "right", "right", "right", "right"] as const;
 
 const CONTEST_HEADER = ["contender", "median", "ratio", "rank"] as const;
 
-const CONTEST_ALIGN = ["left", "right", "left", "right"] as const;
+const CONTEST_ALIGN = ["left", "right", "right", "right"] as const;
 
 const FOOTER =
   "Each case was measured once, in its own process. A verdict between revisions takes a comparison tool.";
 
 const PLAIN_FOOTER =
   "Each plain case was measured once, in its own process. A verdict between revisions takes a comparison tool.";
-
-const JUDGED_FOOTER =
-  "A shared rank means the rounds did not tell those contenders apart, and a lower rank alone is not a verdict. A verdict made at a later Holm step can show an interval that touches 1.";
 
 const NONE_JUDGED_FOOTER =
   "No contest was judged: a verdict needs more rounds than these contests ran. Without a verdict, these medians do not order the contenders.";
@@ -277,11 +274,6 @@ const PLAIN_COLUMNS: Columns = {
   labelOf: ({ id }) => id,
 };
 
-/** Prints a ratio with two decimals, as `1.16` or `0.98`. */
-function ratioText(ratio: number): string {
-  return ratio.toFixed(2);
-}
-
 /** `count` of `noun`, in the singular for one. */
 function plural(count: number, noun: string): string {
   return `${String(count)} ${noun}${count === 1 ? "" : "s"}`;
@@ -298,19 +290,46 @@ function contenderLabel(result: Result): string {
  * @param contest - Its contest's entry.
  * @param result - Its result.
  * @returns Its key and median, then, when the contest was judged, its ratio to the first contender
- *   with the interval of their pair, and its rank.
+ *   and its rank.
  */
 function contenderCells(contest: Contest, result: MeasuredResult): string[] {
   const label = contenderLabel(result);
   if (contest.pairs.length === 0) return [label, formatTime(result.median)];
   const entry = contest.contenders.find(({ id }) => id === result.id);
-  const ratio = entry?.ratio == null ? "" : `${ratioText(entry.ratio)}×`;
-  const firstId = contest.contenders[0]?.id;
-  const pair = contest.pairs.find(({ a, b }) => a === firstId && b === result.id);
-  const interval =
-    pair === undefined ? "" : ` (${ratioText(pair.interval[0])}–${ratioText(pair.interval[1])})`;
+  const ratio = entry?.ratio == null ? "" : `${entry.ratio.toFixed(2)}×`;
   const rank = entry?.rank == null ? "" : String(entry.rank);
-  return [label, formatTime(result.median), `${ratio}${interval}`, rank];
+  return [label, formatTime(result.median), ratio, rank];
+}
+
+/**
+ * The lines under a judged contest's sub-table on its tied pairs, each pair named by its
+ * contenders' keys.
+ *
+ * @param contest - The contest's entry.
+ * @param results - Its contenders' results, which give each case id its key.
+ * @returns A line on the pairs the rounds did not settle, recommending twice the contest's rounds,
+ *   then a line on the pairs whose gap is within the timer's resolution; a line only for a kind
+ *   some pair has.
+ */
+function tieLines(contest: Contest, results: readonly Result[]): string[] {
+  const keyOf = new Map(results.map((result) => [result.id, contenderLabel(result)]));
+  const named = (tie: ContestPair["tie"]): string =>
+    contest.pairs
+      .filter((pair) => pair.tie === tie)
+      .map(({ a, b }) => `${keyOf.get(a) ?? a} and ${keyOf.get(b) ?? b}`)
+      .join(", ");
+  const rounds = named("rounds");
+  const timer = named("timer");
+  const lines: string[] = [];
+  if (rounds !== "") {
+    lines.push(
+      `tied: ${rounds}. Run it with --rounds ${String(2 * contest.rounds)} to tell them apart.`,
+    );
+  }
+  if (timer !== "") {
+    lines.push(`tied: ${timer}. Their gap is too small for the timer to measure.`);
+  }
+  return lines;
 }
 
 /** Whether two or more of `contest`'s contenders finished, as a verdict needs. */
@@ -323,11 +342,12 @@ function twoFinished(contest: Contest): boolean {
  *
  * @param contest - The contest's entry.
  * @param contestResults - Its contenders' results.
- * @param color - Whether to show the name bold, the rounds, header and `not judged` line dim
- *   and each failure in red.
+ * @param color - Whether to show the name bold, the rounds, header and the lines under the rows
+ *   dim, and each failure in red.
  * @returns The contest's name and rounds, a rule, the column header, a rule, a row per contender
- *   in the entry's order, then, when the contest was not judged, the `not judged` line: its rounds,
- *   or that fewer than two contenders finished.
+ *   in the entry's order, then, when the contest was judged, a line per kind of tie its pairs had,
+ *   and when it was not, the `not judged` line: its rounds, or that fewer than two contenders
+ *   finished.
  */
 function contestLines(
   contest: Contest,
@@ -354,7 +374,9 @@ function contestLines(
       results,
       color,
     ),
-    ...(judged ? [] : [paint("dim", `not judged: ${reason}`, color)]),
+    ...(judged ? tieLines(contest, results) : [`not judged: ${reason}`]).map((line) =>
+      paint("dim", line, color),
+    ),
   ];
 }
 
@@ -412,29 +434,15 @@ function sectionLines(blocks: readonly Block[], color: boolean): string[] {
 }
 
 /**
- * The footer's lines on contests.
+ * The footer lines that say why no contest was judged, none when some contest was.
  *
  * @param contests - The contests that ran, at least one.
- * @returns How many contests were judged over how many rounds and how to read ranks, or that none
- *   was, blaming the rounds when some contest had two contenders that finished and the failed
- *   contenders otherwise, then a line per contest that ended with a tie, recommending twice its
- *   rounds.
+ * @returns Nothing when some contest was judged; otherwise that none was, blaming the rounds when
+ *   some contest had two contenders that finished and the failed contenders otherwise.
  */
 function contestFooter(contests: readonly Contest[]): string[] {
-  const judged = contests.filter(({ pairs }) => pairs.length > 0);
-  if (judged.length === 0)
-    return [contests.some(twoFinished) ? NONE_JUDGED_FOOTER : NONE_FINISHED_FOOTER];
-  const low = Math.min(...judged.map(({ rounds }) => rounds));
-  const high = Math.max(...judged.map(({ rounds }) => rounds));
-  const rounds = low === high ? plural(low, "round") : `${String(low)}–${String(high)} rounds`;
-  const count = plural(judged.length, "contest");
-  const ties = judged
-    .filter(({ pairs }) => pairs.some(({ faster }) => faster === null))
-    .map(
-      ({ name, rounds: tied }) =>
-        `${name} ended with a tie: run it with --rounds ${String(2 * tied)} to tell its contenders apart.`,
-    );
-  return [`${count} judged over ${rounds}. ${JUDGED_FOOTER}`, ...new Set(ties)];
+  if (contests.some(({ pairs }) => pairs.length > 0)) return [];
+  return [contests.some(twoFinished) ? NONE_JUDGED_FOOTER : NONE_FINISHED_FOOTER];
 }
 
 /**
@@ -442,8 +450,9 @@ function contestFooter(contests: readonly Contest[]): string[] {
  *
  * @param results - The results that finished, in run order.
  * @param contests - The contests that finished; their contenders' results show in a sub-table each.
- * @param options - Whether the stream the table goes to shows color.
- * @returns The table, ending in a newline, or the empty string when there is no result.
+ * @param options - Whether the stream the table goes to shows color; the footer's lines show dim.
+ * @returns The table, then the footer after a blank line when it has anything to say, ending in a
+ *   newline, or the empty string when there is no result.
  */
 export function formatTable(
   results: readonly Result[],
@@ -467,5 +476,6 @@ export function formatTable(
       ? [FOOTER]
       : [...contestFooter(contests), ...(plainRan ? [PLAIN_FOOTER] : [])];
   const lines = sections.map((blocks) => sectionLines(blocks, color).join("\n"));
-  return `${[...lines, footer.join("\n")].join("\n\n")}\n`;
+  const footerBlock = footer.map((line) => paint("dim", line, color)).join("\n");
+  return `${[...lines, ...(footer.length > 0 ? [footerBlock] : [])].join("\n\n")}\n`;
 }

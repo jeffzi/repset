@@ -247,7 +247,7 @@ interface Columns {
  *
  * @param columns - The columns and how a result fills them.
  * @param results - The results to row, in order.
- * @param color - Whether to show the rules and column header dim and each failure in red.
+ * @param color - Whether to show the column header dim and each failure in red.
  * @returns A rule, the column header, a rule, then each result's row.
  */
 function boxLines(
@@ -264,12 +264,10 @@ function boxLines(
       ? [alignRow(cells[index] ?? [], widths, align)]
       : failedLines(labelOf(result), result, widths[0] ?? 0, color),
   );
-  return [
-    paint("dim", rule("┬", widths), color),
-    paint("dim", alignRow(header, widths, align), color),
-    paint("dim", rule("┼", widths), color),
-    ...rows,
-  ];
+  const headerCells = header.map((cell, column) =>
+    paint("dim", padTo(cell, widths[column] ?? 0, align[column] ?? "right"), color),
+  );
+  return [rule("┬", widths), headerCells.join(COLUMN_SEPARATOR), rule("┼", widths), ...rows];
 }
 
 const PLAIN_COLUMNS: Columns = {
@@ -325,7 +323,7 @@ function twoFinished(contest: Contest): boolean {
  *
  * @param contest - The contest's entry.
  * @param contestResults - Its contenders' results.
- * @param color - Whether to show the name bold, the rounds, rules, header and `not judged` line dim
+ * @param color - Whether to show the name bold, the rounds, header and `not judged` line dim
  *   and each failure in red.
  * @returns The contest's name and rounds, a rule, the column header, a rule, a row per contender
  *   in the entry's order, then, when the contest was not judged, the `not judged` line: its rounds,
@@ -393,7 +391,7 @@ function blocksOf(results: readonly Result[], contestOf: ReadonlyMap<string, Con
  * Lays out one runtime's section.
  *
  * @param blocks - The section's blocks, in run order.
- * @param color - Whether to show the heading bold, the rules and column headers dim and each
+ * @param color - Whether to show the heading bold, the column headers dim and each
  *   failure in red.
  * @returns Its heading, then each block, a contest's or one after another block opened by a blank
  *   line.

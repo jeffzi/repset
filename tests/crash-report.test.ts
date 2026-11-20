@@ -1,6 +1,25 @@
 import { describe, expect, it } from "vitest";
 
-import { crashReport } from "../src/command.js";
+import { crashReport, runtimeLabel } from "../src/command.js";
+
+describe("runtimeLabel", () => {
+  const VERSIONS = { node: "24.3.0", bun: "1.3.2" };
+
+  it.each([
+    { runtime: "bun", expected: "bun 1.3.2" },
+    { runtime: "node", expected: "node 24.3.0" },
+  ] as const)("names $runtime with its own version", ({ runtime, expected }) => {
+    const label = runtimeLabel(runtime, VERSIONS);
+
+    expect(label).toBe(expected);
+  });
+
+  it("names the version as unknown when the runtime's version is missing", () => {
+    const label = runtimeLabel("bun", { node: "24.3.0" });
+
+    expect(label).toBe("bun unknown");
+  });
+});
 
 describe("crashReport", () => {
   const OS = "darwin 25.6.0 arm64";

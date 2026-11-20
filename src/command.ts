@@ -18,6 +18,7 @@ import {
   parseCommand,
   REPOSITORY,
 } from "./command-line.js";
+import type { Runtime } from "./measure/runtime.js";
 import { ConfigError, failedWith, resolveOptions } from "./options.js";
 import { progressOn, type Progress } from "./progress.js";
 import type { Report } from "./report.js";
@@ -443,6 +444,21 @@ interface CrashAbout {
   readonly runtime: string;
   /** Whether the stream the report goes to shows color; plain when absent. */
   readonly color?: boolean | undefined;
+}
+
+/**
+ * Names a runtime with its version, as the crash report's runtime line shows it.
+ *
+ * @param runtime - The runtime running this process.
+ * @param versions - Version numbers by component name, shaped like `process.versions`.
+ * @returns `runtime`, a space, then its version from `versions`, or `unknown` when `versions` holds
+ *   none for it.
+ */
+export function runtimeLabel(
+  runtime: Runtime,
+  versions: Readonly<Record<string, string | undefined>>,
+): string {
+  return `${runtime} ${versions[runtime] ?? "unknown"}`;
 }
 
 /** The percent-encoded longest start of `text`, cut on a whole character, that fits in `room`. */

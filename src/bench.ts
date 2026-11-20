@@ -75,8 +75,19 @@ function noParams(): NoParams {
  */
 type CaseFunction = (state?: unknown) => unknown;
 
+/**
+ * Every field of {@link Benchmark}, in the order an error message lists them. Keyed by the type's
+ * own keys, so a field added to `Benchmark` and left out here fails to compile.
+ */
+const FIELD_ORDER: Readonly<Record<keyof Benchmark<unknown>, true>> = {
+  setup: true,
+  fn: true,
+  teardown: true,
+  setupPerCall: true,
+};
+
 /** A benchmark object's fields, in the order an error message lists them. */
-const FIELDS = ["setup", "fn", "teardown", "setupPerCall"] as const;
+const FIELDS = Object.keys(FIELD_ORDER);
 
 const KNOWN_FIELDS: ReadonlySet<string> = new Set(FIELDS);
 

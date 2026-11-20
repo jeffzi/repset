@@ -213,28 +213,26 @@ not add false verdicts:
 node 26.13.1
 
 concat · 7 rounds
-──────────┬─────────┬───────────────────┬─────
-contender │  median │ ratio             │ rank
-──────────┼─────────┼───────────────────┼─────
-loop      │ 2.73 µs │ 1.00×             │    1
-join      │ 8.46 µs │ 3.10× (3.09–3.11) │    2
-
-1 contest judged over 7 rounds. A shared rank means the rounds did not tell those contenders
-apart, and a lower rank alone is not a verdict. A verdict made at a later Holm step can show an
-interval that touches 1.
+──────────┬─────────┬───────┬─────
+contender │  median │ ratio │ rank
+──────────┼─────────┼───────┼─────
+loop      │ 2.73 µs │ 1.00× │    1
+join      │ 8.46 µs │ 3.10× │    2
 ```
 
-- **Ratio** is each contender's time over the first row's, with its 95 % confidence interval in
-  parentheses. With more than two contenders the level rises to cover every pair, so each interval
-  widens.
+- **Ratio** is each contender's time over the first row's. The JSON report holds each pair's 95 %
+  confidence interval. With more than two contenders the level rises to cover every pair, so each
+  interval widens.
 - **Rank** is 1 plus the number of contenders proven faster. Two contenders share a rank when the
   rounds did not tell them apart. A pair is also tied when its gap is within 1.25 times the timer's
   resolution per call.
 - **Rounds** default to the fewest at which one round may disagree and the pair can still be judged:
-  7 for two contenders, 8 for three, 12 for eight. When a contest ends with a tie, the footer
-  suggests twice as many: `npx repset --rounds 14`. Each round starts one process per contender, and
-  each process takes as long as one plain case. Judging is exact at every count, and its cost grows
-  with the cube of the rounds: 38 ms per pair at 200 rounds, about 2 seconds at 800.
+  7 for two contenders, 8 for three, 12 for eight. When the rounds leave pairs tied, a line under
+  the contest's table names those pairs and suggests twice as many rounds: `npx repset --rounds 14`.
+  Pairs whose gap is too small for the timer get no such suggestion, since more rounds do not help.
+  Each round starts one process per contender, and each process takes as long as one plain case.
+  Judging is exact at every count, and its cost grows with the cube of the rounds: 38 ms per pair at
+  200 rounds, about 2 seconds at 800.
 
 Each process runs `setup` on its own, so `setup` must build the same state every time: random data
 needs a fixed seed. Only a contest is judged. Two plain benchmarks under one prefix, such as

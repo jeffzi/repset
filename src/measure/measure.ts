@@ -302,13 +302,19 @@ function checkedRatioToEmptyBody(bodyMeanNs: number, kind: Lifecycle, sampling: 
 }
 
 /**
- * Runs the exposed collector, outside every timed sample.
+ * Runs the exposed collector, outside every timed sample: a minor collection, then a full one.
+ *
+ * On Node, a full collection that finds the benchmark's state still in the young generation
+ * promotes it straight to the old one, often spread over many pages, and a body that walks that
+ * state then reads up to 2.3 times slower in that process. The minor collection first compacts the
+ * state, so the full one moves it as a block.
  *
  * @param gc - The collector `measure` read from the runtime.
  * @throws MeasureError in phase `child` when the collector throws, with its value as cause.
  */
 function collectGarbage(gc: NonNullable<typeof globalThis.gc>): void {
   try {
+    gc({ type: "minor" });
     gc();
   } catch (error) {
     throw new MeasureError("child", error);

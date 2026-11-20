@@ -253,7 +253,7 @@ interface Scripted {
 
 /**
  * Builds a shared-state benchmark whose first timing attempt is discarded, on a scripted clock that
- * counts measure's collections from the body's first call.
+ * counts measure's full collections from the body's first call.
  *
  * The body costs 800 times the resolution a call in warmup, so warmup settles on one call per sample; 150 times the resolution
  * in the first timing attempt, under the 200 times the resolution a kept run's median needs; and 300 times the resolution from the second
@@ -269,8 +269,8 @@ function fasterAfterWarmup(onBody: (collections: number) => void = () => undefin
   let calls = 0;
   let collections = 0;
   const clock = steppedClock(() => (collections < 2 ? 1 : 200) * STEP_MS);
-  vi.stubGlobal("gc", () => {
-    if (calls > 0) collections += 1;
+  vi.stubGlobal("gc", (options?: NodeJS.GCOptions) => {
+    if (calls > 0 && options?.type !== "minor") collections += 1;
   });
   return {
     benchmark: {

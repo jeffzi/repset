@@ -14,9 +14,9 @@ the harness around it. That choice sets its limits:
 - It times synchronous functions only. `bench()` rejects an `async` function.
 - Each case runs in its own process, so one case cannot slow the next. A run with many cases takes
   longer than an in-process tool.
-- It gives no verdict between two revisions of your code. It reports each run's numbers; a separate
-  tool compares reports. Between functions in one file, a [contest](#compare-functions-in-a-contest)
-  gives the verdict.
+- It gives no verdict between two revisions of your code. It reports each run's numbers; a
+  comparison tool such as [gymrat](https://github.com/jeffzi/gymrat) compares reports. Between
+  functions in one file, a [contest](#compare-functions-in-a-contest) gives the verdict.
 
 ## Install
 
@@ -64,7 +64,7 @@ and `fn` receives it. `setup` runs once, and every call of `fn` reuses its state
 
 Shared state fits a function that leaves its state as it found it, such as a search or a read. It
 also fits one that changes its state while its cost stays the same from call to call, such as a
-simulation step: the thousandth call must cost what the tenth did.
+simulation step. The thousandth call must cost what the tenth did.
 
 <!-- docs CODE
   src="./docs/snippets/search.bench.ts"
@@ -203,7 +203,11 @@ bench("concat", {
 One process per contender cannot order them: two processes of the same code can read several percent
 apart. So repset runs a contest in rounds. Each round starts one fresh process per contender, in an
 order drawn at random from a seed the report records. Then repset tests every pair of contenders
-over the rounds, with an exact signed-rank test and Holm's correction across the contest's pairs:
+over the rounds, with an exact
+[signed-rank test](https://en.wikipedia.org/wiki/Wilcoxon_signed-rank_test) and
+[Holm's correction](https://en.wikipedia.org/wiki/Holm%E2%80%93Bonferroni_method) across the
+contest's pairs. Holm's correction raises the bar each pair must clear, so testing many pairs does
+not add false verdicts:
 
 ```text
 node 26.13.1
@@ -220,16 +224,17 @@ apart, and a lower rank alone is not a verdict. A verdict made at a later Holm s
 interval that touches 1.
 ```
 
-- **Ratio** is each contender's time over the first row's, with its 95 % interval in parentheses.
-  With more than two contenders the level rises to cover every pair, so each interval widens.
+- **Ratio** is each contender's time over the first row's, with its 95 % confidence interval in
+  parentheses. With more than two contenders the level rises to cover every pair, so each interval
+  widens.
 - **Rank** is 1 plus the number of contenders proven faster. Two contenders share a rank when the
   rounds did not tell them apart. A pair is also tied when its gap is within 1.25 times the timer's
   resolution per call.
-- **Rounds** default to the fewest at which one round may disagree and the pair still be called: 7
-  for two contenders, 8 for three, 12 for eight. When a contest ends with a tie, the footer suggests
-  twice as many: `npx repset --rounds 14`. Each round costs one process per contender, as long as
-  one plain case takes. Judging is exact at every count, and its cost grows with the cube of the
-  rounds: 38 ms per pair at 200 rounds, about 2 seconds at 800.
+- **Rounds** default to the fewest at which one round may disagree and the pair can still be judged:
+  7 for two contenders, 8 for three, 12 for eight. When a contest ends with a tie, the footer
+  suggests twice as many: `npx repset --rounds 14`. Each round starts one process per contender, and
+  each process takes as long as one plain case. Judging is exact at every count, and its cost grows
+  with the cube of the rounds: 38 ms per pair at 200 rounds, about 2 seconds at 800.
 
 Each process runs `setup` on its own, so `setup` must build the same state every time: random data
 needs a fixed seed. Only a contest is judged. Two plain benchmarks under one prefix, such as
@@ -251,9 +256,17 @@ export default defineConfig({
 });
 ```
 
-The options are `include`, `runtimes`, `minTime`, `minSamples`, `rounds`, `timeout` and
-`nodeImport`. A flag on the command line overrides the file: `npx repset --runtime node` runs Node
-alone.
+| Option       | Flag            | What it sets                                                                                 | Default                      |
+| ------------ | --------------- | -------------------------------------------------------------------------------------------- | ---------------------------- |
+| `include`    | file arguments  | Globs for benchmark files, relative to the config file                                       | `**/*.bench.{ts,mts,js,mjs}` |
+| `runtimes`   | `--runtime`     | Runtimes to run on, in this order                                                            | `["node"]`                   |
+| `minTime`    | `--min-time`    | Milliseconds to time each case for, at least                                                 | `1000`                       |
+| `minSamples` | `--min-samples` | Samples to take of each case, at least                                                       | `64`                         |
+| `rounds`     | `--rounds`      | Rounds each contest runs                                                                     | by contest size              |
+| `timeout`    | `--timeout`     | Milliseconds one process may run before its case fails                                       | `600000`                     |
+| `nodeImport` | `--node-import` | Module Node loads first; a `./` or `../` path is relative to the config file. Bun ignores it | none                         |
+
+A flag on the command line overrides the file: `npx repset --runtime node` runs Node alone.
 
 ## Learn more
 

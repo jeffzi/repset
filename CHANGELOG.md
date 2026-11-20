@@ -9,18 +9,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Add contests: pass `bench()` a record of functions as `fn`, and repset runs them in rounds of
-  fresh processes, in a random order, then ranks them and tells which it can prove faster.
-- Add `--rounds` and the `rounds` config option to set how many rounds each contest runs.
+- Add contests: pass `bench()` a record of functions as `fn`, and repset runs them in a random order
+  over rounds of fresh processes (`--rounds` or the `rounds` option), then ranks them and tells
+  which it can prove faster.
 
 ### Changed
 
-- Fill the report fields that 0.2.0 left empty or `null`: `contests[]`, each result's `contender`,
-  and `options.rounds` and `options.seed`. A contender's processes number their `round` and
-  `orderInRound` past 1.
-- Change the benchmark registry's format to 2, so a file that loads repset 0.2 beside this version
-  fails with "load one version of repset" instead of misreading its cases.
-- Reword the error for two flags that cannot be given together, such as `--list` with `--once`.
+- Fill the report's `contests[]`, each result's `contender`, `options.rounds`, `options.seed` and
+  each process's `round` and `orderInRound`, which 0.2.0 left empty, `null` or always 1.
+- Refuse to run a benchmark file that loads repset 0.2 beside this version, instead of misreading
+  its cases.
 
 ### Fixed
 

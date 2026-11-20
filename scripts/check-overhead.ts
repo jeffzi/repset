@@ -406,16 +406,12 @@ function takeRound(scenario: Scenario, readers: Readers): Round {
   const readings: RepsetReading[] = [];
   let latest: RepsetReading | undefined;
   for (let pair = 0; pair < PAIRS; pair += 1) {
-    let baselineCounts: BaselineCounts;
-    if (latest === undefined || pair % 2 === 0) {
-      latest = readers.repset(scenario);
-      baselineCounts = latest;
-      baseline.push(readers.baseline(scenario, baselineCounts));
-    } else {
-      baselineCounts = latest;
-      baseline.push(readers.baseline(scenario, baselineCounts));
-      latest = readers.repset(scenario);
-    }
+    // Pair 0 is even, so `latest` is unset only where repset reads first anyway.
+    const repsetFirst = pair % 2 === 0;
+    if (repsetFirst || latest === undefined) latest = readers.repset(scenario);
+    const baselineCounts: BaselineCounts = latest;
+    baseline.push(readers.baseline(scenario, baselineCounts));
+    if (!repsetFirst) latest = readers.repset(scenario);
     readings.push(latest);
     perCallResolutions.push(
       latest.timerResolutionNs / Math.min(latest.callsPerSample, baselineCounts.callsPerSample),

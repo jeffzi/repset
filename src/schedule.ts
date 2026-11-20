@@ -163,7 +163,6 @@ interface Round {
  * @param start - What starting a child takes.
  * @param runtime - The runtime the children run on.
  * @param round - The round to start.
- * @param signal - The caller's stop signal.
  * @returns The cases whose child failed, or `undefined` when the stop signal ended the round.
  * @throws {@link Error} What `finished` or `dropped` throws, or what starting a child throws.
  */
@@ -171,12 +170,11 @@ async function startRound<R extends ChildRequest>(
   start: GroupStart<R>,
   runtime: FoundRuntime,
   round: Round,
-  signal: AbortSignal | undefined,
 ): Promise<SelectedCase[] | undefined> {
   const { options, request, handlers, startChild, childOptions } = start;
   const failed: SelectedCase[] = [];
   for (const [index, selected] of round.order.entries()) {
-    if (signal?.aborted === true) return undefined;
+    if (childOptions.signal?.aborted === true) return undefined;
     const outcome = await startChild(runtime, request(options, selected), childOptions);
     if (outcome.status === "stopped") return undefined;
     const { group, number } = round;
@@ -203,7 +201,6 @@ async function startRound<R extends ChildRequest>(
  * @param start - What starting a child takes.
  * @param runtime - The runtime the children run on.
  * @param group - The group's cases, in selection order.
- * @param signal - The caller's stop signal.
  * @returns Whether the stop signal ended the group: before a child, or by stopping the running one.
  * @throws {@link Error} What `finished` or `dropped` throws, or what starting a child throws.
  */
@@ -211,14 +208,13 @@ async function startGroup<R extends ChildRequest>(
   start: GroupStart<R>,
   runtime: FoundRuntime,
   group: readonly SelectedCase[],
-  signal: AbortSignal | undefined,
 ): Promise<boolean> {
   const rounds = roundsOf(group.length, start.options.rounds);
   let running = group;
   for (let number = 1; number <= rounds; number += 1) {
     const order = isContest(group) ? shuffled(running, start.random) : running;
     const round = { group, order, number, remaining: rounds - number };
-    const failed = await startRound(start, runtime, round, signal);
+    const failed = await startRound(start, runtime, round);
     if (failed === undefined) return true;
     running = running.filter((selected) => !failed.includes(selected));
   }
@@ -273,7 +269,7 @@ export async function startEach<R extends ChildRequest>(
   const start = { options, request, handlers, startChild, childOptions, random: seeded(seed ?? 0) };
   for (const runtime of selection.runtimes) {
     for (const group of groups) {
-      if (await startGroup(start, runtime, group, signal)) return { options, interrupted: true };
+      if (await startGroup(start, runtime, group)) return { options, interrupted: true };
       handlers.ended?.(runtime, group);
     }
   }

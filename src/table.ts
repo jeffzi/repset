@@ -280,11 +280,6 @@ const PLAIN_COLUMNS: Columns = {
   labelOf: ({ id }) => id,
 };
 
-/** `count` of `noun`, in the singular for one. */
-function plural(count: number, noun: string): string {
-  return `${String(count)} ${noun}${count === 1 ? "" : "s"}`;
-}
-
 /** What a contender's row shows first: its key in the contest, or its case id when it has none. */
 function contenderLabel(result: Result): string {
   return result.contender ?? result.id;
@@ -324,18 +319,14 @@ function tieLines(contest: Contest, results: readonly Result[]): string[] {
       .filter((pair) => pair.tie === tie)
       .map(({ a, b }) => `${keyOf.get(a) ?? a} and ${keyOf.get(b) ?? b}`)
       .join(", ");
-  const rounds = named("rounds");
-  const timer = named("timer");
-  const lines: string[] = [];
-  if (rounds !== "") {
-    lines.push(
-      `tied: ${rounds}. Run it with --rounds ${String(2 * contest.rounds)} to tell them apart.`,
-    );
-  }
-  if (timer !== "") {
-    lines.push(`tied: ${timer}. Their gap is too small for the timer to measure.`);
-  }
-  return lines;
+  const advice: readonly (readonly [ContestPair["tie"], string])[] = [
+    ["rounds", `Run it with --rounds ${String(2 * contest.rounds)} to tell them apart.`],
+    ["timer", "Their gap is too small for the timer to measure."],
+  ];
+  return advice.flatMap(([tie, sentence]) => {
+    const pairs = named(tie);
+    return pairs === "" ? [] : [`tied: ${pairs}. ${sentence}`];
+  });
 }
 
 /** Whether two or more of `contest`'s contenders finished, as a verdict needs. */
@@ -366,7 +357,7 @@ function contestLines(
   );
   const judged = contest.pairs.length > 0;
   const header = judged ? CONTEST_HEADER : CONTEST_HEADER.slice(0, 2);
-  const rounds = plural(contest.rounds, "round");
+  const rounds = `${String(contest.rounds)} round${contest.rounds === 1 ? "" : "s"}`;
   const reason = twoFinished(contest) ? rounds : TOO_FEW_FINISHED;
   return [
     `${paint("bold", contest.name, color)}${paint("dim", ` · ${rounds}`, color)}`,

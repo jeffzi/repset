@@ -57,19 +57,15 @@ export type ChildRequest = ListRequest | MeasureRequest | OnceRequest;
 /** Where a child's work failed: a phase of `measure`, or `load` for the benchmark file. */
 export type ChildPhase = Phase | "load";
 
-/**
- * A thrown value's message, and its stack as {@link ChildError} encodes one.
- */
+/** A thrown value's message and stack. */
 interface EncodedThrown {
-  readonly message: string;
-  readonly stack: string | null;
-}
-
-export interface ChildError {
-  readonly phase: ChildPhase;
   readonly message: string;
   /** The stack of the thrown `Error`, or `null` when the value was not one or had no string stack. */
   readonly stack: string | null;
+}
+
+export interface ChildError extends EncodedThrown {
+  readonly phase: ChildPhase;
   /** The failure of the teardown that cleaned up after this one, or `null` when none threw. */
   readonly teardownError: EncodedThrown | null;
 }
@@ -293,27 +289,6 @@ async function loadCases(file: string): Promise<readonly RegisteredCase[]> {
 }
 
 /**
- * Loads a benchmark file and picks the one case registered under `id`.
- *
- * @param file - The benchmark file's absolute path.
- * @param id - The case to pick.
- * @returns The case.
- * @throws Error naming `id` when no case or more than one is registered under it, and what
- *   {@link loadCases} throws.
- */
-async function selectCase(file: string, id: string): Promise<Case<unknown>> {
-  const matches = (await loadCases(file)).filter((registered) => registered.id === id);
-  const [match] = matches;
-  if (match === undefined) {
-    throw new Error(`no benchmark is registered under the id ${id}`);
-  }
-  if (matches.length > 1) {
-    throw new Error(`the id ${id} is registered ${matches.length} times`);
-  }
-  return match.case;
-}
-
-/**
  * Picks the case `id` of a benchmark file and runs `work` on it, encoding either failure as a result.
  *
  * @param file - The benchmark file's absolute path.
@@ -329,7 +304,15 @@ async function withSelectedCase<T>(
 ): Promise<T | Failed> {
   let selected: Case<unknown>;
   try {
-    selected = await selectCase(file, id);
+    const matches = (await loadCases(file)).filter((registered) => registered.id === id);
+    const [match] = matches;
+    if (match === undefined) {
+      throw new Error(`no benchmark is registered under the id ${id}`);
+    }
+    if (matches.length > 1) {
+      throw new Error(`the id ${id} is registered ${matches.length} times`);
+    }
+    selected = match.case;
   } catch (error) {
     return failedResult("load", error);
   }

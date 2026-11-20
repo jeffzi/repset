@@ -134,7 +134,7 @@ tasks:
       - task: _on-files
         vars:
           PATTERN: '\.md$'
-          CMD: "{{.MISE}} node --import tsx scripts/embed-code.ts"
+          CMD: "{{.MISE}} node scripts/embed-code.ts"
 
   _md:
     internal: true

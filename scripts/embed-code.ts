@@ -2,7 +2,7 @@
  * Embeds source files into markdown: each `<!-- docs CODE src="./x.ts" -->` block's content becomes
  * a `ts` fence holding the file at `src`, resolved from the markdown file's directory.
  *
- * Run as `node --import tsx scripts/embed-code.ts <markdown files>`.
+ * Run as `node scripts/embed-code.ts <markdown files>`.
  */
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";

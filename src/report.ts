@@ -49,7 +49,7 @@ export interface MeasuredProcess extends Pick<Measured, "stats" | "sampling" | "
 }
 
 /** The process of a failed case, holding `null` for what it did not reach. */
-export interface FailedProcess {
+interface FailedProcess {
   readonly round: number;
   readonly orderInRound: number;
   readonly stats: null;

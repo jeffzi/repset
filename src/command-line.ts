@@ -241,14 +241,9 @@ export function parseCommand(args: readonly string[], parser: Parser): Command {
     const value = values[key];
     return typeof value === "string" ? value : undefined;
   };
-  const given = new Set(
-    parser.options
-      .filter((option) => parser.getOptionValueSource(option.attributeName()) === "cli")
-      .map((option) => option.name()),
-  );
   let mode: Command["mode"] = "run";
-  if (given.has("list")) mode = "list";
-  if (given.has("once")) mode = "once";
+  if (values["list"] === true) mode = "list";
+  if (values["once"] === true) mode = "once";
   return {
     mode,
     input: {

@@ -75,6 +75,7 @@ interface Round {
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const CLI = join(ROOT, "dist", "cli.js");
 const BENCH_FILE = "scripts/check-overhead/overhead.bench.ts";
+const TS_LOADER = "tsx";
 const BASELINE_CHILD = join(ROOT, "scripts", "check-overhead", "baseline-child.ts");
 
 const PAIRS = 12;
@@ -144,7 +145,6 @@ function readReport(reportPath: string): Report {
   return parsed;
 }
 
-/** The message saying `failed`'s case failed, naming the scenario `name`, the phase and the error. */
 function caseFailure(name: string, failed: FailedResult): string {
   return `${name}: the case failed in phase ${failed.error.phase}: ${failed.error.message}`;
 }
@@ -314,7 +314,7 @@ function readRepset(scenario: Scenario): RepsetReading {
       "--filter",
       `^${benchName(scenario.body)}$`,
       "--node-import",
-      "tsx",
+      TS_LOADER,
       "--output",
       outPath,
     ];
@@ -365,7 +365,7 @@ function readBaseline(
   counts: BaselineCounts,
 ): number {
   const args = [
-    ...childRuntimeFlags(scenario.runtime, "tsx"),
+    ...childRuntimeFlags(scenario.runtime, TS_LOADER),
     BASELINE_CHILD,
     scenario.body,
     String(counts.callsPerSample),
@@ -445,12 +445,19 @@ function roundLabel(roundIndex: number): string {
   return roundIndex === 0 ? "first" : "confirmation";
 }
 
+function scenarioLine(name: string, text: string): string {
+  return `${name}  ${text}`;
+}
+
 function pairPlace(name: string, roundIndex: number, pairIndex: number): string {
-  return `${name}  ${roundLabel(roundIndex)} round, pair ${String(pairIndex + 1)}:`;
+  return scenarioLine(name, `${roundLabel(roundIndex)} round, pair ${String(pairIndex + 1)}:`);
 }
 
 function summaryLine(name: string, roundIndex: number, summary: RoundSummary): string {
-  return `${name}  ${roundLabel(roundIndex)} round  baseline ${summary.baselineMedian.toFixed(1)} ns  repset ${summary.repsetMedian.toFixed(1)} ns  gap ${formatSigned(summary.gap * 100)}%  mean diff ${formatSigned(summary.meanDifference)} ns  p=${summary.pValue.toFixed(4)}`;
+  return scenarioLine(
+    name,
+    `${roundLabel(roundIndex)} round  baseline ${summary.baselineMedian.toFixed(1)} ns  repset ${summary.repsetMedian.toFixed(1)} ns  gap ${formatSigned(summary.gap * 100)}%  mean diff ${formatSigned(summary.meanDifference)} ns  p=${summary.pValue.toFixed(4)}`,
+  );
 }
 
 /**
@@ -525,14 +532,14 @@ function scenarioReport(
     }
     return roundLines(name, roundIndex, summary, round.pairs);
   });
-  const outcome = `${name}  ${verdict.passed ? "pass" : "FAIL"}`;
+  const outcome = scenarioLine(name, verdict.passed ? "pass" : "FAIL");
   if (scenario.countMode === "one-call") {
     lines.push(outcome);
     return { lines, floorBreaks: [] };
   }
   const readings = rounds.flatMap((round) => round.readings);
   const shortestTiming = Math.min(...readings.map((reading) => reading.timingMs));
-  lines.push(`${name}  shortest timing ${shortestTiming.toFixed(1)} ms`);
+  lines.push(scenarioLine(name, `shortest timing ${shortestTiming.toFixed(1)} ms`));
   const breaks = floorBreaks(name, rounds);
   lines.push(...breaks, outcome);
   return { lines, floorBreaks: breaks };
@@ -563,9 +570,9 @@ export function runCheck(readers: Readers, print: (text: string) => void = conso
       rounds.push(confirmation);
       return confirmation.pairs;
     });
-    const report = scenarioReport(scenario, verdict, rounds);
-    failed ||= !verdict.passed || report.floorBreaks.length > 0;
-    print(report.lines.join("\n"));
+    const printed = scenarioReport(scenario, verdict, rounds);
+    failed ||= !verdict.passed || printed.floorBreaks.length > 0;
+    print(printed.lines.join("\n"));
   }
   return failed ? 1 : 0;
 }

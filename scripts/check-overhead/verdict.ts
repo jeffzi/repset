@@ -72,8 +72,6 @@ function signFlipPValue(differences: readonly number[], observedSum: number): nu
 }
 
 /**
- * Summarizes one round.
- *
  * @param pairs - The round's paired medians and each pair's per-call resolution.
  * @returns The round's summary. The sign of its `meanDifference` is the direction the p-value
  * tested: positive when repset reads higher, negative when lower, zero when the paired differences
@@ -117,13 +115,13 @@ function summarizeRound(pairs: Pairs): RoundSummary {
  * `confirmationRound` propagates.
  */
 export function judgeScenario(first: Pairs, confirmationRound: () => Pairs): ScenarioVerdict {
-  const firstRound = summarizeRound(first);
-  if (firstRound.pValue >= SIGNIFICANCE) {
-    return { passed: true, first: firstRound };
+  const firstSummary = summarizeRound(first);
+  if (firstSummary.pValue >= SIGNIFICANCE) {
+    return { passed: true, first: firstSummary };
   }
-  const confirmation = summarizeRound(confirmationRound());
+  const confirmationSummary = summarizeRound(confirmationRound());
   const differenceConfirmed =
-    confirmation.pValue < SIGNIFICANCE &&
-    Math.sign(confirmation.meanDifference) === Math.sign(firstRound.meanDifference);
-  return { passed: !differenceConfirmed, first: firstRound, confirmation };
+    confirmationSummary.pValue < SIGNIFICANCE &&
+    Math.sign(confirmationSummary.meanDifference) === Math.sign(firstSummary.meanDifference);
+  return { passed: !differenceConfirmed, first: firstSummary, confirmation: confirmationSummary };
 }

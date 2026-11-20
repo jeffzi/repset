@@ -140,6 +140,7 @@ interface Verdict {
   readonly p: number;
   readonly pAdjusted: number;
   readonly faster: MeasuredResult | null;
+  readonly tie: ContestPair["tie"];
 }
 
 /** The per-round `ln(median_b / median_a)` over the rounds both contenders ran. */
@@ -159,6 +160,18 @@ function resolutionPerCall(a: MeasuredResult, b: MeasuredResult): number {
   return Math.max(...perCall) / Math.min(a.median, b.median);
 }
 
+/** Why a pair has no verdict, or `null` when it is proven; see `ContestPair.tie`. */
+function tieOf(
+  pAdjusted: number,
+  estimate: number,
+  a: MeasuredResult,
+  b: MeasuredResult,
+): ContestPair["tie"] {
+  if (pAdjusted > ALPHA) return "rounds";
+  const withinTimer = Math.exp(Math.abs(estimate)) - 1 <= RESOLUTIONS * resolutionPerCall(a, b);
+  return withinTimer ? "timer" : null;
+}
+
 /**
  * Tests every pair of `measured`, adjusting the p values by Holm's over all of them.
  *
@@ -176,11 +189,9 @@ function verdictsOf(measured: readonly MeasuredResult[]): Verdict[] {
   const adjusted = holm(tested.map(({ p }) => p));
   return tested.map(({ a, b, p, estimate }, index) => {
     const pAdjusted = valueAt(adjusted, index);
-    const proven =
-      pAdjusted <= ALPHA &&
-      Math.exp(Math.abs(estimate)) - 1 > RESOLUTIONS * resolutionPerCall(a, b);
+    const tie = tieOf(pAdjusted, estimate, a, b);
     const winner = estimate > 0 ? a : b;
-    return { a, b, p, pAdjusted, faster: proven ? winner : null };
+    return { a, b, p, pAdjusted, faster: tie === null ? winner : null, tie };
   });
 }
 
@@ -207,6 +218,7 @@ function pairOf(verdict: Verdict, order: readonly MeasuredResult[], level: numbe
     p: verdict.p,
     pAdjusted: verdict.pAdjusted,
     faster: verdict.faster?.id ?? null,
+    tie: verdict.tie,
   };
 }
 

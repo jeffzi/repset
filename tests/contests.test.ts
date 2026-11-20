@@ -482,6 +482,7 @@ describe("run", () => {
               p: near(0.015625),
               pAdjusted: near(0.015625),
               faster: "concat/join",
+              tie: null,
             },
           ],
         },
@@ -602,22 +603,45 @@ describe("run", () => {
 
     it.each([
       {
-        why: "within 1.25 resolutions per call of 1, as a share of the smaller median",
+        why: "whose rounds do not reach the significance bar",
+        loop: [500, 2000, 500, 2000, 500, 2000, 500],
+        faster: null,
+        tie: "rounds",
+      },
+      {
+        why: "proven within 1.25 resolutions per call of 1, as a share of the smaller median",
         loop: repeated<Answered>(1026, 7),
         faster: null,
+        tie: "timer",
       },
-      { why: "beyond it", loop: repeated<Answered>(1030, 7), faster: "concat/join" },
-      { why: "beyond it the other way", loop: repeated<Answered>(970, 7), faster: "concat/loop" },
       {
-        why: "within the resolution per call of the pair's coarsest process",
+        why: "proven beyond it",
+        loop: repeated<Answered>(1030, 7),
+        faster: "concat/join",
+        tie: null,
+      },
+      {
+        why: "proven beyond it the other way",
+        loop: repeated<Answered>(970, 7),
+        faster: "concat/loop",
+        tie: null,
+      },
+      {
+        why: "proven within the resolution per call of the pair's coarsest process",
         loop: [1030, 1030, measuredAt(1030, 1), 1030, 1030, 1030, 1030],
         faster: null,
+        tie: "timer",
       },
-    ])("names $faster faster for a proven ratio $why", async ({ loop, faster }) => {
-      const report = await judge({ join: repeated(1000, 7), loop });
+    ])(
+      "names $faster faster and $tie as the tie for a ratio $why",
+      async ({ loop, faster, tie }) => {
+        const report = await judge({ join: repeated(1000, 7), loop });
 
-      expect(report.contests[0]?.pairs.map((pair) => pair.faster)).toStrictEqual([faster]);
-    });
+        expect(
+          report.contests[0]?.pairs.map((pair) => ({ faster: pair.faster, tie: pair.tie })),
+        ).toStrictEqual([{ faster, tie }]);
+      },
+    );
 
     describe("when the rounds cannot reach a verdict", () => {
       it("holds the medians, sorted, with no rank, ratio or pair", async () => {
@@ -663,6 +687,22 @@ describe("run", () => {
       );
     });
 
+    it("ties pairs whose p clears the bar only before the Holm adjustment", async () => {
+      const report = await judge({
+        join: repeated(1000, 7),
+        loop: [...repeated(1500, 6), 990],
+        plus: [...repeated(2250, 6), 980],
+      });
+
+      expect(
+        byContenders(report.contests[0]?.pairs ?? []).map(({ p, faster, tie }) => ({
+          p,
+          faster,
+          tie,
+        })),
+      ).toStrictEqual(repeated({ p: near(0.03125), faster: null, tie: "rounds" }, 3));
+    });
+
     describe("when a contender fails", () => {
       it("judges the rest among themselves, listing it last with no median, rank or ratio", async () => {
         const join = [100, 102, 98, 101, 99, 100];
@@ -692,6 +732,7 @@ describe("run", () => {
                 p: near(0.03125),
                 pAdjusted: near(0.03125),
                 faster: "concat/join",
+                tie: null,
               },
             ],
           },

@@ -149,6 +149,7 @@ function pair(
     p: 0.01,
     pAdjusted: 0.01,
     faster: faster === null ? null : `${name}/${faster}`,
+    tie: faster === null ? "rounds" : null,
   };
 }
 

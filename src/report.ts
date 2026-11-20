@@ -116,6 +116,15 @@ export interface ContestPair {
   readonly pAdjusted: number;
   /** The faster contender's case id, or `null` when the pair is tied. */
   readonly faster: string | null;
+  /**
+   * Why the pair has no verdict:
+   *
+   * - `"rounds"`: `pAdjusted` is above 0.05, so the rounds did not tell the contenders apart.
+   * - `"timer"`: `pAdjusted` is at most 0.05, but `ratio` is within 1.25 timer resolutions per
+   *   call of 1, a gap too small for the timer to measure.
+   * - `null`: the pair is proven, and `faster` names the faster contender.
+   */
+  readonly tie: "rounds" | "timer" | null;
 }
 
 /** One contest on one runtime: its contenders, and a verdict per pair of those that never failed. */

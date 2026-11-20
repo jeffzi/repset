@@ -7,7 +7,7 @@ import { stripVTControlCharacters, styleText } from "node:util";
 
 import type { ChildError } from "./child.js";
 import type { Contest, ContestPair, FailedResult, MeasuredResult, Result } from "./report.js";
-import { GRAPHEMES } from "./utils.js";
+import { GRAPHEMES, valueAt } from "./utils.js";
 
 /** Time units from nanoseconds up, each a thousand of the one before. */
 const TIME_UNITS = ["ns", "µs", "ms", "s"] as const;
@@ -442,36 +442,83 @@ function contestFooter(contests: readonly Contest[]): string[] {
   return [contests.some(twoFinished) ? NONE_JUDGED_FOOTER : NONE_FINISHED_FOOTER];
 }
 
+type Runtime = Result["runtime"]["name"];
+
+/** Per runtime, the case ids of the contenders scheduled in a contest there. */
+export type ScheduledContests = ReadonlyMap<Runtime, ReadonlySet<string>>;
+
+/**
+ * The entries of the contests the stop signal ended on one runtime, built from the results of their
+ * contenders that failed before it: such a contest has a result for each, but no entry.
+ *
+ * @param results - The runtime's results, in run order.
+ * @param finished - The entries of the contests that finished on the runtime.
+ * @param scheduled - The case ids of the contenders scheduled in a contest on the runtime.
+ * @returns An entry per stopped contest, not judged, listing its failed contenders, its rounds the
+ *   last round one of them reached.
+ */
+function stoppedContests(
+  results: readonly Result[],
+  finished: readonly Contest[],
+  scheduled: ReadonlySet<string>,
+): Contest[] {
+  const entered = new Set(finished.flatMap(({ contenders }) => contenders.map(({ id }) => id)));
+  const stopped = results.filter(({ id }) => scheduled.has(id) && !entered.has(id));
+  const byBenchmark = Map.groupBy(stopped, ({ file, name }) => JSON.stringify([file, name]));
+  return [...byBenchmark.values()].map((contenders) => {
+    const { name, runtime } = valueAt(contenders, 0);
+    return {
+      name,
+      params: {},
+      runtime,
+      rounds: Math.max(
+        ...contenders.flatMap(({ processes }) => processes.map(({ round }) => round)),
+      ),
+      contenders: contenders.map(({ id }) => ({ id, median: null, ratio: null, rank: null })),
+      pairs: [],
+    };
+  });
+}
+
 /**
  * Formats the table of a run's results, one section per runtime in run order.
  *
  * @param results - The results that finished, in run order.
  * @param contests - The contests that finished; their contenders' results show in a sub-table each.
  * @param options - Whether the stream the table goes to shows color; the footer's lines show dim.
+ *   `contested` holds, per runtime, the case ids of the contenders scheduled in a contest there,
+ *   none by default: a contender's result that no finished contest lists shows in its stopped
+ *   contest's sub-table when its id is among them, and as a plain case otherwise.
  * @returns The table, then the footer after a blank line when it has anything to say, ending in a
  *   newline, or the empty string when there is no result.
  */
 export function formatTable(
   results: readonly Result[],
   contests: readonly Contest[],
-  options: { readonly color: boolean },
+  options: { readonly color: boolean; readonly contested?: ScheduledContests },
 ): string {
   if (results.length === 0) return "";
-  const { color } = options;
+  const { color, contested } = options;
   const byRuntime = Map.groupBy(results, (result) => result.runtime.name);
-  const sections = [...byRuntime].map(([runtime, section]) => {
-    const contestOf = new Map(
-      contests
-        .filter((contest) => contest.runtime.name === runtime)
-        .flatMap((contest) => contest.contenders.map(({ id }) => [id, contest] as const)),
+  const ran = [...byRuntime].map(([runtime, section]) => {
+    const finished = contests.filter((contest) => contest.runtime.name === runtime);
+    const stopped = stoppedContests(
+      section,
+      finished,
+      contested?.get(runtime) ?? new Set<string>(),
     );
-    return blocksOf(section, contestOf);
+    const contestOf = new Map(
+      [...finished, ...stopped].flatMap((contest) =>
+        contest.contenders.map(({ id }) => [id, contest] as const),
+      ),
+    );
+    return { blocks: blocksOf(section, contestOf), stopped };
   });
+  const sections = ran.map(({ blocks }) => blocks);
+  const shown = [...contests, ...ran.flatMap(({ stopped }) => stopped)];
   const plainRan = sections.some((blocks) => blocks.some(({ contest }) => contest === null));
   const footer =
-    contests.length === 0
-      ? [FOOTER]
-      : [...contestFooter(contests), ...(plainRan ? [PLAIN_FOOTER] : [])];
+    shown.length === 0 ? [FOOTER] : [...contestFooter(shown), ...(plainRan ? [PLAIN_FOOTER] : [])];
   const lines = sections.map((blocks) => sectionLines(blocks, color).join("\n"));
   const footerBlock = footer.map((line) => paint("dim", line, color)).join("\n");
   const blocks = footer.length > 0 ? [...lines, footerBlock] : lines;

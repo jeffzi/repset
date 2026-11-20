@@ -325,6 +325,7 @@ async function measure(command: Command, context: Context): Promise<number> {
       ? undefined
       : { name: output, path: resolve(context.cwd, output) };
   const writes = file === undefined ? undefined : reportWrites(file.path, file.name);
+  const contested = new Map<Runtime, ReadonlySet<string>>();
   const report = await run({
     ...command.input,
     ...childInput(context),
@@ -333,11 +334,16 @@ async function measure(command: Command, context: Context): Promise<number> {
       progress.dropped(count);
     },
     ...writes,
+    onSelected: (head, contests) => {
+      const ids = new Set(contests.flat().map(({ id }) => id));
+      for (const runtime of head.options.runtimes) contested.set(runtime, ids);
+      writes?.onSelected?.(head, contests);
+    },
   });
   progress.stop();
   const tableTo = toStdout ? "stderr" : "stdout";
   context[tableTo].write(
-    formatTable(report.results, report.contests, { color: context.colors[tableTo] }),
+    formatTable(report.results, report.contests, { color: context.colors[tableTo], contested }),
   );
   if (toStdout) stdout.write(reportText(report));
   let written = true;

@@ -46,10 +46,13 @@ export interface RunInput extends OnceInput {
    */
   readonly onDropped?: ((count: number) => void) | undefined;
   /**
-   * Receives the report with no result once listing has passed, before the first measuring child
-   * starts; what it throws ends the run with no measuring child started.
+   * Receives the report with no result once listing has passed, with the cases of each contest
+   * that formed, scheduled the same on every runtime, before the first measuring child starts; what
+   * it throws ends the run with no measuring child started.
    */
-  readonly onSelected?: ((report: Report) => void) | undefined;
+  readonly onSelected?:
+    | ((report: Report, contests: readonly (readonly SelectedCase[])[]) => void)
+    | undefined;
   /** Lists the host's logical CPUs; `os.cpus` by default. */
   readonly cpus?: (() => readonly { readonly model: string }[]) | undefined;
   /** The calls per sample every measuring child times its case at; absent means each calibrates one. */
@@ -486,8 +489,8 @@ export async function run(input: RunInput): Promise<Report> {
     }),
     {
       passed: (resolved, total, formed) => {
-        contested = formed;
-        input.onSelected?.(reportOf(resolved, false));
+        contested = formed.length > 0;
+        input.onSelected?.(reportOf(resolved, false), formed);
         input.onPlanned?.(total);
       },
       dropped: input.onDropped,

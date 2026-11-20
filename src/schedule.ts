@@ -48,9 +48,14 @@ interface Step<M extends ChildRequest["mode"]> {
 export interface StartHandlers<M extends ChildRequest["mode"]> {
   /**
    * Called once the selection passed, before the first child of a case starts, with the number of
-   * children the cases will start, rounds included, and whether a contest formed.
+   * children the cases will start, rounds included, and the cases of each contest that formed, the
+   * same on every runtime.
    */
-  readonly passed: (options: ResolvedOptions, total: number, contested: boolean) => void;
+  readonly passed: (
+    options: ResolvedOptions,
+    total: number,
+    contests: readonly (readonly SelectedCase[])[],
+  ) => void;
   /** Receives each child's outcome before the next child starts. */
   readonly finished: (step: Step<M>) => void;
   /** Receives the number of planned children a failed case will no longer start, when there are some. */
@@ -263,8 +268,8 @@ export async function startEach<R extends ChildRequest>(
     (total, group) => total + group.length * roundsOf(group.length, options.rounds),
     0,
   );
-  const contested = groups.some(isContest);
-  handlers.passed(options, selection.runtimes.length * childrenPerRuntime, contested);
+  const contests = groups.filter(isContest);
+  handlers.passed(options, selection.runtimes.length * childrenPerRuntime, contests);
   const childOptions = startOptions(options, signal);
   const start = { options, request, handlers, startChild, childOptions, random: seeded(seed ?? 0) };
   for (const runtime of selection.runtimes) {

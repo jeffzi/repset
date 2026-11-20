@@ -631,6 +631,43 @@ describe("main", () => {
 
       expect({ code: ended.code, stdout: ended.stdout }).toStrictEqual({ code: 130, stdout: "" });
     });
+
+    it("prints a contender that failed before SIGINT in its contest's block, with no plain-case footer", async () => {
+      const plainRun = linesOf((await command(workspace(), ["sort.bench.ts"])).stdout).at(-1);
+      const signals = new EventEmitter();
+      let loopFailed = false;
+      const loopFailsThenStops = listingStarter(
+        [contender("join"), contender("loop")],
+        (request) => {
+          if (request.id === "concat/loop") {
+            loopFailed = true;
+            return failedOutcome("fn", "kiwi");
+          }
+          if (!loopFailed) return measuredOutcome(4656);
+          signals.emit("SIGINT");
+          return stopped;
+        },
+      );
+
+      const ended = await command(workspace(), ["sort.bench.ts"], {
+        signals,
+        startChild: loopFailsThenStops,
+      });
+
+      const lines = linesOf(ended.stdout);
+      expect(plainRun).toMatch(/\S/u);
+      expect({
+        code: ended.code,
+        heading: lines.some((line) => /^concat(?:\s|$)/u.test(line)),
+        loop: lines.filter((line) => line.includes("kiwi")),
+        plainFooter: lines.includes(plainRun ?? ""),
+      }).toStrictEqual({
+        code: 130,
+        heading: true,
+        loop: [expect.stringMatching(/^loop +│ \S.* kiwi$/u)],
+        plainFooter: false,
+      });
+    });
   });
 
   /** Runs three files with --output while `stream` fails with `code` as `parse/fast` starts. */

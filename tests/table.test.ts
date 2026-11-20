@@ -299,6 +299,30 @@ function tableLines(
   return formatTable(results, contests, { color }).split("\n");
 }
 
+/** The contender ids scheduled in a contest on `runtime`, as the table receives them. */
+function contestedOn(
+  runtime: Runtime,
+  ids: readonly string[],
+): readonly [Runtime, ReadonlySet<string>] {
+  return [runtime, new Set(ids)];
+}
+
+/** The lines of the table of `results` with no finished contest, `contested` scheduled in a contest. */
+function contestedTableLines(
+  results: readonly Result[],
+  contested: readonly (readonly [Runtime, ReadonlySet<string>])[],
+): string[] {
+  return formatTable(results, [], { color: false, contested: new Map(contested) }).split("\n");
+}
+
+/** The sentence the footer ends with when a plain case ran beside a contest not judged. */
+function plainCaseLine(): string | undefined {
+  const { results, entry } = notJudgedContest(3);
+  return footerLines(
+    tableLines([measured("apple", "node", flatStats(812)), ...results], [entry]),
+  ).at(-1);
+}
+
 /** The footer of `lines`: its lines after the last blank line before the closing one. */
 function footerLines(lines: readonly string[]): string[] {
   return lines.slice(lines.lastIndexOf("", -2) + 1, -1);
@@ -592,6 +616,70 @@ describe("formatTable", () => {
       const row = rowTexts(results, "concat/join");
 
       expect(row).toStrictEqual(["concat/join", "812 ns", "812 ns", "812 ns", "812 ns", "64"]);
+    });
+
+    describe("when the same benchmark was a contest on another runtime", () => {
+      it("rows it as a plain case under its case id", () => {
+        const results = [contenderResult("concat", "join", 812)];
+
+        const lines = contestedTableLines(results, [
+          contestedOn("node", ["parse/regex", "parse/split"]),
+          contestedOn("bun", ["concat/join", "concat/loop"]),
+        ]);
+
+        expect(cellsOf(lines[rowIndex(lines, "concat/join")] ?? "")).toStrictEqual([
+          "concat/join",
+          "812 ns",
+          "812 ns",
+          "812 ns",
+          "812 ns",
+          "64",
+        ]);
+      });
+    });
+  });
+
+  describe("when the stop signal ended a contest after a contender failed", () => {
+    const stoppedContest = [contestedOn("node", ["concat/join", "concat/loop"])];
+
+    it("rows the failed contender by its key in the contest's block", () => {
+      const results = [failedContender("concat/loop", "fn", "kiwi")];
+
+      const lines = contestedTableLines(results, stoppedContest);
+
+      const loop = rowIndex(lines, "loop");
+      const heading = lines.findIndex((line) => /^concat(?:\s|$)/u.test(line));
+      expect(rowIndex(lines, "concat/loop")).toBe(-1);
+      expect(lines[loop]).toMatch(/^loop {6}│ \S.* kiwi$/u);
+      expect(heading).not.toBe(-1);
+      expect(heading).toBeLessThan(loop);
+    });
+
+    it("does not end with the footer of a run of plain cases alone", () => {
+      const plainRun = footer([measured("apple", "node", flatStats(812))], []);
+      const results = [failedContender("concat/loop", "fn", "kiwi")];
+
+      const footerOf = footerLines(contestedTableLines(results, stoppedContest));
+
+      expect(plainRun).toMatch(/\S/u);
+      expect(footerOf).not.toContain(plainRun);
+    });
+
+    it.each([
+      { ran: "only the contest's contender ran", plain: [], says: false },
+      {
+        ran: "a plain case ran too",
+        plain: [measured("apple", "node", flatStats(812))],
+        says: true,
+      },
+    ])("adds the plain-case line to the footer only when $ran", ({ plain, says }) => {
+      const sentence = plainCaseLine();
+      const results = [...plain, failedContender("concat/loop", "fn", "kiwi")];
+
+      const footerOf = footerLines(contestedTableLines(results, stoppedContest));
+
+      expect(sentence).toMatch(/\S/u);
+      expect(footerOf.includes(sentence ?? "")).toBe(says);
     });
   });
 

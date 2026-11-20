@@ -79,8 +79,8 @@ describe("crashReport", () => {
 
     it("cuts the message on a whole character", () => {
       const text = crashReport(new Error(message), PLATFORM);
-      const OPENING = "```text\n";
 
+      const OPENING = "```text\n";
       // `issueBody` decodes strictly, so a cut through a code point throws here.
       const body = issueBody(text) ?? "";
       const kept = body.slice(body.indexOf(OPENING) + OPENING.length, body.lastIndexOf("\n```"));

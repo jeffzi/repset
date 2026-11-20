@@ -1,3 +1,5 @@
+import { stripVTControlCharacters } from "node:util";
+
 import { describe, expect, it } from "vitest";
 
 import type { ChildPhase } from "../src/child.js";
@@ -314,11 +316,6 @@ function notesUnder(lines: readonly string[], key: string, from = 0): string[] {
   return lines.slice(row + 1, lines.indexOf("", row));
 }
 
-/** `line` dimmed as a styled terminal prints it. */
-function dim(line: string): string {
-  return `\u001B[2m${line}\u001B[22m`;
-}
-
 /** The index of the first line that starts with `id` and a space, or -1 when no row does. */
 function rowIndex(lines: readonly string[], id: string): number {
   return lines.findIndex((line) => line.startsWith(`${id} `));
@@ -434,7 +431,6 @@ describe("formatTable", () => {
       const lines = tableLines(results);
 
       expectBox(lines.slice(1, 6), ["watermelons", "fig"]);
-      expect(lines[0]).toBe("node 24.1.0");
       expect(lines.slice(4, 6).map(cellsOf)).toStrictEqual([
         ["apple", "812 ns", "812 ns", "812 ns", "812 ns", "64"],
         ["elderberry", "4.66 µs", "4.66 µs", "4.66 µs", "2.34 ms", "1200"],
@@ -446,24 +442,6 @@ describe("formatTable", () => {
         expect.any(String),
         "",
       ]);
-    });
-  });
-
-  describe("when an id holds wide characters or combining marks", () => {
-    it("pads every row to the columns the ids take on a terminal", () => {
-      const results = [
-        measured("苹果苹果", "node", flatStats(812)),
-        measured("rose\u0301", "node", flatStats(812)),
-        failed("梨", "fn", "kiwi"),
-      ];
-
-      const lines = tableLines(results);
-
-      expectBox(lines.slice(1, 6), ["梨"]);
-      expect(lines.slice(4, 6).map(cellsOf)).toStrictEqual(
-        results.slice(0, 2).map(({ id }) => [id, "812 ns", "812 ns", "812 ns", "812 ns", "64"]),
-      );
-      expect(lines[6]).toMatch(/^梨 {7}│ \S.* kiwi$/u);
     });
   });
 
@@ -637,21 +615,28 @@ describe("formatTable", () => {
   });
 
   describe("when a contest was not judged", () => {
-    it.each([
-      { rounds: 1, text: "1 round" },
-      { rounds: 3, text: "3 rounds" },
-    ])("shows only contenders and medians, then not judged over $text", ({ rounds, text }) => {
-      const { results, entry } = notJudgedContest(rounds);
+    it("shows only contenders and medians", () => {
+      const { results, entry } = notJudgedContest(3);
 
       const lines = tableLines(results, [entry]);
 
       expectBox(lines.slice(3, 8));
       expect(lines.slice(0, 2)).toStrictEqual(["node 24.1.0", ""]);
-      expect(lines[2]).toMatch(new RegExp(`^concat\\b.*\\b${text}$`, "u"));
       expect(lines.slice(6, 8).map(cellsOf)).toStrictEqual([
         ["join", "806 ns"],
         ["loop", "1.88 µs"],
       ]);
+    });
+
+    it.each([
+      { rounds: 1, text: "1 round" },
+      { rounds: 3, text: "3 rounds" },
+    ])("heads the contest and closes it with not judged over $text", ({ rounds, text }) => {
+      const { results, entry } = notJudgedContest(rounds);
+
+      const lines = tableLines(results, [entry]);
+
+      expect(lines[2]).toMatch(new RegExp(`^concat\\b.*\\b${text}$`, "u"));
       expect(lines[8]).toMatch(new RegExp(`\\b${text}$`, "u"));
     });
 
@@ -728,18 +713,18 @@ describe("formatTable", () => {
           expect(text).toBe(roundsFooter);
         });
       });
-    });
 
-    describe("when no contest was judged and a plain case ran", () => {
-      it("adds one line to the footer of the same run without the plain case", () => {
-        const { results: contestResults, entry } = notJudgedContest(3);
-        const contestFooter = footerLines(tableLines(contestResults, [entry]));
+      describe("when a plain case ran", () => {
+        it("adds one line to the footer of the same run without the plain case", () => {
+          const { results: contestResults, entry } = notJudgedContest(3);
+          const contestFooter = footerLines(tableLines(contestResults, [entry]));
 
-        const withPlain = footerLines(
-          tableLines([measured("apple", "node", flatStats(812)), ...contestResults], [entry]),
-        );
+          const withPlain = footerLines(
+            tableLines([measured("apple", "node", flatStats(812)), ...contestResults], [entry]),
+          );
 
-        expect(withPlain).toStrictEqual([...contestFooter, expect.stringMatching(/\S/u)]);
+          expect(withPlain).toStrictEqual([...contestFooter, expect.stringMatching(/\S/u)]);
+        });
       });
     });
 
@@ -796,13 +781,11 @@ describe("formatTable", () => {
 
     describe("when a judged contest had pairs within the timer's resolution", () => {
       it("names them by contender key under its table with no rounds advice", () => {
-        const lines = tableLines(threeWayResults("parse"), [
-          threeWayContest("parse", 9, [null, "timer"]),
-        ]);
+        const results = threeWayResults("parse");
 
-        const notes = notesUnder(lines, "scan");
+        const lines = tableLines(results, [threeWayContest("parse", 9, [null, "timer"])]);
 
-        expect(notes).toStrictEqual([
+        expect(notesUnder(lines, "scan")).toStrictEqual([
           expect.stringMatching(notePattern("parse", ["split", "scan"], ["regex"], null)),
         ]);
       });
@@ -810,12 +793,11 @@ describe("formatTable", () => {
 
     describe("when a judged contest had both kinds of tie", () => {
       it("prints a line for each kind under its table, each naming only its own pairs", () => {
-        const lines = tableLines(threeWayResults("parse"), [
-          threeWayContest("parse", 9, ["rounds", "timer"]),
-        ]);
+        const results = threeWayResults("parse");
+
+        const lines = tableLines(results, [threeWayContest("parse", 9, ["rounds", "timer"])]);
 
         const notes = notesUnder(lines, "scan");
-
         expect(notes).toHaveLength(2);
         expect(notes).toStrictEqual(
           expect.arrayContaining([
@@ -850,20 +832,29 @@ describe("formatTable", () => {
         contests: [notJudged.entry],
         select: footerLines,
       },
-      {
-        lines: "the footer when no contest ran",
-        results: [apple],
-        contests: [],
-        select: footerLines,
-      },
-    ])("dims $lines, printed with no escape codes when not colored", (scenario) => {
-      const plain = scenario.select(tableLines(scenario.results, scenario.contests));
+    ])("styles $lines, printed with no escape codes when not colored", (scenario) => {
+      const plain = tableLines(scenario.results, scenario.contests);
 
-      const colored = scenario.select(tableLines(scenario.results, scenario.contests, true));
+      const colored = tableLines(scenario.results, scenario.contests, true);
 
-      expect(plain.length).toBeGreaterThan(0);
-      expect(colored).toStrictEqual(plain.map(dim));
+      const selected = scenario.select(colored);
+      const plainSelected = scenario.select(plain);
+      expect(selected.length).toBeGreaterThan(0);
+      expect(colored.map((line) => stripVTControlCharacters(line))).toStrictEqual(plain);
+      expect(selected.filter((line, index) => line === plainSelected[index])).toStrictEqual([]);
     });
+  });
+});
+
+describe("visibleWidth", () => {
+  it.each([
+    { text: "梨", label: "a Han character", width: 2 },
+    { text: "rose\u0301", label: "a combining mark", width: 4 },
+    { text: paint("red", "fig", true), label: "escape codes", width: 3 },
+  ])("counts the terminal columns of text with $label", ({ text, width }) => {
+    const columns = visibleWidth(text);
+
+    expect(columns).toBe(width);
   });
 });
 

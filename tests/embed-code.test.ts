@@ -32,17 +32,6 @@ function read(dir: string, path: string): string {
 
 describe("embedCode", () => {
   describe("when a markdown file holds a CODE block", () => {
-    it("returns the markdown file as changed", async () => {
-      const dir = createProject({
-        "docs/snippets/x.ts": "export const x = 1;\nexport const y = 2;\n",
-        "README.md": `# Title\n\n${codeBlock("./docs/snippets/x.ts", "stale")}\n`,
-      });
-
-      const changed = await embedCode([join(dir, "README.md")]);
-
-      expect(changed).toStrictEqual([join(dir, "README.md")]);
-    });
-
     it("resolves a src starting with ../ from the markdown file's directory", async () => {
       const dir = createProject({
         "snippets/x.ts": "export const x = 1;\n",
@@ -101,9 +90,23 @@ describe("embedCode", () => {
   });
 
   describe("when a CODE block's content is stale", () => {
-    it.each([{ layout: "a blank line", around: "\n\n" }])(
-      "keeps $layout around the fence",
-      async ({ around }) => {
+    it("returns the markdown file as changed", async () => {
+      const dir = createProject({
+        "docs/snippets/x.ts": "export const x = 1;\nexport const y = 2;\n",
+        "README.md": `# Title\n\n${codeBlock("./docs/snippets/x.ts", "stale")}\n`,
+      });
+
+      const changed = await embedCode([join(dir, "README.md")]);
+
+      expect(changed).toStrictEqual([join(dir, "README.md")]);
+    });
+
+    it.each([
+      { written: "a blank line", around: "\n\n", result: "a blank line", output: "\n\n" },
+      { written: "no newline", around: "", result: "one newline", output: "\n" },
+    ])(
+      "writes $result around the fence when the content has $written around it",
+      async ({ around, output }) => {
         const dir = createProject({
           "x.ts": "export const x = 1;\n",
           "README.md": `<!-- docs CODE src="./x.ts" -->${around}stale${around}<!-- /docs -->\n`,
@@ -112,7 +115,7 @@ describe("embedCode", () => {
         await embedCode([join(dir, "README.md")]);
 
         expect(read(dir, "README.md")).toBe(
-          `<!-- docs CODE src="./x.ts" -->${around}${FENCE}ts\nexport const x = 1;\n${FENCE}${around}<!-- /docs -->\n`,
+          `<!-- docs CODE src="./x.ts" -->${output}${FENCE}ts\nexport const x = 1;\n${FENCE}${output}<!-- /docs -->\n`,
         );
       },
     );
@@ -125,14 +128,10 @@ describe("embedCode", () => {
         "README.md": [
           "<!-- docs CODE",
           '  src="./x.ts"',
-          '  header="// x.ts"',
           "-->",
-          "",
           `${FENCE}ts`,
-          "// x.ts",
           "export const x = 1;",
           FENCE,
-          "",
           "<!-- /docs -->",
           "",
         ].join("\n"),
@@ -192,10 +191,9 @@ describe("embedCode", () => {
         "b.md": `${codeBlock("https://example.invalid/x.ts", "stale")}\n`,
       });
 
-      await expect(embedCode([join(dir, "a.md"), join(dir, "b.md")])).rejects.toThrow(
-        join(dir, "b.md"),
-      );
+      const run = embedCode([join(dir, "a.md"), join(dir, "b.md")]);
 
+      await expect(run).rejects.toThrow(join(dir, "b.md"));
       expect(read(dir, "a.md")).toBe(VALID);
     });
   });

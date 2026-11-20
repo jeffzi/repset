@@ -122,21 +122,21 @@ describe("isRecord", () => {
 
 describe("thrownMessage", () => {
   describe("when reading or converting the value throws", () => {
-    it.each([
-      { thrown: "a value with no string form", value: Object.create(null) as unknown },
+    it.each<{ thrown: string; value: unknown }>([
+      { thrown: "a value with no string form", value: Object.create(null) },
       {
         thrown: "an Error whose message getter throws",
         value: Object.defineProperty(new Error("plum"), "message", {
           get: () => {
             throw new Error("kiwi");
           },
-        }) as unknown,
+        }),
       },
       {
         thrown: "an Error whose message has no string form",
         value: Object.defineProperty(new Error("cherry"), "message", {
-          value: Object.create(null) as unknown,
-        }) as unknown,
+          value: Object.create(null),
+        }),
       },
     ])("returns a string instead of throwing for $thrown", ({ value }) => {
       const message = (): string => thrownMessage(value);

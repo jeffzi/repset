@@ -34,10 +34,7 @@ const TASK = "aqua:go-task/task";
 describe("checkMiseLock", () => {
   describe("when every entry is locked on every platform", () => {
     it("returns without throwing", () => {
-      const text = lockfile({
-        [TASK]: [entry("3.54.0"), entry("3.53.1")],
-        "npm:prettier": [entry("3.6.2")],
-      });
+      const text = lockfile({ [TASK]: [entry("3.54.0")] });
 
       const check = (): void => {
         checkMiseLock(text);

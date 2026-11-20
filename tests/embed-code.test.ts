@@ -121,6 +121,21 @@ describe("embedCode", () => {
     );
   });
 
+  describe("when a CODE block is empty", () => {
+    it("writes the fence with one newline before and after it", async () => {
+      const dir = createProject({
+        "x.ts": "export const x = 1;\n",
+        "README.md": `<!-- docs CODE src="./x.ts" -->\n\n<!-- /docs -->\n`,
+      });
+
+      await embedCode([join(dir, "README.md")]);
+
+      expect(read(dir, "README.md")).toBe(
+        `<!-- docs CODE src="./x.ts" -->\n${FENCE}ts\nexport const x = 1;\n${FENCE}\n<!-- /docs -->\n`,
+      );
+    });
+  });
+
   describe("when a CODE block with attributes on their own lines is up to date", () => {
     it("returns no changed files", async () => {
       const dir = createProject({

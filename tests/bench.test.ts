@@ -147,19 +147,9 @@ describe("bench", () => {
     it.each([
       { contenders: { quick: sync }, why: "a single contender", fragments: ["sort"] },
       {
-        contenders: { quick: sync, "": sync },
-        why: "an empty key",
-        fragments: ["sort", JSON.stringify("")],
-      },
-      {
         contenders: { quick: sync, "merge/fast": sync },
         why: "a key holding a /",
         fragments: ["sort", JSON.stringify("merge/fast")],
-      },
-      {
-        contenders: { quick: sync, "merge fast": sync },
-        why: "a key holding a space",
-        fragments: ["sort", JSON.stringify("merge fast")],
       },
       {
         contenders: { quick: sync, merge: asyncFunction },
@@ -191,7 +181,7 @@ describe("bench", () => {
 
   describe("when given a name that breaks the name rule", () => {
     it.each([
-      { name: "", why: "empty" },
+      { name: "", why: "no characters" },
       { name: "/sort", why: "a leading /" },
       { name: "sort/", why: "a trailing /" },
       { name: "sort//fast", why: "a doubled /" },

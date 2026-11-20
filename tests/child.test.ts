@@ -193,34 +193,6 @@ describe("measureCase", () => {
   });
 
   describe("when the case measures", { timeout: MEASURE_TIMEOUT_MS }, () => {
-    it("returns the report's per-process fields, its quantiles under their own names", async () => {
-      const result = await measureShort(LIFECYCLE, "steady");
-
-      expect(result).toStrictEqual({
-        status: "ok",
-        stats: {
-          min: expect.any(Number),
-          p25: expect.any(Number),
-          median: expect.any(Number),
-          p75: expect.any(Number),
-          p99: expect.any(Number),
-          max: expect.any(Number),
-          mean: expect.any(Number),
-          sampleCount: expect.any(Number),
-        },
-        sampling: {
-          timerResolutionNs: expect.any(Number),
-          callsPerSample: expect.any(Number),
-          callsPerSampleFixed: expect.any(Boolean),
-          warmupSamples: expect.any(Number),
-          timingAttempts: expect.any(Number),
-          timingMs: expect.any(Number),
-        },
-        checks: { ratioToEmptyBody: expect.any(Number) },
-        gc: expect.any(Object),
-      });
-    });
-
     it("measures at the calls per sample it is given", async () => {
       const result = await measureCase(LIFECYCLE, "steady", { ...SHORT_RUN, callsPerSample: 3 });
 

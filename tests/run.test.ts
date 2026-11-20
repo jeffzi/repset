@@ -357,6 +357,28 @@ describe("run", () => {
         ran: report.results.map((result) => [result.runtime.name, result.id]),
       }).toStrictEqual({ interrupted: true, ran: [["node", "zeta.bench.ts"]] });
     });
+
+    it("starts no further child once a child that finished fired it", async () => {
+      const controller = new AbortController();
+      const measuring: string[] = [];
+      const stopAfterZeta = starter((request) => {
+        if (request.mode !== "measure") return measuredOutcome(4656);
+        measuring.push(request.id);
+        if (request.id === "zeta.bench.ts") controller.abort();
+        return measuredOutcome(4656);
+      });
+
+      const report = await runHere({
+        files: ["zeta.bench.ts", "a.bench.ts"],
+        signal: controller.signal,
+        startChild: stopAfterZeta,
+      });
+
+      expect({ interrupted: report.interrupted, measuring }).toStrictEqual({
+        interrupted: true,
+        measuring: ["zeta.bench.ts"],
+      });
+    });
   });
 
   describe("when the config file sets a relative nodeImport", () => {

@@ -308,8 +308,9 @@ function resolvedNodeImport(
  *
  * @param options - The caller's options, the config to read and the working directory.
  * @returns The checked and merged options.
- * @throws {@link ConfigError} When the config file is missing, ambiguous, fails to import, has
- *   no plain-object default export or sets an unknown key, or when any value is invalid.
+ * @throws {@link ConfigError} When the config file is missing, ambiguous, cannot be read though its
+ *   path exists, fails to import, has no plain-object default export, has a default export whose
+ *   values cannot be read, or sets an unknown key, or when any value is invalid.
  */
 export async function resolveOptions(options: OptionsInput): Promise<ResolvedOptions> {
   const file = configPath(options);

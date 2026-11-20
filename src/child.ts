@@ -41,7 +41,7 @@ export interface MeasureRequest {
   readonly minTime: number;
   readonly minSamples: number;
   /** The calls per sample to measure at; absent means `measure` calibrates one. */
-  readonly callsPerSample?: number;
+  readonly callsPerSample?: number | undefined;
 }
 
 /** Runs one case of a benchmark file once, with no timing. */
@@ -58,10 +58,9 @@ export type ChildRequest = ListRequest | MeasureRequest | OnceRequest;
 export type ChildPhase = Phase | "load";
 
 /**
- * A cleanup teardown's failure: its value's message, and its stack as {@link ChildError} encodes
- * one.
+ * A thrown value's message, and its stack as {@link ChildError} encodes one.
  */
-interface TeardownFailure {
+interface EncodedThrown {
   readonly message: string;
   readonly stack: string | null;
 }
@@ -72,7 +71,7 @@ export interface ChildError {
   /** The stack of the thrown `Error`, or `null` when the value was not one or had no string stack. */
   readonly stack: string | null;
   /** The failure of the teardown that cleaned up after this one, or `null` when none threw. */
-  readonly teardownError: TeardownFailure | null;
+  readonly teardownError: EncodedThrown | null;
 }
 
 export interface Failed {
@@ -185,7 +184,7 @@ export function parseRequest(argument: string): ChildRequest {
 }
 
 /** The message and stack of `thrown`, the stack taken from a `MeasureError`'s cause. */
-function encodeThrown(thrown: unknown): TeardownFailure {
+function encodeThrown(thrown: unknown): EncodedThrown {
   const cause: unknown = isInstance(thrown, MeasureError) ? thrown.cause : thrown;
   return { message: thrownMessage(thrown), stack: errorStack(cause) };
 }

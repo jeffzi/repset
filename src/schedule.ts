@@ -16,7 +16,7 @@ import {
   selectCases,
   startOptions,
 } from "./select.js";
-import { valueAt } from "./utils.js";
+import { pairsOf, valueAt } from "./utils.js";
 
 export interface OnceInput extends OptionsInput, ChildFunctionOverrides {
   /** Paths or globs of benchmark files, relative to `cwd`; when there are some, they replace `include`. */
@@ -122,9 +122,9 @@ function groupsOf(cases: readonly SelectedCase[]): SelectedCase[][] {
 /** The significance level of a contest's family of pairs. */
 export const ALPHA = 0.05;
 
-/** How many distinct pairs `size` cases form. */
-export function pairsOf(size: number): number {
-  return (size * (size - 1)) / 2;
+/** Whether `group` holds two or more cases, which makes it a contest. */
+export function isContest(group: readonly SelectedCase[]): boolean {
+  return group.length > 1;
 }
 
 /**
@@ -140,9 +140,10 @@ function roundsOf(size: number, rounds: number | undefined): number {
   if (size < 2) return 1;
   if (rounds !== undefined) return rounds;
   const pairs = pairsOf(size);
-  let count = 1;
-  while (4 / 2 ** count > ALPHA / pairs) count += 1;
-  return count;
+  for (let count = 1; ; count += 1) {
+    const pAtOneDissent = 4 / 2 ** count;
+    if (pAtOneDissent <= ALPHA / pairs) return count;
+  }
 }
 
 /** One round of a group: its cases in the order they start. */
@@ -215,7 +216,7 @@ async function startGroup<R extends ChildRequest>(
   const rounds = roundsOf(group.length, start.options.rounds);
   let running = group;
   for (let number = 1; number <= rounds; number += 1) {
-    const order = group.length > 1 ? shuffled(running, start.random) : running;
+    const order = isContest(group) ? shuffled(running, start.random) : running;
     const round = { group, order, number, remaining: rounds - number };
     const failed = await startRound(start, runtime, round, signal);
     if (failed === undefined) return true;
@@ -266,7 +267,7 @@ export async function startEach<R extends ChildRequest>(
     (total, group) => total + group.length * roundsOf(group.length, options.rounds),
     0,
   );
-  const contested = groups.some((group) => group.length > 1);
+  const contested = groups.some(isContest);
   handlers.passed(options, selection.runtimes.length * childrenPerRuntime, contested);
   const childOptions = startOptions(options, signal);
   const start = { options, request, handlers, startChild, childOptions, random: seeded(seed ?? 0) };

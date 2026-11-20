@@ -7,6 +7,7 @@ import { stripVTControlCharacters, styleText } from "node:util";
 
 import type { ChildError } from "./child.js";
 import type { Contest, ContestPair, FailedResult, MeasuredResult, Result } from "./report.js";
+import { GRAPHEMES } from "./utils.js";
 
 /** Time units from nanoseconds up, each a thousand of the one before. */
 const TIME_UNITS = ["ns", "µs", "ms", "s"] as const;
@@ -26,11 +27,11 @@ const CONTEST_HEADER = ["contender", "median", "ratio", "rank"] as const;
 
 const CONTEST_ALIGN = ["left", "right", "right", "right"] as const;
 
-const FOOTER =
-  "Each case was measured once, in its own process. A verdict between revisions takes a comparison tool.";
+const COMPARISON_TOOL = "A verdict between revisions takes a comparison tool.";
 
-const PLAIN_FOOTER =
-  "Each plain case was measured once, in its own process. A verdict between revisions takes a comparison tool.";
+const FOOTER = `Each case was measured once, in its own process. ${COMPARISON_TOOL}`;
+
+const PLAIN_FOOTER = `Each plain case was measured once, in its own process. ${COMPARISON_TOOL}`;
 
 const NONE_JUDGED_FOOTER =
   "No contest was judged: a verdict needs more rounds than these contests ran. Without a verdict, these medians do not order the contenders.";
@@ -62,9 +63,6 @@ interface Block {
 export function paint(style: Style, text: string, color: boolean): string {
   return color ? styleText(style, text, { validateStream: false }) : text;
 }
-
-/** Splits text into the characters a person sees. */
-export const GRAPHEMES = new Intl.Segmenter();
 
 /** The characters a terminal draws two columns wide: East Asian wide and full-width ones, and emoji. */
 const WIDE =
@@ -135,15 +133,23 @@ function columnWidths(header: readonly string[], rows: readonly (readonly string
   );
 }
 
+/** Pads `cell` to the width of `column` in `widths`, on the side `align` names for it. */
+function padCell(
+  cell: string,
+  column: number,
+  widths: readonly number[],
+  align: readonly Align[],
+): string {
+  return padTo(cell, widths[column] ?? 0, align[column] ?? "right");
+}
+
 /** Lays out `row` in columns of `widths`, each padded on the side `align` names. */
 function alignRow(
   row: readonly string[],
   widths: readonly number[],
   align: readonly Align[],
 ): string {
-  return row
-    .map((cell, column) => padTo(cell, widths[column] ?? 0, align[column] ?? "right"))
-    .join(COLUMN_SEPARATOR);
+  return row.map((cell, column) => padCell(cell, column, widths, align)).join(COLUMN_SEPARATOR);
 }
 
 /**
@@ -212,7 +218,7 @@ export function failureLines(
  *
  * @param label - What its first cell shows: its case id, or its key in a contest.
  * @param result - The failed result.
- * @param idWidth - The width the label is padded to.
+ * @param labelWidth - The width the label is padded to.
  * @param color - Whether to show its failure in red.
  * @returns Its row, then each further line of its message, then the labelled lines of its cleanup
  *   teardown's failure when that teardown threw too, each starting where the failure starts.
@@ -220,13 +226,13 @@ export function failureLines(
 function failedLines(
   label: string,
   result: FailedResult,
-  idWidth: number,
+  labelWidth: number,
   color: boolean,
 ): string[] {
-  const idCell = `${padTo(label, idWidth, "left")}${COLUMN_SEPARATOR}`;
+  const labelCell = `${padTo(label, labelWidth, "left")}${COLUMN_SEPARATOR}`;
   const failure = paint("red", `failed in ${result.error.phase}`, color);
-  const cellStart = " ".repeat(visibleWidth(idCell));
-  return failureLines(`${idCell}${failure}: `, result.error, cellStart, cellStart);
+  const cellStart = " ".repeat(visibleWidth(labelCell));
+  return failureLines(`${labelCell}${failure}: `, result.error, cellStart, cellStart);
 }
 
 /** The columns of a boxed table and how a result fills them. */
@@ -262,7 +268,7 @@ function boxLines(
       : failedLines(labelOf(result), result, widths[0] ?? 0, color),
   );
   const headerCells = header.map((cell, column) =>
-    paint("dim", padTo(cell, widths[column] ?? 0, align[column] ?? "right"), color),
+    paint("dim", padCell(cell, column, widths, align), color),
   );
   return [rule("┬", widths), headerCells.join(COLUMN_SEPARATOR), rule("┼", widths), ...rows];
 }
@@ -477,5 +483,6 @@ export function formatTable(
       : [...contestFooter(contests), ...(plainRan ? [PLAIN_FOOTER] : [])];
   const lines = sections.map((blocks) => sectionLines(blocks, color).join("\n"));
   const footerBlock = footer.map((line) => paint("dim", line, color)).join("\n");
-  return `${[...lines, ...(footer.length > 0 ? [footerBlock] : [])].join("\n\n")}\n`;
+  const blocks = footer.length > 0 ? [...lines, footerBlock] : lines;
+  return `${blocks.join("\n\n")}\n`;
 }

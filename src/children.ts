@@ -431,7 +431,8 @@ function spawnChild(
     runtime.executable,
     [...childRuntimeFlags(runtime.runtime, nodeImport), entry, JSON.stringify(request)],
     {
-      // Stdin is ignored; stdout, stderr and every descriptor up to the result's are pipes.
+      // `stdio` is positional: descriptor RESULT_FD exists in the child only when every slot
+      // below it is filled, so the slots between stderr and the result's are pipes too.
       stdio: ["ignore", ...Array.from({ length: RESULT_FD }, () => "pipe" as const)],
       windowsHide: true,
     },

@@ -3,7 +3,8 @@
  * child elsewhere.
  */
 import type { Output } from "./command.js";
-import { GRAPHEMES, paint, visibleWidth } from "./table.js";
+import { paint, visibleWidth } from "./table.js";
+import { GRAPHEMES } from "./utils.js";
 
 /** The frames of the live line's indicator, one per tick. */
 const FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;

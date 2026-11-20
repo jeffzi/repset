@@ -147,6 +147,14 @@ export function valueAt<T>(values: ArrayLike<T>, index: number): T {
   return value;
 }
 
+/** Splits text into the characters a person sees. */
+export const GRAPHEMES = new Intl.Segmenter();
+
+/** How many distinct pairs `size` items form. */
+export function pairsOf(size: number): number {
+  return (size * (size - 1)) / 2;
+}
+
 /**
  * Reads quantile `q` of ascending values, linearly interpolated between the two nearest ranks.
  *

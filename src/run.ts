@@ -23,14 +23,10 @@ import type {
   Result,
   ResultBase,
 } from "./report.js";
-import { ALPHA, type OnceInput, pairsOf, type StartHandlers, startEach } from "./schedule.js";
+import { ALPHA, isContest, type OnceInput, type StartHandlers, startEach } from "./schedule.js";
 import type { SelectedCase } from "./select.js";
 import { hodgesLehmann, holm, signedRankInterval, signedRankP } from "./signed-rank.js";
-import { property, quantile, valueAt } from "./utils.js";
-
-// ---------------------------------------------------------------------------
-// Run inputs and results
-// ---------------------------------------------------------------------------
+import { pairsOf, property, quantile, valueAt } from "./utils.js";
 
 /**
  * The package's own `package.json`: one directory above this module, which holds from `src/` and
@@ -88,10 +84,6 @@ const NOTHING_MEASURED = {
   rawSamples: null,
 } as const;
 
-// ---------------------------------------------------------------------------
-// Running
-// ---------------------------------------------------------------------------
-
 /**
  * Reads the `version` string of a `package.json`.
  *
@@ -125,10 +117,6 @@ function resultBase(selected: SelectedCase, runtime: FoundRuntime): ResultBase {
     setupPerCall: selected.setupPerCall,
   };
 }
-
-// ---------------------------------------------------------------------------
-// Contest judging
-// ---------------------------------------------------------------------------
 
 /** How many timer resolutions per call a pair's ratio must clear past 1 to tell its contenders apart. */
 const RESOLUTIONS = 1.25;
@@ -241,7 +229,9 @@ function contestOf(results: readonly [Result, ...Result[]]): Contest {
     .map(({ id }) => ({ id, median: null, ratio: null, rank: null }));
   const pairCount = pairsOf(measured.length);
   const head = { name, params: {}, runtime, rounds };
-  if (measured.length < 2 || 2 / 2 ** rounds > ALPHA / pairCount) {
+  const smallestP = 2 / 2 ** rounds;
+  const tooFewRounds = smallestP > ALPHA / pairCount;
+  if (measured.length < 2 || tooFewRounds) {
     const contenders = measured
       .toSorted((left, right) => left.median - right.median)
       .map(({ id, median }) => ({ id, median, ratio: null, rank: null }));
@@ -279,10 +269,6 @@ function contestOf(results: readonly [Result, ...Result[]]): Contest {
   }));
   return { ...head, contenders: [...contenders, ...failed], pairs };
 }
-
-// ---------------------------------------------------------------------------
-// Results and runs
-// ---------------------------------------------------------------------------
 
 /**
  * Reads the median of `values`, interpolated between the two middle values when their count is
@@ -364,7 +350,9 @@ function resultHandlers(
         median: null,
         processes: [...processes, failing],
       };
-      if (group.length > 1 && group.every((member) => member === selected || failed.has(member))) {
+      const contestEnds =
+        isContest(group) && group.every((member) => member === selected || failed.has(member));
+      if (contestEnds) {
         const [first, ...rest] = [...takeFailures(group), result];
         record(contestOf([first, ...rest]));
       } else {
@@ -380,7 +368,7 @@ function resultHandlers(
       });
       const [first, ...rest] = [...takeFailures(group), ...finished];
       for (const result of finished.slice(0, -1)) emit(result);
-      if (group.length > 1 && first !== undefined) record(contestOf([first, ...rest]));
+      if (isContest(group) && first !== undefined) record(contestOf([first, ...rest]));
       const last = finished.at(-1);
       if (last !== undefined) emit(last);
     },

@@ -63,19 +63,19 @@ export interface Case<State> {
 
 export interface MeasureOptions {
   /** Calls per sample to run instead of calibrating one, for the empty body and the body alike. */
-  readonly callsPerSample?: number;
+  readonly callsPerSample?: number | undefined;
   /** The clock, in milliseconds; defaults to `performance.now()`. */
-  readonly now?: () => number;
+  readonly now?: (() => number) | undefined;
   /**
    * The time, in milliseconds, the body's timed samples span at least; defaults to
    * {@link DEFAULT_MIN_TIME}. Not validated: the caller passes a finite number of 0 or more.
    */
-  readonly minTime?: number;
+  readonly minTime?: number | undefined;
   /**
    * The fewest timed samples the body runs; defaults to {@link DEFAULT_MIN_SAMPLES}. Not
    * validated: the caller passes an integer of 1 or more.
    */
-  readonly minSamples?: number;
+  readonly minSamples?: number | undefined;
 }
 
 /** Per-call statistics of the timed samples in nanoseconds, named as the report prints them. */
@@ -345,9 +345,9 @@ function failedIn(
 }
 
 /**
- * Reads the garbage collector the runtime exposes.
+ * Reads the collector `measure` runs between samples.
  *
- * @returns `globalThis.gc`.
+ * @returns The collector, which exists only when the process starts with `--expose-gc`.
  * @throws MeasureError in phase `child` when no collector is exposed.
  */
 export function exposedGc(): NonNullable<typeof globalThis.gc> {
@@ -501,20 +501,19 @@ function measurePerCall<State>(
   const trackedTeardown =
     caseTeardown === undefined
       ? keep
-      : (state: State): void => {
+      : (state: State): unknown => {
           tearingDown = true;
-          caseTeardown(state);
+          const returned = caseTeardown(state);
           tearingDown = false;
+          return returned;
         };
   const inFlight: InFlight<State> = { held: false, state: undefined };
   try {
-    const checked = setup();
-    holdInFlight(inFlight, checked);
-    requireSynchronous(checked, "setup");
-    requireSynchronous(fn(checked), "fn");
-    tearingDown = true;
-    const returned: unknown = teardown(checked);
-    tearingDown = false;
+    const firstState = setup();
+    holdInFlight(inFlight, firstState);
+    requireSynchronous(firstState, "setup");
+    requireSynchronous(fn(firstState), "fn");
+    const returned: unknown = trackedTeardown(firstState);
     releaseInFlight(inFlight);
     requireSynchronous(returned, "teardown");
     const run = samplePerCall({ ...sampling, setup, fn, teardown: trackedTeardown, inFlight });
@@ -544,13 +543,13 @@ function holds<State>(inFlight: InFlight<State>): inFlight is { held: true; stat
  * Names the phase a per-call case failed in from the sampler's state when the error reached
  * `measure`, for {@link failedIn} to fall back to: it maps the sampler's `CalibrationError` itself.
  *
- * @param inFlight - Whether a state was built and not torn down.
+ * @param held - Whether a state was built and not torn down.
  * @param tearingDown - Whether the case's teardown had started and not returned.
  * @returns `setup` with no state in flight, `teardown` while one was being torn down, and `fn` for
  *   the rest.
  */
-function perCallPhase(inFlight: boolean, tearingDown: boolean): Phase {
-  if (!inFlight) return "setup";
+function perCallPhase(held: boolean, tearingDown: boolean): Phase {
+  if (!held) return "setup";
   return tearingDown ? "teardown" : "fn";
 }
 

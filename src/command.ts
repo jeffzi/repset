@@ -36,20 +36,20 @@ import { errorStack, isInstance, thrownMessage } from "./utils.js";
 /** Where the command prints: `process.stdout` and `process.stderr` fit. */
 export interface Output {
   /**
-   * Writes `text`; a write that fails reports its error to `done`, and a stream may report it
-   * again afterwards as an `error` event.
+   * Writes `text`.
    *
    * @param text - The text to write.
-   * @param done - Called once the write is done, with the error when it failed.
    * @returns Whatever the stream returns, such as Node's `false` when it wants a pause; the
    *   command ignores it.
    */
-  write(text: string, done?: (error?: Error | null) => void): unknown;
+  write(text: string): unknown;
   /** Whether the stream is a terminal, which shows color unless the environment turns it off. */
   readonly isTTY?: boolean | undefined;
   /**
    * The bits per color the terminal shows, which Node's and Bun's terminals lower to one bit under
    * `NO_COLOR` or a dumb `TERM`; a terminal without it shows color.
+   *
+   * @returns The bits per color the terminal shows.
    */
   getColorDepth?(): number;
   /** The terminal's width in columns, which the live progress line is cut to; uncut when absent. */
@@ -86,6 +86,16 @@ export interface SignalSource {
  * `process.stderr` fit.
  */
 export interface WatchedOutput extends Output {
+  /**
+   * Writes `text`; a write that fails reports its error to `done`, and a stream may report it
+   * again afterwards as an `error` event.
+   *
+   * @param text - The text to write.
+   * @param done - Called once the write is done, with the error when it failed.
+   * @returns Whatever the stream returns, such as Node's `false` when it wants a pause; the
+   *   command ignores it.
+   */
+  write(text: string, done?: (error?: Error | null) => void): unknown;
   /**
    * Listens for the error a failed write reports after it returns, such as `EPIPE` once the
    * reader went away.
@@ -404,6 +414,11 @@ async function once(command: Command, context: Context): Promise<number> {
 // Entry point
 // ---------------------------------------------------------------------------
 
+/** `text`, with a newline at its end if it has none. */
+function withNewline(text: string): string {
+  return text.endsWith("\n") ? text : `${text}\n`;
+}
+
 /**
  * Prints a `ConfigError`; a failed listing's stack and output tail come before its message.
  *
@@ -414,7 +429,7 @@ async function once(command: Command, context: Context): Promise<number> {
 function printError(stderr: Output, error: ConfigError, color: boolean): void {
   if (error instanceof ListingError) {
     for (const text of [error.failureStack ?? "", error.output]) {
-      if (text !== "") stderr.write(text.endsWith("\n") ? text : `${text}\n`);
+      if (text !== "") stderr.write(withNewline(text));
     }
   }
   stderr.write(errorLine(error.message, color));
@@ -447,13 +462,14 @@ function encodedStart(text: string, room: number): string {
 
 /**
  * Builds what `repset` prints when the command fails with an error that is not a
- * {@link ConfigError}: the error's stack, then a line naming the version and the platform, ending
- * with a link that opens a GitHub issue prefilled with them and the error's message. The message
- * is cut to keep the link within {@link MAX_ISSUE_LINK} characters; the stack holds it whole.
+ * {@link ConfigError}.
  *
  * @param error - The thrown value.
  * @param about - The version, the OS, the runtime and whether the output shows color.
- * @returns The report's lines, each ending with a newline.
+ * @returns The error's stack, then a line naming the version and the platform, ending with a link
+ *   that opens a GitHub issue prefilled with them and the error's message. The message is cut to
+ *   keep the link within {@link MAX_ISSUE_LINK} characters; the stack holds it whole. Each line
+ *   ends with a newline.
  */
 export function crashReport(error: unknown, about: CrashAbout): string {
   const version = about.version ?? "unknown";
@@ -466,7 +482,7 @@ export function crashReport(error: unknown, about: CrashAbout): string {
   const room = MAX_ISSUE_LINK - NEW_ISSUE.length - head.length - foot.length;
   const link = `${NEW_ISSUE}${head}${encodedStart(message, room)}${foot}`;
   const line = `version ${version} crashed on ${about.os} with ${about.runtime}; report it at ${link}`;
-  return `${stack.endsWith("\n") ? stack : `${stack}\n`}${errorLine(line, about.color === true)}`;
+  return `${withNewline(stack)}${errorLine(line, about.color === true)}`;
 }
 
 /** A stream as the command writes to it, and what it learned of the stream's failure. */
@@ -549,6 +565,9 @@ const SIGNAL_NUMBERS = { SIGHUP: 1, SIGINT: 2, SIGPIPE: 13, SIGTERM: 15 } as con
   number
 >;
 
+/** A shell reports a process a signal ended as this plus the signal's number. */
+const SIGNAL_EXIT_BASE = 128;
+
 /** Whether `error` says the reader of the stream went away. */
 function closedPipe(error: Error): boolean {
   return "code" in error && error.code === "EPIPE";
@@ -565,8 +584,8 @@ function closedPipe(error: Error): boolean {
  */
 function stoppedCode(stop: Stop | undefined, code: number): number {
   if (stop === undefined) return code;
-  if ("signal" in stop) return 128 + SIGNAL_NUMBERS[stop.signal];
-  return closedPipe(stop.error) ? 128 + SIGNAL_NUMBERS.SIGPIPE : 1;
+  if ("signal" in stop) return SIGNAL_EXIT_BASE + SIGNAL_NUMBERS[stop.signal];
+  return closedPipe(stop.error) ? SIGNAL_EXIT_BASE + SIGNAL_NUMBERS.SIGPIPE : 1;
 }
 
 /**

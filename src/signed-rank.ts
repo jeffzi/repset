@@ -22,6 +22,13 @@ function nullDistribution(weights: readonly number[]): number[] {
   return mass;
 }
 
+/** The indices of `values`, ordered by ascending value. */
+function ascendingOrder(values: readonly number[]): number[] {
+  return [...values.keys()].toSorted(
+    (left, right) => valueAt(values, left) - valueAt(values, right),
+  );
+}
+
 /**
  * Ranks magnitudes from 1, equal magnitudes sharing their average rank, then doubles every rank so
  * an average of two ranks stays an integer.
@@ -30,9 +37,7 @@ function nullDistribution(weights: readonly number[]): number[] {
  * @returns Each magnitude's doubled rank, in the input's order.
  */
 function doubledRanks(magnitudes: readonly number[]): number[] {
-  const order = [...magnitudes.keys()].toSorted(
-    (left, right) => valueAt(magnitudes, left) - valueAt(magnitudes, right),
-  );
+  const order = ascendingOrder(magnitudes);
   const ranks = magnitudes.map(() => 0);
   let start = 0;
   while (start < order.length) {
@@ -135,9 +140,7 @@ export function signedRankInterval(
  * @returns The adjusted p values, in the input's order.
  */
 export function holm(pValues: readonly number[]): number[] {
-  const ordered = [...pValues.keys()].toSorted(
-    (left, right) => valueAt(pValues, left) - valueAt(pValues, right),
-  );
+  const ordered = ascendingOrder(pValues);
   const adjusted = pValues.map(() => 1);
   let running = 0;
   for (const [step, index] of ordered.entries()) {

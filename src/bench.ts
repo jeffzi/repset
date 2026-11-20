@@ -83,6 +83,9 @@ const KNOWN_FIELDS: ReadonlySet<string> = new Set(FIELDS);
 /** One segment of a name: ASCII letters, digits, `_`, `-` and `.`. */
 const SEGMENT = String.raw`[\w.-]+`;
 
+/** The characters `SEGMENT` allows, as an error message words them. */
+const SEGMENT_CHARS = 'ASCII letters, digits, "_", "-" and "."';
+
 /** One or more `/`-separated segments. */
 const NAME_RULE = new RegExp(`^${SEGMENT}(?:/${SEGMENT})*$`, "u");
 
@@ -115,7 +118,7 @@ function checkName(name: unknown): asserts name is string {
   }
   if (!NAME_RULE.test(name)) {
     throw new TypeError(
-      `benchmark name ${JSON.stringify(name)} is not valid: a name is one or more "/"-separated segments, each made of ASCII letters, digits, "_", "-" and "."`,
+      `benchmark name ${JSON.stringify(name)} is not valid: a name is one or more "/"-separated segments, each made of ${SEGMENT_CHARS}`,
     );
   }
 }
@@ -189,7 +192,7 @@ function contendersOf(
     const contenderSubject = `${subject} contender ${JSON.stringify(key)}`;
     if (!CONTENDER_RULE.test(key)) {
       throw new TypeError(
-        `${contenderSubject} is not valid: a contender key is one segment made of ASCII letters, digits, "_", "-" and "."`,
+        `${contenderSubject} is not valid: a contender key is one segment made of ${SEGMENT_CHARS}`,
       );
     }
     return { contender: key, fn: checkedFunction(contenderSubject, fn[key]) };

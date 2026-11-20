@@ -164,13 +164,14 @@ function helpEpilogue(color: boolean): string {
 }
 
 /**
- * Builds the command-line parser. Its help and version go to `stdout`, styled when that stream
- * shows color. It prints no error and never exits the process: it throws instead.
+ * Builds the command-line parser.
  *
  * @param version - The version `--version` prints.
  * @param stdout - The stream the help and the version go to.
  * @param colors - Whether each stream shows color.
- * @returns The parser, with no arguments parsed yet.
+ * @returns The parser, with no arguments parsed yet. Its help and version go to `stdout`, styled
+ *   when that stream shows color. It prints no error and never exits the process: it throws
+ *   instead.
  */
 export function commandLine(version: string, stdout: Output, colors: Colors): Parser {
   const parser = new Parser("repset").description(DESCRIPTION).argument("[file...]");
@@ -230,8 +231,8 @@ export function noColorGiven(args: readonly string[]): boolean {
  * @throws {CommanderError} With exit code 0 once `--help` or `--version` printed, before any other
  *   check.
  * @throws {ConfigError} When a flag is unknown, missing its value or holding a value that is not a
- *   decimal number where one is due, when two flags conflict, or when `REPSET_CALLS_PER_SAMPLE`
- *   holds a bad value.
+ *   decimal number where one is due, when two flags conflict, when an entry of `--runtime` is not a
+ *   runtime, or when `REPSET_CALLS_PER_SAMPLE` holds a bad value.
  */
 export function parseCommand(args: readonly string[], parser: Parser): Command {
   parser.parse(args, { from: "user" });

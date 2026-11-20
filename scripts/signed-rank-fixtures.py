@@ -23,15 +23,22 @@ import numpy as np
 from scipy import stats
 
 LEVELS = [0.95]
+SCIPY_EXACT_MAX_N = 53
+MIN_P_PAST_EXACT_MAX_N = 1e-6
+SCIPY_AGREEMENT_RTOL = 1e-12
 
 
 class Interval(TypedDict):
+    """One exact Hodges-Lehmann interval, `[low, high]`, at confidence `level`."""
+
     level: float
     low: float
     high: float
 
 
 class Case(TypedDict):
+    """One fixture case: its differences and the expected p value, estimate and intervals."""
+
     name: str
     differences: list[float]
     p: float
@@ -40,6 +47,7 @@ class Case(TypedDict):
 
 
 def walsh(d: list[float]) -> list[float]:
+    """Returns the sorted Walsh averages (d[i] + d[j]) / 2 for i <= j."""
     return sorted((d[i] + d[j]) / 2 for i in range(len(d)) for j in range(i, len(d)))
 
 
@@ -56,6 +64,7 @@ def untied_counts(n: int) -> list[int]:
 
 
 def untied_cdf(n: int, c: int) -> Fraction:
+    """Returns P(positive rank sum <= c) under the untied null for n differences."""
     counts = untied_counts(n)
     return Fraction(sum(counts[: c + 1]), 2**n)
 
@@ -100,18 +109,34 @@ def critical(n: int, level: float) -> int:
         for c in (found - 1, found):
             ours = min(1.0, float(2 * untied_cdf(n, c)))
             theirs = scipy_untied_p(n, c)
-            assert abs(ours - theirs) <= 1e-12 * theirs, (n, c, ours, theirs)
+            assert abs(ours - theirs) <= SCIPY_AGREEMENT_RTOL * theirs, (n, c, ours, theirs)
     return found
 
 
 def p_value(d: list[float]) -> float:
+    """Returns the two-sided exact signed-rank p value with zeros dropped.
+
+    All-zero input gives 1.0. Distinct magnitudes use scipy's exact `wilcoxon`; tied magnitudes use
+    an exact `permutation_test`. With distinct magnitudes and more than `SCIPY_EXACT_MAX_N`
+    differences, an assertion keeps p above `MIN_P_PAST_EXACT_MAX_N`.
+
+    Args:
+        d: The differences.
+
+    Returns:
+        The two-sided exact p value.
+
+    Raises:
+        AssertionError: When n is past `SCIPY_EXACT_MAX_N` and scipy's p is not above
+            `MIN_P_PAST_EXACT_MAX_N`.
+    """
     nonzero = np.array([x for x in d if x != 0])
     if len(nonzero) == 0:
         return 1.0
     magnitudes = np.abs(nonzero)
     if len(np.unique(magnitudes)) == len(magnitudes):
         p = float(stats.wilcoxon(nonzero, method="exact").pvalue)
-        assert len(nonzero) <= 53 or p > 1e-6, (len(nonzero), p)
+        assert len(nonzero) <= SCIPY_EXACT_MAX_N or p > MIN_P_PAST_EXACT_MAX_N, (len(nonzero), p)
         return p
     ranks = stats.rankdata(magnitudes)
 
@@ -130,6 +155,7 @@ def p_value(d: list[float]) -> float:
 
 
 def case(name: str, d: list[float]) -> Case:
+    """Builds one fixture case: its p value, Hodges-Lehmann estimate and exact intervals."""
     w = walsh(d)
     m = len(w)
     intervals: list[Interval] = []
@@ -147,6 +173,7 @@ def case(name: str, d: list[float]) -> Case:
 
 
 def main() -> None:
+    """Writes the fixture cases as JSON to the path in argv[1]."""
     out = sys.argv[1]
     rng = random.Random(20261119)
 

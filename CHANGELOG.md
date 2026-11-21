@@ -7,6 +7,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-21
+
 ### Added
 
 - Add contests: pass `bench()` a record of functions as `fn`, and repset runs them in a random order
@@ -62,6 +64,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Add the `repset` command, which measures each benchmark case in its own process on Node and Bun.
 - Add `defineConfig` to type a repset config file.
 
-[Unreleased]: https://github.com/jeffzi/repset/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/jeffzi/repset/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/jeffzi/repset/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jeffzi/repset/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jeffzi/repset/releases/tag/v0.1.0

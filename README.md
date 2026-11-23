@@ -152,13 +152,14 @@ Each case was measured once, in its own process. A verdict between revisions tak
 
 Common options:
 
-| Command                               | Purpose                                                |
-| ------------------------------------- | ------------------------------------------------------ |
-| `npx repset benchmarks/sort.bench.ts` | Run only the cases in that file                        |
-| `npx repset --filter '^sort/'`        | Run the cases whose id starts with `sort/`             |
-| `npx repset --runtime node,bun`       | Run every case on Node, then on Bun                    |
-| `npx repset -o report.json`           | Also write the JSON report to `report.json`            |
-| `npx repset --once`                   | Run every case once, without timing, to check it works |
+| Command                               | Purpose                                                 |
+| ------------------------------------- | ------------------------------------------------------- |
+| `npx repset benchmarks/sort.bench.ts` | Run only the cases in that file                         |
+| `npx repset --filter '^sort/'`        | Run the cases whose id starts with `sort/`              |
+| `npx repset --runtime node,bun`       | Run every case on Node, then on Bun                     |
+| `npx repset -o report.json`           | Also write the JSON report to `report.json`             |
+| `npx repset --once`                   | Run every case once, without timing, to check it works  |
+| `npx repset -d`                       | Print each failed case's stack and its process's output |
 
 Node runs TypeScript files by stripping their types, but it does not map an import of `./foo.js` to
 `foo.ts`. If your benchmarks import TypeScript files that way, give Node a loader such as
@@ -201,9 +202,9 @@ bench("concat", {
 <!-- /docs -->
 
 One process per contender cannot order them: two processes of the same code can read several percent
-apart. So repset runs a contest in rounds. Each round starts one fresh process per contender, in an
-order drawn at random from a seed the report records. Then repset tests every pair of contenders
-over the rounds, with an exact
+apart. So repset runs a contest in repetitions. Each repetition starts one fresh process per
+contender, in an order drawn at random from a seed the report records. Then repset tests every pair
+of contenders over the repetitions, with an exact
 [signed-rank test](https://en.wikipedia.org/wiki/Wilcoxon_signed-rank_test) and
 [Holm's correction](https://en.wikipedia.org/wiki/Holm%E2%80%93Bonferroni_method) across the
 contest's pairs. Holm's correction raises the bar each pair must clear, so testing many pairs does
@@ -212,7 +213,7 @@ not add false verdicts:
 ```text
 node 26.13.1
 
-concat · 7 rounds
+concat · 7 repetitions
 ──────────┬─────────┬───────┬─────
 contender │  median │ ratio │ rank
 ──────────┼─────────┼───────┼─────
@@ -224,15 +225,15 @@ join      │ 8.46 µs │ 3.10× │    2
   confidence interval. With more than two contenders the level rises to cover every pair, so each
   interval widens.
 - **Rank** is 1 plus the number of contenders proven faster. Two contenders share a rank when the
-  rounds did not tell them apart. A pair is also tied when its gap is within 1.25 times the timer's
-  resolution per call.
-- **Rounds** default to the fewest at which one round may disagree and the pair can still be judged:
-  7 for two contenders, 8 for three, 12 for eight. When the rounds leave pairs tied, a line under
-  the contest's table names those pairs and suggests twice as many rounds: `npx repset --rounds 14`.
-  Pairs whose gap is too small for the timer get no such suggestion, since more rounds do not help.
-  Each round starts one process per contender, and each process takes as long as one plain case.
-  Judging is exact at every count, and its cost grows with the cube of the rounds: 38 ms per pair at
-  200 rounds, about 2 seconds at 800.
+  repetitions did not tell them apart. A pair is also tied when its gap is within 1.25 times the
+  timer's resolution per call.
+- **Repetitions** default to the fewest at which one repetition may disagree and the pair can still
+  be judged: 7 for two contenders, 8 for three, 12 for eight. When the repetitions leave pairs tied,
+  a line under the contest's table names those pairs and suggests twice as many repetitions:
+  `npx repset --contest-repetition-count 14`. Pairs whose gap is too small for the timer get no such
+  suggestion, since more repetitions do not help. Each repetition starts one process per contender,
+  and each process takes as long as one plain case. Judging is exact at every count, and its cost
+  grows with the cube of the repetitions: 38 ms per pair at 200 repetitions, about 2 seconds at 800.
 
 Each process runs `setup` on its own, so `setup` must build the same state every time: random data
 needs a fixed seed. Only a contest is judged. Two plain benchmarks under one prefix, such as
@@ -254,15 +255,16 @@ export default defineConfig({
 });
 ```
 
-| Option       | Flag            | What it sets                                                                                 | Default                      |
-| ------------ | --------------- | -------------------------------------------------------------------------------------------- | ---------------------------- |
-| `include`    | file arguments  | Globs for benchmark files, relative to the config file                                       | `**/*.bench.{ts,mts,js,mjs}` |
-| `runtimes`   | `--runtime`     | Runtimes to run on, in this order                                                            | `["node"]`                   |
-| `minTime`    | `--min-time`    | Milliseconds to time each case for, at least                                                 | `1000`                       |
-| `minSamples` | `--min-samples` | Samples to take of each case, at least                                                       | `64`                         |
-| `rounds`     | `--rounds`      | Rounds each contest runs                                                                     | by contest size              |
-| `timeout`    | `--timeout`     | Milliseconds one process may run before its case fails                                       | `600000`                     |
-| `nodeImport` | `--node-import` | Module Node loads first; a `./` or `../` path is relative to the config file. Bun ignores it | none                         |
+| Option                   | Flag                         | What it sets                                                                                            | Default                      |
+| ------------------------ | ---------------------------- | ------------------------------------------------------------------------------------------------------- | ---------------------------- |
+| `include`                | file arguments               | Globs for benchmark files, relative to the config file                                                  | `**/*.bench.{ts,mts,js,mjs}` |
+| `runtimes`               | `--runtime`                  | Runtimes to run on, in this order                                                                       | `["node"]`                   |
+| `minTime`                | `--min-time`                 | Milliseconds to time each case for, at least                                                            | `1000`                       |
+| `minSampleCount`         | `--min-sample-count`         | Samples to take of each case, at least                                                                  | `64`                         |
+| `contestRepetitionCount` | `--contest-repetition-count` | Repetitions each contest runs                                                                           | by contest size              |
+| `timeout`                | `--timeout`                  | Milliseconds one process may run before its case fails                                                  | `600000`                     |
+| `nodeImport`             | `--node-import`              | Module Node loads first; a `./` or `../` path is relative to the config file. Bun ignores it            | none                         |
+| `debug`                  | `-d`, `--debug`              | Print each failed case's stack and its process's output, and keep each measurement's `gc` in the report | `false`                      |
 
 A flag on the command line overrides the file: `npx repset --runtime node` runs Node alone.
 

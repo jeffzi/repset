@@ -40,16 +40,16 @@ A case's id is the name its `bench()` call gives it, followed by a contender's k
 such as `dedupe/set`. `node ../dist/cli.js --help` lists every option. The commands below leave out
 the `mise exec --` prefix: add it unless mise is active in your shell.
 
-| Command                                   | Purpose                                                                  |
-| ----------------------------------------- | ------------------------------------------------------------------------ |
-| `node ../dist/cli.js --once`              | Run every case once, without timing, to check it works                   |
-| `node ../dist/cli.js --list`              | List the id of every case without running it                             |
-| `node ../dist/cli.js compare.bench.ts`    | Run only the cases in that file                                          |
-| `node ../dist/cli.js --filter '^dedupe/'` | Run the cases whose id starts with `dedupe/`                             |
-| `node ../dist/cli.js --rounds 14`         | Run each contest in 14 rounds instead of the default                     |
-| `node ../dist/cli.js --filter '/10000$'`  | Run the cases whose id ends with `/10000`                                |
-| `node ../dist/cli.js --runtime node`      | Run on Node alone, overriding the config's `runtimes`                    |
-| `node ../dist/cli.js -o report.json`      | Also write the JSON (JavaScript Object Notation) report to `report.json` |
+| Command                                             | Purpose                                                                  |
+| --------------------------------------------------- | ------------------------------------------------------------------------ |
+| `node ../dist/cli.js --once`                        | Run every case once, without timing, to check it works                   |
+| `node ../dist/cli.js --list`                        | List the id of every case without running it                             |
+| `node ../dist/cli.js compare.bench.ts`              | Run only the cases in that file                                          |
+| `node ../dist/cli.js --filter '^dedupe/'`           | Run the cases whose id starts with `dedupe/`                             |
+| `node ../dist/cli.js --contest-repetition-count 14` | Run each contest in 14 repetitions instead of the default                |
+| `node ../dist/cli.js --filter '/10000$'`            | Run the cases whose id ends with `/10000`                                |
+| `node ../dist/cli.js --runtime node`                | Run on Node alone, overriding the config's `runtimes`                    |
+| `node ../dist/cli.js -o report.json`                | Also write the JSON (JavaScript Object Notation) report to `report.json` |
 
 [compare.bench.ts]: compare.bench.ts
 [input-sizes.bench.ts]: input-sizes.bench.ts

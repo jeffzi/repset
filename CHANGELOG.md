@@ -7,6 +7,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Add `-d, --debug` (`debug` in the config and `run()`), which prints each failed case's stack and
+  its process's output to stderr and keeps each measurement's `gc` in the report.
+
+### Changed
+
+- **Breaking:** Rename `--min-samples` and `minSamples` to `--min-sample-count` and
+  `minSampleCount`, and `--rounds` and `rounds` to `--contest-repetition-count` and
+  `contestRepetitionCount`; update your config files and scripts.
+- **Breaking:** Move each result's `median` to `time.median` and its `processes[]` to
+  `measurements[]`, whose entries hold `repetition`, `orderInRepetition` and a `time` block; update
+  any script that reads the JSON report.
+- **Breaking:** Rename the report's `machine` to `host`, `cores` to `coreCount`, `warmupSamples` and
+  `timingAttempts` to `warmupSampleCount` and `timingAttemptCount`, each contest's `rounds` to
+  `repetitionCount`, a contender's `median` to `time.median`, and the `tie` value `"rounds"` to
+  `"repetitions"`.
+- **Breaking:** Count only garbage collections in `gc`, under `collectionCount`, `durationMs`,
+  `maxDurationMs`, `nodeMinorCollectionCount` and `nodeMajorCollectionCount`, and write it only with
+  `--debug`.
+- **Breaking:** Write `null` as a plain case's `repetition` and `orderInRepetition`, which have no
+  meaning outside a contest.
+
 ## [0.3.0] - 2026-11-21
 
 ### Added

@@ -1,7 +1,7 @@
 // Scenario: compare implementations of the same task.
 //
 // Pass `fn` a record and each entry becomes a contender of one contest. repset runs the contest in
-// rounds of fresh processes and tells which contenders it can prove faster:
+// repetitions of fresh processes and tells which contenders it can prove faster:
 //
 //   npx repset compare.bench.ts
 import { bench } from "repset";

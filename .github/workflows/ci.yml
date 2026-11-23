@@ -58,3 +58,27 @@ jobs:
       - name: Package
         if: runner.os == 'Linux'
         run: task check-package
+
+  # Both timing checks share one job, one after the other, so no two measuring processes ever run at
+  # once. Each confirms a difference in a second round before it fails, so nothing retries.
+  timing:
+    name: Timing checks
+    permissions:
+      contents: read
+    timeout-minutes: 45
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-mise # zizmor: ignore[self-repository] -- actionlint 1.7.12 rejects the $/ form
+        with:
+          install_args: --locked node bun aqua:go-task/task
+
+      - name: Timing accuracy
+        run: task check-timing-accuracy
+
+      - name: Memory timing
+        run: task check-memory-timing

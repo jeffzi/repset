@@ -5,12 +5,15 @@
  * `schema` and never a key.
  */
 
-import type { ChildError, ListedCase, MeasuredTime } from "./child.js";
+import type { ChildError, ListedCase, MeasuredMemory, MeasuredTime } from "./child-protocol.js";
 import type { Runtime } from "./measure/runtime.js";
+import type { Measure } from "./options.js";
 
 /** Every option that shaped the run, after the caller's options and the config were merged. */
 export interface ReportOptions {
   readonly runtimes: readonly Runtime[];
+  /** What the run measured of each case, in the order the caller or the config file wrote it. */
+  readonly measure: readonly Measure[];
   /** The positional files as the caller gave them, or `null` when `include` chose the files. */
   readonly files: readonly string[] | null;
   readonly filter: string | null;
@@ -53,21 +56,34 @@ interface MeasurementPlace {
 
 /**
  * The measurement of one measuring child that measured its case; its `time.gc` is `null` unless the
- * `debug` option is on, whatever the runtime delivers.
+ * `debug` option is on, whatever the runtime delivers. `time` is `null` when `measure` holds no
+ * `time`; `memory` is `null` when `measure` holds no `memory`, on a runtime with no heap reading,
+ * and in a contender's measurements after its first repetition, the one that reads its memory.
  */
 export interface CaseMeasurement extends MeasurementPlace {
-  readonly time: MeasuredTime;
+  readonly time: MeasuredTime | null;
+  readonly memory: MeasuredMemory | null;
 }
 
-/** The measurement of the measuring child that failed, holding `null` for the time it did not take. */
+/** The measurement of the measuring child that failed, holding `null` for what it did not read. */
 interface FailedMeasurement extends MeasurementPlace {
   readonly time: null;
+  readonly memory: null;
 }
 
 /** A case's headline time: the median of its measurements' medians, in nanoseconds per call. */
 export interface HeadlineTime {
   readonly unit: "ns/call";
   readonly median: number;
+}
+
+/**
+ * A case's headline memory: the median heap bytes one call allocates, from the measurement that
+ * read it, or `null` when no pair of samples was free of a collection.
+ */
+export interface HeadlineMemory {
+  readonly unit: "B/call";
+  readonly median: number | null;
 }
 
 /** What every result holds, whether its case was measured or failed. */
@@ -78,11 +94,15 @@ export interface ResultBase extends Pick<ListedCase, "id" | "name" | "contender"
   readonly runtime: { readonly name: Runtime; readonly version: string };
 }
 
-/** A case that was measured, one measurement per measuring child. */
+/**
+ * A case that was measured, one measurement per measuring child. `time` is `null` when `measure`
+ * holds no `time`; `memory` is `null` when no measurement read memory.
+ */
 export interface MeasuredResult extends ResultBase {
   readonly status: "ok";
   readonly error: null;
-  readonly time: HeadlineTime;
+  readonly time: HeadlineTime | null;
+  readonly memory: HeadlineMemory | null;
   readonly measurements: readonly [CaseMeasurement, ...CaseMeasurement[]];
 }
 
@@ -94,6 +114,7 @@ export interface FailedResult extends ResultBase {
   readonly status: "failed";
   readonly error: ResultError;
   readonly time: null;
+  readonly memory: null;
   readonly measurements: readonly [...CaseMeasurement[], FailedMeasurement];
 }
 
@@ -102,11 +123,12 @@ export type Result = MeasuredResult | FailedResult;
 
 /**
  * A contender of a judged contest, or of one that cannot be judged with `ratio` and `rank` `null`;
- * a failed contender has a `null` time too.
+ * a failed contender has a `null` time and memory too. Its `time` and `memory` are its result's.
  */
 export interface ContestContender {
   readonly id: string;
   readonly time: HeadlineTime | null;
+  readonly memory: HeadlineMemory | null;
   /** Its pair's ratio with the fastest contender, 1 for the fastest itself. */
   readonly ratio: number | null;
   /** 1 plus the number of contenders proven faster. */
@@ -145,7 +167,10 @@ export interface Contest {
   readonly params: Readonly<Record<string, never>>;
   readonly runtime: ResultBase["runtime"];
   readonly repetitionCount: number;
-  /** Sorted by rank then median, by median alone when not judged, the failed ones last. */
+  /**
+   * Sorted by rank then median, by median alone when not judged, in run order when not timed, the
+   * failed ones last.
+   */
   readonly contenders: readonly ContestContender[];
   readonly pairs: readonly ContestPair[];
 }

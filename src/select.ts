@@ -5,7 +5,7 @@
 import { globSync } from "node:fs";
 import { basename, relative, resolve, sep } from "node:path";
 
-import type { ChildError, ListedCase } from "./child.js";
+import type { ChildError, ListedCase } from "./child-protocol.js";
 import {
   findRuntime as realFindRuntime,
   type FoundRuntime,

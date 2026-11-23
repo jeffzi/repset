@@ -2,7 +2,7 @@
  * Starting a run's children: the selection, then one child per case and runtime, and a contest's
  * contenders in repetitions of one child each, in a seeded random order per repetition.
  */
-import type { ChildError, ChildRequest } from "./child.js";
+import type { ChildError, ChildRequest } from "./child-protocol.js";
 import {
   type FoundRuntime,
   type Outcome,
@@ -74,10 +74,20 @@ export interface StartHandlers<M extends ChildRequest["mode"]> {
   readonly ended?: ((runtime: FoundRuntime, group: readonly SelectedCase[]) => void) | undefined;
 }
 
+/**
+ * Builds the request of one case's child from the resolved options and the repetition the child
+ * runs in: from 1 in a contest, `null` for a plain case.
+ */
+type RequestOf<R extends ChildRequest> = (
+  options: ResolvedOptions,
+  selected: SelectedCase,
+  repetition: number | null,
+) => R;
+
 /** What starting the children of one group takes, shared by every group of a run. */
 interface GroupStart<R extends ChildRequest> {
   readonly options: ResolvedOptions;
-  readonly request: (options: ResolvedOptions, selected: SelectedCase) => R;
+  readonly request: RequestOf<R>;
   readonly handlers: StartHandlers<R["mode"]>;
   readonly startChild: NonNullable<OnceInput["startChild"]>;
   readonly childOptions: StartOptions;
@@ -155,13 +165,18 @@ export function isContest(group: readonly SelectedCase[]): boolean {
  * Counts the repetitions a group runs.
  *
  * @param size - The number of cases in the group.
- * @param contestRepetitionCount - The `contestRepetitionCount` option.
- * @returns 1 for a lone case; otherwise `contestRepetitionCount`, or when unset the smallest `n`
- *   with `4 / 2ⁿ ≤ ALPHA / pairs`, at which a pair can pass Holm's strictest step with one
- *   repetition dissenting.
+ * @param options - The resolved options, whose `measure` and `contestRepetitionCount` it reads.
+ * @returns 1 for a lone case, and for a contest when `measure` holds no `time`, since repetitions
+ *   only order timings and memory is read once; otherwise `contestRepetitionCount`, or when unset
+ *   the smallest `n` with `4 / 2ⁿ ≤ ALPHA / pairs`, at which a pair can pass Holm's strictest step
+ *   with one repetition dissenting.
  */
-function repetitionsOf(size: number, contestRepetitionCount: number | undefined): number {
-  if (size < 2) return 1;
+function repetitionsOf(
+  size: number,
+  options: Pick<ResolvedOptions, "measure" | "contestRepetitionCount">,
+): number {
+  const { contestRepetitionCount } = options;
+  if (size < 2 || !options.measure.includes("time")) return 1;
   if (contestRepetitionCount !== undefined) return contestRepetitionCount;
   const pairs = pairsOf(size);
   for (let count = 1; ; count += 1) {
@@ -203,17 +218,19 @@ async function startRepetition<R extends ChildRequest>(
   const { options, request, handlers, startChild, childOptions, onDebugFailure } = start;
   const { group, number, remaining } = repetition;
   const contest = isContest(group);
+  const inRepetition = contest ? number : null;
   const failed: SelectedCase[] = [];
   for (const [index, selected] of repetition.order.entries()) {
     if (childOptions.signal?.aborted === true) return undefined;
-    const outcome = await startChild(runtime, request(options, selected), childOptions);
+    const asked = request(options, selected, inRepetition);
+    const outcome = await startChild(runtime, asked, childOptions);
     if (outcome.status === "stopped") return undefined;
     handlers.finished({
       runtime,
       selected,
       group,
       outcome,
-      repetition: contest ? number : null,
+      repetition: inRepetition,
       orderInRepetition: contest ? index + 1 : null,
     });
     if (outcome.status !== "failed") continue;
@@ -241,7 +258,7 @@ async function startGroup<R extends ChildRequest>(
   runtime: FoundRuntime,
   group: readonly SelectedCase[],
 ): Promise<boolean> {
-  const count = repetitionsOf(group.length, start.options.contestRepetitionCount);
+  const count = repetitionsOf(group.length, start.options);
   let running = group;
   for (let number = 1; number <= count; number += 1) {
     const order = isContest(group) ? shuffled(running, start.random) : running;
@@ -261,7 +278,7 @@ async function startGroup<R extends ChildRequest>(
  *
  * @param input - The caller's options, the positional files, the stop signal, the plan callback
  *   and the child functions.
- * @param request - The request of one case's child, from the resolved options.
+ * @param request - The request of one case's child, from the resolved options and its repetition.
  * @param handlers - What the selection and each child's outcome are passed to.
  * @param seed - The seed of the repetition orders, or `undefined` to form no contest.
  * @returns The resolved options, and whether the stop signal ended the run before every child ran:
@@ -273,7 +290,7 @@ async function startGroup<R extends ChildRequest>(
  */
 export async function startEach<R extends ChildRequest>(
   input: OnceInput,
-  request: (options: ResolvedOptions, selected: SelectedCase) => R,
+  request: RequestOf<R>,
   handlers: StartHandlers<R["mode"]>,
   seed?: number,
 ): Promise<{ options: ResolvedOptions; interrupted: boolean }> {
@@ -292,8 +309,7 @@ export async function startEach<R extends ChildRequest>(
   const groups =
     seed === undefined ? selection.cases.map((selected) => [selected]) : groupsOf(selection.cases);
   const childrenPerRuntime = groups.reduce(
-    (total, group) =>
-      total + group.length * repetitionsOf(group.length, options.contestRepetitionCount),
+    (total, group) => total + group.length * repetitionsOf(group.length, options),
     0,
   );
   const contests = groups.filter(isContest);

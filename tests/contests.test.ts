@@ -76,7 +76,11 @@ function measuredAt(median: number, callsPerSample: number): Outcome {
   const { time } = measured(median);
   return {
     status: "ok",
-    result: { status: "ok", time: { ...time, sampling: { ...time.sampling, callsPerSample } } },
+    result: {
+      status: "ok",
+      time: { ...time, sampling: { ...time.sampling, callsPerSample } },
+      memory: null,
+    },
     output: "",
   };
 }
@@ -482,8 +486,8 @@ describe("run", () => {
           runtime: NODE,
           repetitionCount: 7,
           contenders: [
-            { id: "concat/join", time: nsPerCall(812), ratio: 1, rank: 1 },
-            { id: "concat/loop", time: nsPerCall(1904.5), ratio, rank: 2 },
+            { id: "concat/join", time: nsPerCall(812), memory: null, ratio: 1, rank: 1 },
+            { id: "concat/loop", time: nsPerCall(1904.5), memory: null, ratio, rank: 2 },
           ],
           pairs: [
             {
@@ -671,8 +675,8 @@ describe("run", () => {
             runtime: NODE,
             repetitionCount: 5,
             contenders: [
-              { id: "concat/loop", time: nsPerCall(100), ratio: null, rank: null },
-              { id: "concat/join", time: nsPerCall(300), ratio: null, rank: null },
+              { id: "concat/loop", time: nsPerCall(100), memory: null, ratio: null, rank: null },
+              { id: "concat/join", time: nsPerCall(300), memory: null, ratio: null, rank: null },
             ],
             pairs: [],
           },
@@ -734,9 +738,9 @@ describe("run", () => {
             runtime: NODE,
             repetitionCount: 6,
             contenders: [
-              { id: "concat/join", time: nsPerCall(100), ratio: 1, rank: 1 },
-              { id: "concat/plus", time: nsPerCall(202.5), ratio, rank: 2 },
-              { id: "concat/loop", time: null, ratio: null, rank: null },
+              { id: "concat/join", time: nsPerCall(100), memory: null, ratio: 1, rank: 1 },
+              { id: "concat/plus", time: nsPerCall(202.5), memory: null, ratio, rank: 2 },
+              { id: "concat/loop", time: null, memory: null, ratio: null, rank: null },
             ],
             pairs: [
               {
@@ -764,9 +768,9 @@ describe("run", () => {
             runtime: NODE,
             repetitionCount: 8,
             contenders: [
-              { id: "concat/plus", time: nsPerCall(200), ratio: null, rank: null },
-              { id: "concat/loop", time: null, ratio: null, rank: null },
-              { id: "concat/join", time: null, ratio: null, rank: null },
+              { id: "concat/plus", time: nsPerCall(200), memory: null, ratio: null, rank: null },
+              { id: "concat/loop", time: null, memory: null, ratio: null, rank: null },
+              { id: "concat/join", time: null, memory: null, ratio: null, rank: null },
             ],
             pairs: [],
           },

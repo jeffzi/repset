@@ -333,7 +333,7 @@ export function collectGarbage(gc: NonNullable<typeof globalThis.gc>): void {
  *   a `CalibrationError`; otherwise a `MeasureError` in `phase`. The wrapped ones have `error` as
  *   cause and carry `teardownError`.
  */
-function failedIn(
+export function failedIn(
   phase: Phase,
   error: unknown,
   teardownError: MeasureError | null = null,
@@ -389,7 +389,7 @@ export async function runtimeNoInline(): Promise<NoInline | undefined> {
 // ---------------------------------------------------------------------------
 
 /** The teardown of a benchmark that gives none. */
-function keep(): void {
+export function keep(): void {
   // A state without a teardown is left to the garbage collector.
 }
 
@@ -571,7 +571,7 @@ type Callback = "setup" | "fn" | "teardown";
  * @throws MeasureError in phase `callback` when `returned` has a callable `then`, or when reading
  *   its `then` throws, with the read's error as cause.
  */
-function requireSynchronous(returned: unknown, callback: Callback): void {
+export function requireSynchronous(returned: unknown, callback: Callback): void {
   const failure = thenableFailure(returned, callback);
   if (failure !== null) throw failure;
 }
@@ -623,7 +623,7 @@ function thenableFailure(returned: unknown, callback: Callback): MeasureError | 
  *   that value, `null` included, or for a teardown that returned a thenable or a value whose `then`
  *   read throws; `null` when the teardown returned anything else.
  */
-function tearDownCatching<State>(
+export function tearDownCatching<State>(
   teardown: (state: State) => unknown,
   state: State,
 ): MeasureError | null {
@@ -767,11 +767,23 @@ export function summarize(
   stored: number,
   callsPerSample: number,
 ): Statistics {
-  const sorted = spansMs
-    .subarray(0, stored)
-    .toSorted()
-    .map((spanMs) => (spanMs / callsPerSample) * NS_PER_MS);
-  const total = sorted.reduce((sum, time) => sum + time, 0);
+  return statisticsOfSorted(
+    spansMs
+      .subarray(0, stored)
+      .toSorted()
+      .map((spanMs) => (spanMs / callsPerSample) * NS_PER_MS),
+  );
+}
+
+/**
+ * Summarizes values already in ascending order.
+ *
+ * @param sorted - The values, ascending, at least one.
+ * @returns Their statistics, the quartiles and the median interpolated.
+ * @throws RangeError when `sorted` is empty.
+ */
+export function statisticsOfSorted(sorted: Float64Array): Statistics {
+  const total = sorted.reduce((sum, value) => sum + value, 0);
   return {
     min: quantile(sorted, 0),
     p25: quantile(sorted, 0.25),

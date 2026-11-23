@@ -2,7 +2,7 @@ import { stripVTControlCharacters } from "node:util";
 
 import { describe, expect, it } from "vitest";
 
-import type { ChildPhase } from "../src/child.js";
+import type { ChildPhase } from "../src/child-protocol.js";
 import type { StrictOmit } from "../src/command-line.js";
 import type {
   Contest,
@@ -18,8 +18,8 @@ import { found, measured as measuredChild } from "./fake-children.js";
 
 type Runtime = Result["runtime"]["name"];
 type Measurement = MeasuredResult["measurements"][number];
-type Stats = Measurement["time"]["stats"];
-type ResultBase = StrictOmit<Result, "status" | "error" | "time" | "measurements">;
+type Stats = NonNullable<Measurement["time"]>["stats"];
+type ResultBase = StrictOmit<Result, "status" | "error" | "time" | "memory" | "measurements">;
 
 /** The statistics of a case whose every time is `median`, measured over 64 samples. */
 function flatStats(median: number): Stats {
@@ -41,7 +41,12 @@ const WIDE_STATS: Stats = { ...flatStats(4656), max: 2_340_000, sampleCount: 120
 /** The one measurement of a measured plain case, holding `stats`. */
 function measurement(stats: Stats): Measurement {
   const { time } = measuredChild(stats.median);
-  return { repetition: null, orderInRepetition: null, time: { ...time, stats, gc: null } };
+  return {
+    repetition: null,
+    orderInRepetition: null,
+    time: { ...time, stats, gc: null },
+    memory: null,
+  };
 }
 
 /** The runtime entry of a result or contest on `runtime`, at its fake version. */
@@ -69,6 +74,7 @@ function measured(id: string, runtime: Runtime, stats: Stats): MeasuredResult {
     status: "ok",
     error: null,
     time: { unit: "ns/call", median: stats.median },
+    memory: null,
     measurements: [measurement(stats)],
   };
 }
@@ -85,7 +91,8 @@ function failed(
     status: "failed",
     error: { phase, message, stack: null, teardownError, output: "" },
     time: null,
-    measurements: [{ repetition: null, orderInRepetition: null, time: null }],
+    memory: null,
+    measurements: [{ repetition: null, orderInRepetition: null, time: null, memory: null }],
   };
 }
 
@@ -121,7 +128,13 @@ function contender(
   ratio: number | null = null,
   rank: number | null = null,
 ): ContestContender {
-  return { id, time: median === null ? null : { unit: "ns/call", median }, ratio, rank };
+  return {
+    id,
+    time: median === null ? null : { unit: "ns/call", median },
+    memory: null,
+    ratio,
+    rank,
+  };
 }
 
 /** The verdict of contenders `a` and `b` of contest `name`: the faster's key, or the kind of tie. */

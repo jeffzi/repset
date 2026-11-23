@@ -8,9 +8,17 @@ function record(entry: unknown): void {
   if (Array.isArray(calls)) calls.push(entry);
 }
 
-/** A case whose every callback records its call under `name`. */
-function benchRecorded(name: string): void {
+/** Counts the entries ending in `suffix` that the call list holds, 0 when none is installed. */
+function recorded(suffix: string): number {
+  const calls: unknown = Reflect.get(globalThis, CALLS);
+  if (!Array.isArray(calls)) return 0;
+  return calls.filter((entry) => typeof entry === "string" && entry.endsWith(suffix)).length;
+}
+
+/** A case whose every callback records its call under `name`, building a state per call when asked. */
+function benchRecorded(name: string, setupPerCall = false): void {
   bench(name, {
+    setupPerCall,
     setup: () => {
       record(`${name} setup`);
       return { name };
@@ -26,6 +34,38 @@ function benchRecorded(name: string): void {
 
 benchRecorded("quiet");
 benchRecorded("other");
+benchRecorded("quiet-per-call", true);
+
+bench("third-fn-throws-per-call", {
+  setup: () => {
+    record("third setup");
+    return 0;
+  },
+  fn: () => {
+    record("third fn");
+    if (recorded(" fn") >= 3) throw new Error("grape");
+  },
+  teardown: () => {
+    record("third teardown");
+  },
+  setupPerCall: true,
+});
+
+bench("setup-throws-string", {
+  setup: () => {
+    // oxlint-disable-next-line typescript/only-throw-error -- the pass must keep a non-Error value as the cause
+    throw "papaya";
+  },
+  fn: () => 0,
+});
+
+bench("teardown-throws", {
+  setup: () => 0,
+  fn: (state) => state + 1,
+  teardown: () => {
+    throw new Error("fig");
+  },
+});
 
 bench("steady", {
   setup: () => Array.from({ length: 512 }, (_, index) => index),
@@ -51,4 +91,42 @@ bench("fn-and-teardown-throw", {
   teardown: () => {
     throw new Error("melon");
   },
+});
+
+bench("second-setup-throws-per-call", {
+  setup: () => {
+    record("second setup");
+    if (recorded(" setup") >= 2) throw new Error("plum");
+    return 0;
+  },
+  fn: () => 0,
+  setupPerCall: true,
+});
+
+bench("fn-throws-per-call", {
+  setup: () => 0,
+  fn: () => {
+    throw new Error("cherry");
+  },
+  setupPerCall: true,
+});
+
+bench("teardown-throws-per-call", {
+  setup: () => 0,
+  fn: (state) => state + 1,
+  teardown: () => {
+    throw new Error("pear");
+  },
+  setupPerCall: true,
+});
+
+bench("fn-and-teardown-throw-per-call", {
+  setup: () => 0,
+  fn: () => {
+    throw new Error("lemon");
+  },
+  teardown: () => {
+    throw new Error("mango");
+  },
+  setupPerCall: true,
 });

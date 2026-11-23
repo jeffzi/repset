@@ -1,7 +1,11 @@
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
-import { runCheck } from "../scripts/check-overhead.js";
+import { repsetReading, runCheck } from "../scripts/check-overhead.js";
 import type { Readers, RepsetReading } from "../scripts/check-overhead.js";
+import { temporaryDir } from "./temporary-dir.js";
 
 /** A repset reading whose timing lasted its `minTime`. */
 const READING: RepsetReading = {
@@ -25,6 +29,27 @@ describe("runCheck", () => {
       const status = runCheck(READERS, () => undefined);
 
       expect(status).toBe(0);
+    });
+  });
+});
+
+describe("repsetReading", () => {
+  describe("when the report's measurement holds no time", () => {
+    it("throws an error naming the scenario", () => {
+      const reportPath = join(temporaryDir("repset-overhead-"), "report.json");
+      const report = {
+        schema: 1,
+        options: { minTime: 1000 },
+        results: [{ status: "ok", measurements: [{ time: null, memory: null }] }],
+        contests: [],
+        interrupted: false,
+      };
+      writeFileSync(reportPath, JSON.stringify(report));
+      const scenario = { runtime: "node", countMode: "calibrated", body: "each" } as const;
+
+      const read = (): unknown => repsetReading(scenario, { status: 0, signal: null }, reportPath);
+
+      expect(read).toThrow("node calibrated each: repset's report holds no time");
     });
   });
 });

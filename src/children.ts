@@ -7,22 +7,11 @@ import { accessSync, constants, statSync } from "node:fs";
 import { delimiter, dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type {
-  ChildError,
-  ChildPhase,
-  ChildRequest,
-  Failed,
-  Listed,
-  ListedCase,
-  Measured,
-  Ran,
-} from "./child.js";
-import type { GcDuringTiming } from "./measure/collections.js";
-import type { SamplingReport, Statistics } from "./measure/measure.js";
+import type { ChildError, ChildRequest, Failed } from "./child-protocol.js";
+import { isFailed, type Mode, readResult, type ResultByMode } from "./child-result.js";
 import { type Runtime, runningRuntime } from "./measure/runtime.js";
 import { ConfigError, failedWith } from "./options.js";
 import { RESULT_FD } from "./result-fd.js";
-import { isRecord, thrownMessage } from "./utils.js";
 
 const THIS_FILE = fileURLToPath(import.meta.url);
 
@@ -37,9 +26,6 @@ const OUTPUT_TAIL_BYTES = 16 * 1024;
  * hold them open for as long as it lives, and the call must not wait for it.
  */
 const CLOSE_GRACE_MS = 250;
-
-/** How much of a result line that does not answer its request a failure message quotes. */
-const QUOTED_LINE_CHARS = 200;
 
 /** A runtime children can start on: the executable to spawn and the version it reports. */
 export interface FoundRuntime {
@@ -64,15 +50,6 @@ export interface StartOptions {
 interface Captured {
   /** The last 16 KiB of the child's stdout and stderr, merged in the order their chunks arrived. */
   readonly output: string;
-}
-
-type Mode = ChildRequest["mode"];
-
-/** The result a child that succeeded gives, by the mode of its request. */
-interface ResultByMode {
-  readonly list: Listed;
-  readonly measure: Measured;
-  readonly once: Ran;
 }
 
 interface Succeeded<M extends Mode> extends Captured {
@@ -107,57 +84,6 @@ type Ending =
 
 /** How a spawned process ended, or the error that kept it from starting. */
 type Ended = Ending | { readonly kind: "error"; readonly error: Error };
-
-/** Every {@link ChildPhase}: a phase missing here fails to compile. */
-const CHILD_PHASE_KEYS: Readonly<Record<ChildPhase, true>> = {
-  setup: true,
-  fn: true,
-  teardown: true,
-  "optimized-away": true,
-  calibration: true,
-  child: true,
-  load: true,
-};
-
-const CHILD_PHASES: ReadonlySet<string> = new Set(Object.keys(CHILD_PHASE_KEYS));
-
-/** Every key of {@link Statistics}: a key missing here fails to compile. */
-const STATISTIC_KEYS: Readonly<Record<keyof Statistics, true>> = {
-  min: true,
-  p25: true,
-  median: true,
-  p75: true,
-  p99: true,
-  max: true,
-  mean: true,
-  sampleCount: true,
-};
-
-const STATISTICS = Object.keys(STATISTIC_KEYS);
-
-/** Every numeric key of a child's sampling report: a key missing here fails to compile. */
-const SAMPLING_NUMBER_KEYS: Readonly<
-  Record<Exclude<keyof SamplingReport, "callsPerSampleFixed">, true>
-> = {
-  timerResolutionNs: true,
-  callsPerSample: true,
-  warmupSampleCount: true,
-  timingAttemptCount: true,
-  timingMs: true,
-};
-
-const SAMPLING_NUMBERS = Object.keys(SAMPLING_NUMBER_KEYS);
-
-/** Every key of {@link GcDuringTiming}: a key missing here fails to compile. */
-const GC_NUMBER_KEYS: Readonly<Record<keyof GcDuringTiming, true>> = {
-  collectionCount: true,
-  durationMs: true,
-  maxDurationMs: true,
-  nodeMinorCollectionCount: true,
-  nodeMajorCollectionCount: true,
-};
-
-const GC_NUMBERS = Object.keys(GC_NUMBER_KEYS);
 
 // ---------------------------------------------------------------------------
 // Runtime discovery
@@ -332,7 +258,7 @@ export async function startChild<R extends ChildRequest>(
   if (ended.kind === "error") {
     return noResult(`could not start the child: ${ended.error.message}`, tail.text());
   }
-  return outcomeOf(ended, readResult<R["mode"]>(written(), request.mode), tail.text());
+  return outcomeOf(ended, readResult<R["mode"]>(written(), request.mode, request), tail.text());
 }
 
 /**
@@ -496,101 +422,4 @@ export function howItEnded(subject: string, ending: Exclude<Ending, { kind: "sto
   }
   if (ending.signal !== null) return `${subject} was killed by ${ending.signal}`;
   return `${subject} exited with status ${ending.code ?? "unknown"}`;
-}
-
-// ---------------------------------------------------------------------------
-// Result parsing
-// ---------------------------------------------------------------------------
-
-/**
- * Reads the result line a child wrote on file descriptor {@link RESULT_FD}.
- *
- * @param written - Everything the child wrote on file descriptor {@link RESULT_FD}.
- * @param mode - The mode of the child's request, whose result shape the line must have.
- * @returns The result, or what was wrong with what the child wrote.
- */
-function readResult<M extends Mode>(written: string, mode: M): ResultByMode[M] | Failed | string {
-  if (written === "") return "it wrote no result";
-  if (!written.endsWith("\n")) return "its result line has no newline";
-  const line = written.slice(0, -1);
-  if (line.includes("\n")) {
-    return `it wrote ${written.split("\n").length - 1} lines on file descriptor ${RESULT_FD}, not one`;
-  }
-  let value: unknown;
-  try {
-    value = JSON.parse(line);
-  } catch (error) {
-    return `its result line is not JSON: ${thrownMessage(error)}`;
-  }
-  if (isFailed(value)) return value;
-  const answers: { readonly [K in Mode]: (value: unknown) => value is ResultByMode[K] } = {
-    list: isListed,
-    measure: isMeasured,
-    once: isRan,
-  };
-  const answer = answers[mode];
-  if (answer(value)) return value;
-  return `its result line does not answer a ${mode} request: ${line.slice(0, QUOTED_LINE_CHARS)}`;
-}
-
-/** Whether `value` is an object whose every `keys` field is a number. */
-function hasNumbers(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
-  return isRecord(value) && keys.every((key) => typeof value[key] === "number");
-}
-
-/** Whether `value` holds a string `message` and a `stack` that is a string or `null`. */
-function hasMessageAndStack(value: unknown): value is Record<string, unknown> {
-  return (
-    isRecord(value) &&
-    typeof value["message"] === "string" &&
-    (value["stack"] === null || typeof value["stack"] === "string")
-  );
-}
-
-function isFailed(value: unknown): value is Failed {
-  if (!isRecord(value) || value["status"] !== "failed") return false;
-  const { error } = value;
-  return (
-    hasMessageAndStack(error) &&
-    typeof error["phase"] === "string" &&
-    CHILD_PHASES.has(error["phase"]) &&
-    (error["teardownError"] === null || hasMessageAndStack(error["teardownError"]))
-  );
-}
-
-function isListedCase(value: unknown): value is ListedCase {
-  return (
-    isRecord(value) &&
-    typeof value["id"] === "string" &&
-    typeof value["setupPerCall"] === "boolean" &&
-    typeof value["name"] === "string" &&
-    (typeof value["contender"] === "string" || value["contender"] === null)
-  );
-}
-
-function isListed(value: unknown): value is Listed {
-  return (
-    isRecord(value) &&
-    value["status"] === "ok" &&
-    Array.isArray(value["cases"]) &&
-    value["cases"].every(isListedCase)
-  );
-}
-
-function isMeasured(value: unknown): value is Measured {
-  if (!isRecord(value) || value["status"] !== "ok" || !isRecord(value["time"])) return false;
-  const { stats, sampling, checks, gc, rawSamples } = value["time"];
-  return (
-    rawSamples === null &&
-    hasNumbers(stats, STATISTICS) &&
-    hasNumbers(sampling, SAMPLING_NUMBERS) &&
-    typeof sampling["callsPerSampleFixed"] === "boolean" &&
-    hasNumbers(checks, ["ratioToEmptyBody"]) &&
-    (gc === null || hasNumbers(gc, GC_NUMBERS))
-  );
-}
-
-/** Whether `value` is a once child's result: `status` `"ok"` and nothing else. */
-function isRan(value: unknown): value is Ran {
-  return isRecord(value) && value["status"] === "ok" && Object.keys(value).length === 1;
 }

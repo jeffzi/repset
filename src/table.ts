@@ -5,27 +5,35 @@
  */
 import { stripVTControlCharacters, styleText } from "node:util";
 
-import type { ChildError } from "./child.js";
+import type { ChildError } from "./child-protocol.js";
+import type { Measure } from "./options.js";
 import type { Contest, ContestPair, FailedResult, MeasuredResult, Result } from "./report.js";
 import { GRAPHEMES, valueAt } from "./utils.js";
 
 /** Time units from nanoseconds up, each a thousand of the one before. */
 const TIME_UNITS = ["ns", "µs", "ms", "s"] as const;
 
-/** How many of one time unit make one of the next. */
+/** Memory units from bytes up, each a thousand of the one before: the SI spelling, as KiB and MiB name 1024 steps. */
+const MEMORY_UNITS = ["B", "kB", "MB"] as const;
+
+/** How many of one unit make one of the next. */
 const UNIT_STEP = 1000;
 
 const SIGNIFICANT_DIGITS = 3;
 
 const COLUMN_SEPARATOR = " │ ";
 
-const HEADER = ["case", "median", "mean", "min", "max", "samples"] as const;
+const TIME_HEADER = ["median", "mean", "min", "max", "samples"] as const;
 
-const ALIGN = ["left", "right", "right", "right", "right", "right"] as const;
+const CONTEST_TIME_HEADER = ["median", "ratio", "rank"] as const;
 
-const CONTEST_HEADER = ["contender", "median", "ratio", "rank"] as const;
+const MEMORY_HEADER = "memory";
 
-const CONTEST_ALIGN = ["left", "right", "right", "right"] as const;
+/** What a row on a runtime with no heap reading shows in the memory column. */
+const NO_HEAP_READING = "n/a";
+
+/** What a row whose memory reading kept no pair free of a collection shows in the memory column. */
+const NO_CLEAN_PAIR = "no clean pair";
 
 const COMPARISON_TOOL = "A verdict between revisions takes a comparison tool.";
 
@@ -93,16 +101,41 @@ function significant(value: number): string {
   return text.includes("e") ? String(Number(text)) : text;
 }
 
-/** Prints a time in nanoseconds in the unit that keeps three significant digits, up to seconds. */
-function formatTime(ns: number): string {
-  let value = ns;
+/**
+ * Prints `amount` in the first of `units` that keeps three significant digits, up to the last.
+ *
+ * @param amount - The amount, in the first of `units`; negative keeps its sign.
+ * @param units - The units from the smallest up, each {@link UNIT_STEP} of the one before.
+ * @returns The amount scaled to its unit, then the unit's name.
+ */
+function formatIn(amount: number, units: readonly string[]): string {
+  let value = amount;
   let unit = 0;
   // Compare the rounded value, so 999.7 ns prints as 1.00 µs rather than 1000 ns.
-  while (unit < TIME_UNITS.length - 1 && Math.abs(Number(significant(value))) >= UNIT_STEP) {
+  while (unit < units.length - 1 && Math.abs(Number(significant(value))) >= UNIT_STEP) {
     value /= UNIT_STEP;
     unit += 1;
   }
-  return `${significant(value)} ${TIME_UNITS[unit]}`;
+  return `${significant(value)} ${units[unit] ?? ""}`;
+}
+
+/** Prints a time in nanoseconds in the unit that keeps three significant digits, up to seconds. */
+function formatTime(ns: number): string {
+  return formatIn(ns, TIME_UNITS);
+}
+
+/**
+ * The memory column's cell of a measured case.
+ *
+ * @param result - The measured result.
+ * @returns Its bytes per call in the unit that keeps three significant digits, up to megabytes;
+ *   `n/a` when its runtime has no heap reading, or `no clean pair` when no pair of samples was free
+ *   of a collection.
+ */
+function memoryCell(result: MeasuredResult): string {
+  if (result.memory === null) return NO_HEAP_READING;
+  if (result.memory.median === null) return NO_CLEAN_PAIR;
+  return formatIn(result.memory.median, MEMORY_UNITS);
 }
 
 // ---------------------------------------------------------------------------
@@ -110,16 +143,18 @@ function formatTime(ns: number): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Formats a measured case's row; the median comes from the result's time, the other statistics
- * from its one measurement.
+ * The time cells of a measured case's row; the median comes from the result's time, the other
+ * statistics from its one measurement.
  *
  * @param result - The measured result.
- * @returns Its id, median, mean, min, max and sample count, the times per call.
+ * @returns Its median, mean, min, max and sample count, the times per call; none when it was not
+ *   timed.
  */
-function measuredCells(result: MeasuredResult): string[] {
-  const { stats } = result.measurements[0].time;
+function timeCells(result: MeasuredResult): string[] {
+  const { time } = result.measurements[0];
+  if (time === null || result.time === null) return [];
+  const { stats } = time;
   return [
-    result.id,
     formatTime(result.time.median),
     formatTime(stats.mean),
     formatTime(stats.min),
@@ -281,12 +316,40 @@ function boxLines(
   return [rule("┬", widths), headerCells.join(COLUMN_SEPARATOR), rule("┼", widths), ...rows];
 }
 
-const PLAIN_COLUMNS: Columns = {
-  header: HEADER,
-  align: ALIGN,
-  cellsOf: measuredCells,
-  labelOf: ({ id }) => id,
-};
+/**
+ * The columns of a table: its label column, then the columns each measure adds, memory last.
+ *
+ * @param label - The label column's header.
+ * @param timeHeader - The headers of the columns time adds.
+ * @param measure - What the run measured.
+ * @returns The headers, every column after the label right-aligned.
+ */
+function columnsOf(
+  label: string,
+  timeHeader: readonly string[],
+  measure: readonly Measure[],
+): Pick<Columns, "header" | "align"> {
+  const header = [
+    label,
+    ...(measure.includes("time") ? timeHeader : []),
+    ...(measure.includes("memory") ? [MEMORY_HEADER] : []),
+  ];
+  return { header, align: header.map((_, column) => (column === 0 ? "left" : "right")) };
+}
+
+/** The memory cell of `result`'s row when `measure` holds memory, none otherwise. */
+function memoryCells(result: MeasuredResult, measure: readonly Measure[]): string[] {
+  return measure.includes("memory") ? [memoryCell(result)] : [];
+}
+
+/** The columns of a run of plain cases under `measure`. */
+function plainColumns(measure: readonly Measure[]): Columns {
+  return {
+    ...columnsOf("case", TIME_HEADER, measure),
+    cellsOf: (result) => [result.id, ...timeCells(result), ...memoryCells(result, measure)],
+    labelOf: ({ id }) => id,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Contest sub-tables
@@ -298,20 +361,20 @@ function contenderLabel(result: Result): string {
 }
 
 /**
- * The cells of a measured contender's row.
+ * The time cells of a measured contender's row.
  *
  * @param contest - Its contest's entry.
  * @param result - Its result.
- * @returns Its key and median, then, when the contest was judged, its ratio to the first contender
- *   and its rank.
+ * @returns Its median, then, when the contest was judged, its ratio to the first contender and its
+ *   rank; none when it was not timed.
  */
-function contenderCells(contest: Contest, result: MeasuredResult): string[] {
-  const label = contenderLabel(result);
-  if (contest.pairs.length === 0) return [label, formatTime(result.time.median)];
+function contenderTimeCells(contest: Contest, result: MeasuredResult): string[] {
+  if (result.time === null) return [];
+  if (contest.pairs.length === 0) return [formatTime(result.time.median)];
   const entry = contest.contenders.find(({ id }) => id === result.id);
   const ratio = entry?.ratio == null ? "" : `${entry.ratio.toFixed(2)}×`;
   const rank = entry?.rank == null ? "" : String(entry.rank);
-  return [label, formatTime(result.time.median), ratio, rank];
+  return [formatTime(result.time.median), ratio, rank];
 }
 
 /**
@@ -350,46 +413,62 @@ function twoFinished(contest: Contest): boolean {
 }
 
 /**
+ * The lines under a contest's sub-table on its verdict.
+ *
+ * @param contest - The contest's entry.
+ * @param results - Its contenders' results, in the entry's order.
+ * @param repetitions - Its repetitions, as the heading prints them.
+ * @returns When the contest was judged, a line per kind of tie its pairs had; when it was not, the
+ *   `not judged` line: its repetitions, or that fewer than two contenders finished.
+ */
+function verdictLines(contest: Contest, results: readonly Result[], repetitions: string): string[] {
+  if (contest.pairs.length > 0) return tieLines(contest, results);
+  return [`not judged: ${twoFinished(contest) ? repetitions : TOO_FEW_FINISHED}`];
+}
+
+/**
  * Lays out one contest's sub-table.
  *
  * @param contest - The contest's entry.
  * @param contestResults - Its contenders' results.
  * @param color - Whether to show the name bold, the repetitions, header and the lines under the
  *   rows dim, and each failure in red.
+ * @param measure - What the run measured: the time columns and the verdict lines show only with
+ *   time, the memory column only with memory.
  * @returns The contest's name and repetitions, a rule, the column header, a rule, a row per
- *   contender in the entry's order, then, when the contest was judged, a line per kind of tie its
- *   pairs had, and when it was not, the `not judged` line: its repetitions, or that fewer than two
- *   contenders finished.
+ *   contender in the entry's order, then, with time, the lines on its verdict.
  */
 function contestLines(
   contest: Contest,
   contestResults: readonly Result[],
   color: boolean,
+  measure: readonly Measure[],
 ): string[] {
   const order = contest.contenders.map(({ id }) => id);
   const results = contestResults.toSorted(
     (left, right) => order.indexOf(left.id) - order.indexOf(right.id),
   );
-  const judged = contest.pairs.length > 0;
-  const header = judged ? CONTEST_HEADER : CONTEST_HEADER.slice(0, 2);
+  const timeHeader =
+    contest.pairs.length > 0 ? CONTEST_TIME_HEADER : CONTEST_TIME_HEADER.slice(0, 1);
   const { repetitionCount } = contest;
   const repetitions = `${String(repetitionCount)} repetition${repetitionCount === 1 ? "" : "s"}`;
-  const reason = twoFinished(contest) ? repetitions : TOO_FEW_FINISHED;
+  const verdict = measure.includes("time") ? verdictLines(contest, results, repetitions) : [];
   return [
     `${paint("bold", contest.name, color)}${paint("dim", ` · ${repetitions}`, color)}`,
     ...boxLines(
       {
-        header,
-        align: CONTEST_ALIGN,
-        cellsOf: (result) => contenderCells(contest, result),
+        ...columnsOf("contender", timeHeader, measure),
+        cellsOf: (result) => [
+          contenderLabel(result),
+          ...contenderTimeCells(contest, result),
+          ...memoryCells(result, measure),
+        ],
         labelOf: contenderLabel,
       },
       results,
       color,
     ),
-    ...(judged ? tieLines(contest, results) : [`not judged: ${reason}`]).map((line) =>
-      paint("dim", line, color),
-    ),
+    ...verdict.map((line) => paint("dim", line, color)),
   ];
 }
 
@@ -432,10 +511,15 @@ function blocksOf(results: readonly Result[], contestOf: ReadonlyMap<string, Con
  * @param blocks - The section's blocks, in run order.
  * @param color - Whether to show the heading bold, the column headers dim and each
  *   failure in red.
+ * @param measure - What the run measured, which sets each table's columns.
  * @returns Its heading, then each block, a contest's or one after another block opened by a blank
  *   line.
  */
-function sectionLines(blocks: readonly Block[], color: boolean): string[] {
+function sectionLines(
+  blocks: readonly Block[],
+  color: boolean,
+  measure: readonly Measure[],
+): string[] {
   const first = blocks[0]?.results[0];
   const heading = first === undefined ? "" : `${first.runtime.name} ${first.runtime.version}`;
   return [
@@ -443,8 +527,8 @@ function sectionLines(blocks: readonly Block[], color: boolean): string[] {
     ...blocks.flatMap((block, index) => {
       const lines =
         block.contest === null
-          ? boxLines(PLAIN_COLUMNS, block.results, color)
-          : contestLines(block.contest, block.results, color);
+          ? boxLines(plainColumns(measure), block.results, color)
+          : contestLines(block.contest, block.results, color, measure);
       return block.contest === null && index === 0 ? lines : ["", ...lines];
     }),
   ];
@@ -496,7 +580,13 @@ function stoppedContests(
           measurements.flatMap(({ repetition }) => (repetition === null ? [] : [repetition])),
         ),
       ),
-      contenders: contenders.map(({ id }) => ({ id, time: null, ratio: null, rank: null })),
+      contenders: contenders.map(({ id }) => ({
+        id,
+        time: null,
+        memory: null,
+        ratio: null,
+        rank: null,
+      })),
       pairs: [],
     };
   });
@@ -510,17 +600,23 @@ function stoppedContests(
  * @param options - Whether the stream the table goes to shows color; the footer's lines show dim.
  *   `contested` holds, per runtime, the case ids of the contenders scheduled in a contest there,
  *   none by default: a contender's result that no finished contest lists shows in its stopped
- *   contest's sub-table when its id is among them, and as a plain case otherwise.
+ *   contest's sub-table when its id is among them, and as a plain case otherwise. `measure` holds
+ *   what the run measured, time alone by default: without time, the time columns and the lines on
+ *   contest verdicts are absent; with memory, each measured row ends in a memory column.
  * @returns The table, then the footer after a blank line when it has anything to say, ending in a
  *   newline, or the empty string when there is no result.
  */
 export function formatTable(
   results: readonly Result[],
   contests: readonly Contest[],
-  options: { readonly color: boolean; readonly contested?: ScheduledContests },
+  options: {
+    readonly color: boolean;
+    readonly contested?: ScheduledContests;
+    readonly measure?: readonly Measure[];
+  },
 ): string {
   if (results.length === 0) return "";
-  const { color, contested } = options;
+  const { color, contested, measure = ["time"] } = options;
   const byRuntime = Map.groupBy(results, (result) => result.runtime.name);
   const ran = [...byRuntime].map(([runtime, section]) => {
     const finished = contests.filter((contest) => contest.runtime.name === runtime);
@@ -539,9 +635,9 @@ export function formatTable(
   const sections = ran.map(({ blocks }) => blocks);
   const shown = [...contests, ...ran.flatMap(({ stopped }) => stopped)];
   const plainRan = sections.some((blocks) => blocks.some(({ contest }) => contest === null));
-  const footer =
-    shown.length === 0 ? [FOOTER] : [...contestFooter(shown), ...(plainRan ? [PLAIN_FOOTER] : [])];
-  const lines = sections.map((blocks) => sectionLines(blocks, color).join("\n"));
+  const verdicts = measure.includes("time") ? contestFooter(shown) : [];
+  const footer = shown.length === 0 ? [FOOTER] : [...verdicts, ...(plainRan ? [PLAIN_FOOTER] : [])];
+  const lines = sections.map((blocks) => sectionLines(blocks, color, measure).join("\n"));
   const footerBlock = footer.map((line) => paint("dim", line, color)).join("\n");
   const blocks = footer.length > 0 ? [...lines, footerBlock] : lines;
   return `${blocks.join("\n\n")}\n`;

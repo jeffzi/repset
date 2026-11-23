@@ -3,9 +3,11 @@ import type {
   ChildPhase,
   ListedCase,
   Measured,
+  MeasuredMemory,
+  MeasuredTime,
   MeasureRequest,
   OnceRequest,
-} from "../src/child.js";
+} from "../src/child-protocol.js";
 import type {
   findRuntime,
   FoundRuntime,
@@ -31,10 +33,16 @@ export function found(runtime: Runtime): FoundRuntime {
 /** A runtime lookup that finds every runtime, as {@link found} describes it. */
 export const findAny: FindRuntime = async (runtime) => found(runtime);
 
+/** A measuring child's result that timed its case and read no memory. */
+export interface TimedMeasured extends Measured {
+  readonly time: MeasuredTime;
+}
+
 /** A measurement whose median is `median`. */
-export function measured(median: number): Measured {
+export function measured(median: number): TimedMeasured {
   return {
     status: "ok",
+    memory: null,
     time: {
       stats: { min: 1, p25: 2, median, p75: 4, p99: 5, max: 6, mean: 3.5, sampleCount: 64 },
       sampling: {
@@ -65,6 +73,47 @@ export function measuredOutcome(median: number): Outcome {
 
 /** An outcome in which the child ran its case once and it passed. */
 export const ranOnce: Outcome = { status: "ok", result: { status: "ok" }, output: "" };
+
+/** A measurement's memory block whose per-call median is `median`, with no statistics when `median` is `null`. */
+export function memoryOf(median: number | null): MeasuredMemory {
+  return {
+    stats:
+      median === null
+        ? null
+        : {
+            min: median - 2,
+            p25: median - 1,
+            median,
+            p75: median + 1,
+            p99: median + 2,
+            max: median + 3,
+            mean: median + 0.5,
+            sampleCount: 21,
+          },
+    sampling: { callsPerSample: 64 },
+    rawSamples: null,
+  };
+}
+
+/** The medians a fake measuring child reads: `time` in nanoseconds and `memory` in bytes per call. */
+export interface Readings {
+  readonly time?: number;
+  readonly memory?: number | null;
+}
+
+/** An outcome measuring what `request` asks, at the medians `readings` gives (4656 ns and 40 B by default). */
+export function answered(request: Asked, { time = 4656, memory = 40 }: Readings = {}): Outcome {
+  if (request.mode !== "measure") return ranOnce;
+  return {
+    status: "ok",
+    result: {
+      status: "ok",
+      time: request.time ? measured(time).time : null,
+      memory: request.memory ? memoryOf(memory) : null,
+    },
+    output: "",
+  };
+}
 
 /** A case to list, whose benchmark name defaults to its id and whose contender defaults to `null`. */
 export interface CaseToList

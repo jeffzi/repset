@@ -4,7 +4,7 @@ import { extname, join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { startChild as startBuiltChild } from "../dist/children.js";
-import type { ChildRequest } from "../src/child.js";
+import type { ChildRequest } from "../src/child-protocol.js";
 import {
   findRuntime,
   startChild,
@@ -147,40 +147,97 @@ const NODE_GC = {
   nodeMajorCollectionCount: 1,
 } as const;
 
-/** A measurement line, complete in every field, with the given `status` and `gc`. */
-function measuredLine(status: string, gc: object | null): string {
-  return JSON.stringify({
-    status,
-    time: {
-      stats: { min: 1, p25: 1, median: 1, p75: 1, p99: 1, max: 1, mean: 1, sampleCount: 8 },
-      sampling: {
-        timerResolutionNs: 1,
-        callsPerSample: 1,
-        warmupSampleCount: 1,
-        timingAttemptCount: 1,
-        timingMs: 5,
-        callsPerSampleFixed: false,
-      },
-      checks: { ratioToEmptyBody: 1 },
-      gc,
-      rawSamples: null,
-    },
-  });
-}
-
-/** A measure request whose `file` is a measurement line, complete but for `gc`, that `echo.ts` writes back. */
-function echoingMeasured(gc: object | null): ChildRequest {
+/** A `time` block, complete in every field, with the given `gc`. */
+function timeBlock(gc: object | null): object {
   return {
-    mode: "measure",
-    file: `${measuredLine("ok", gc)}\n`,
-    id: "apple",
-    minTime: 5,
-    minSamples: 8,
+    stats: { min: 1, p25: 1, median: 1, p75: 1, p99: 1, max: 1, mean: 1, sampleCount: 8 },
+    sampling: {
+      timerResolutionNs: 1,
+      callsPerSample: 1,
+      warmupSampleCount: 1,
+      timingAttemptCount: 1,
+      timingMs: 5,
+      callsPerSampleFixed: false,
+    },
+    checks: { ratioToEmptyBody: 1 },
+    gc,
+    rawSamples: null,
   };
 }
 
+/** A `memory` block, complete in every field, with the given `stats`. */
+function memoryBlock(stats: object | null): object {
+  return { stats, sampling: { callsPerSample: 64 }, rawSamples: null };
+}
+
+/** Statistics complete in every field, as a `memory` block holds them. */
+const MEMORY_STATS = {
+  min: 40,
+  p25: 40,
+  median: 40,
+  p75: 40,
+  p99: 40,
+  max: 40,
+  mean: 40,
+  sampleCount: 21,
+} as const;
+
+/** A measurement line with the given `status`, `time` and `memory`. */
+function measuredLine(status: string, time: object | null, memory: object | null = null): string {
+  return JSON.stringify({ status, time, memory });
+}
+
+/** What a measure request asks the child to read. */
+interface Asked {
+  readonly time: boolean;
+  readonly memory: boolean;
+}
+
+const TIME_ONLY: Asked = { time: true, memory: false };
+
+/** A measure request asking for `asked`, whose `file` is the result line `echo.ts` writes back. */
+function echoingLine(line: string, asked: Asked = TIME_ONLY): ChildRequest {
+  return { mode: "measure", file: `${line}\n`, id: "apple", minTime: 5, minSamples: 8, ...asked };
+}
+
+/** A time-only measure request whose `file` is a measurement line, complete but for `gc`, that `echo.ts` writes back. */
+function echoingMeasured(gc: object | null): ChildRequest {
+  return echoingLine(measuredLine("ok", timeBlock(gc)));
+}
+
 /** A measurement complete in every field, whose `status` alone does not answer a measure request. */
-const MEASURED_PEAR_LINE = measuredLine("pear", null);
+const MEASURED_PEAR_LINE = measuredLine("pear", timeBlock(null));
+
+/** The bytes per call a known body's reading may stray from its size. */
+const BAND_BYTES = 8;
+
+/** How the built-child tests start a child that loads a TypeScript benchmark file. */
+const BUILT_OPTIONS = { timeout: KILL_AFTER_MS, nodeImport: "tsx" } as const;
+
+/** A request to time the case `id` of the `memory.ts` fixture, then read its memory. */
+function measuringMemory(id: string): ChildRequest {
+  return {
+    mode: "measure",
+    file: benchFile("memory.ts"),
+    id,
+    minTime: 5,
+    minSamples: 8,
+    time: true,
+    memory: true,
+  };
+}
+
+/** The median of a measured outcome's memory statistics; throws when the outcome holds none. */
+function memoryMedian(outcome: Outcome): number {
+  const median: unknown =
+    outcome.status === "ok" && "memory" in outcome.result
+      ? outcome.result.memory?.stats?.median
+      : undefined;
+  if (typeof median !== "number") {
+    throw new Error(`no memory median in ${JSON.stringify(outcome).slice(0, 400)}`);
+  }
+  return median;
+}
 
 describe("findRuntime", { timeout: SPAWN_TIMEOUT_MS }, () => {
   describe("when the runtime is the one the parent runs on", () => {
@@ -385,6 +442,39 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
       expect(outcome).toStrictEqual(expected);
     });
 
+    it.each([
+      {
+        why: "time and memory blocks for a request asking both",
+        result: { time: timeBlock(null), memory: memoryBlock(MEMORY_STATS) },
+        asked: { time: true, memory: true },
+      },
+      {
+        why: "a null time and a memory block for a request asking memory alone",
+        result: { time: null, memory: memoryBlock(MEMORY_STATS) },
+        asked: { time: false, memory: true },
+      },
+      {
+        why: "a memory block whose statistics are null, no pair having been clean",
+        result: { time: null, memory: memoryBlock(null) },
+        asked: { time: false, memory: true },
+      },
+      {
+        why: "a null time and a null memory for a request asking memory alone, as on Bun",
+        result: { time: null, memory: null },
+        asked: { time: false, memory: true },
+      },
+    ])("returns a measurement with $why", async ({ result, asked }) => {
+      const line = measuredLine("ok", result.time, result.memory);
+
+      const outcome = await startFixture("echo.ts", echoingLine(line, asked));
+
+      expect(outcome).toStrictEqual({
+        status: "ok",
+        result: { status: "ok", ...result },
+        output: "",
+      });
+    });
+
     it("keeps the result when the child then exited non-zero", async () => {
       const outcome = await startFixture("line-then-exit.ts");
 
@@ -402,16 +492,7 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
     it.each([
       { why: "no line", request: { mode: "list", file: "" } },
       { why: "a line with no newline", request: { mode: "list", file: LISTED_LINE } },
-      {
-        why: "a listing for a measure request",
-        request: {
-          mode: "measure",
-          file: `${LISTED_LINE}\n`,
-          id: "apple",
-          minTime: 5,
-          minSamples: 8,
-        },
-      },
+      { why: "a listing for a measure request", request: echoingLine(LISTED_LINE) },
       { why: "a listing for a once request", request: echoing(`${LISTED_LINE}\n`) },
       {
         why: "a listing whose case has no name",
@@ -442,16 +523,60 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
       expect(outcome).toMatchObject(NO_RESULT);
     });
 
-    it("names the measure request in the failure when the measurement's status is neither ok nor failed", async () => {
-      const request = {
-        mode: "measure",
-        file: `${MEASURED_PEAR_LINE}\n`,
-        id: "apple",
-        minTime: 5,
-        minSamples: 8,
-      } as const;
+    it.each([
+      {
+        why: "a null time for a request asking time",
+        result: { time: null, memory: null },
+        asked: TIME_ONLY,
+      },
+      {
+        why: "a time block for a request not asking time",
+        result: { time: timeBlock(null), memory: memoryBlock(MEMORY_STATS) },
+        asked: { time: false, memory: true },
+      },
+      {
+        why: "a memory block for a request not asking memory",
+        result: { time: timeBlock(null), memory: memoryBlock(MEMORY_STATS) },
+        asked: TIME_ONLY,
+      },
+      {
+        why: "no memory at all",
+        result: { time: timeBlock(null), memory: undefined },
+        asked: TIME_ONLY,
+      },
+      {
+        why: "no memory at all for a request asking memory",
+        result: { time: null, memory: undefined },
+        asked: { time: false, memory: true },
+      },
+      {
+        why: "a memory block holding raw samples",
+        result: { time: null, memory: { ...memoryBlock(MEMORY_STATS), rawSamples: [] } },
+        asked: { time: false, memory: true },
+      },
+      {
+        why: "a memory block with no calls per sample",
+        result: { time: null, memory: { stats: MEMORY_STATS, sampling: {}, rawSamples: null } },
+        asked: { time: false, memory: true },
+      },
+      {
+        why: "a memory block whose statistics lack the sample count",
+        result: {
+          time: null,
+          memory: memoryBlock({ ...MEMORY_STATS, sampleCount: undefined }),
+        },
+        asked: { time: false, memory: true },
+      },
+    ])("fails in phase child with a null stack for $why", async ({ result, asked }) => {
+      const line = JSON.stringify({ status: "ok", ...result });
 
-      const outcome = await startFixture("echo.ts", request);
+      const outcome = await startFixture("echo.ts", echoingLine(line, asked));
+
+      expect(outcome).toMatchObject(NO_RESULT);
+    });
+
+    it("names the measure request in the failure when the measurement's status is neither ok nor failed", async () => {
+      const outcome = await startFixture("echo.ts", echoingLine(MEASURED_PEAR_LINE));
 
       expect(outcome).toMatchObject(noResultSaying(expect.stringMatching(/\bmeasure\b/)));
     });
@@ -589,6 +714,7 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
             id: "steady",
             minTime: 5,
             minSamples: 8,
+            ...TIME_ONLY,
           },
           { timeout: KILL_AFTER_MS, nodeImport: "tsx" },
         );
@@ -609,6 +735,30 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
       });
 
       expect(outcome).toMatchObject(THREE_CASES_LISTED);
+    });
+
+    describe("when the request asks time and memory", () => {
+      it.each([
+        { id: "zero", bytes: 0 },
+        { id: "object", bytes: 40 },
+        { id: "zero-per-call", bytes: 0 },
+        { id: "object-per-call", bytes: 40 },
+      ])(
+        "reads $id at $bytes bytes per call within the band, after timing",
+        async ({ id, bytes }) => {
+          const outcome = await startBuiltChild(NODE, measuringMemory(id), BUILT_OPTIONS);
+
+          expect(Math.abs(memoryMedian(outcome) - bytes)).toBeLessThanOrEqual(BAND_BYTES);
+        },
+      );
+
+      it.runIf(requiresRealBunHere())("reads a null memory on Bun", async () => {
+        const bun = await findRuntime("bun", LOOKUP);
+
+        const outcome = await startBuiltChild(bun, measuringMemory("object"), BUILT_OPTIONS);
+
+        expect(outcome).toMatchObject({ status: "ok", result: { status: "ok", memory: null } });
+      });
     });
   });
 

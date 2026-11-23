@@ -58,6 +58,21 @@ describe("main", () => {
       });
     });
 
+    it("prints each selected case id with --list on Bun when memory alone is measured", async () => {
+      const dir = workspace();
+
+      const ended = await command(
+        dir,
+        ["--list", ...FILES, "--runtime", "bun", "--measure", "memory"],
+        { startChild: startsNoCase },
+      );
+
+      expect({ code: ended.code, stdout: ended.stdout }).toStrictEqual({
+        code: 0,
+        stdout: "sort/fast\nparse/fast\n",
+      });
+    });
+
     it("prints one line per case with --once, exiting 0", async () => {
       const dir = workspace();
 

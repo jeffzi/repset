@@ -349,7 +349,11 @@ async function measure(command: Command, context: Context): Promise<number> {
   progress.stop();
   const tableTo = toStdout ? "stderr" : "stdout";
   context[tableTo].write(
-    formatTable(report.results, report.contests, { color: context.colors[tableTo], contested }),
+    formatTable(report.results, report.contests, {
+      color: context.colors[tableTo],
+      contested,
+      measure: report.options.measure,
+    }),
   );
   if (toStdout) stdout.write(reportText(report));
   let written = true;

@@ -7,15 +7,16 @@ import { readFile } from "node:fs/promises";
 import { cpus as realCpus } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import type { ChildError, MeasureRequest } from "./child.js";
+import type { ChildError, MeasureRequest } from "./child-protocol.js";
 import type { FoundRuntime } from "./children.js";
+import { contestOf } from "./judge.js";
 import type { Runtime } from "./measure/runtime.js";
-import type { ResolvedOptions } from "./options.js";
+import { ConfigError, type ResolvedOptions } from "./options.js";
 import type {
   CaseMeasurement,
   Contest,
-  ContestPair,
   FailedResult,
+  HeadlineMemory,
   HeadlineTime,
   Host,
   MeasuredResult,
@@ -24,10 +25,9 @@ import type {
   Result,
   ResultBase,
 } from "./report.js";
-import { ALPHA, isContest, type OnceInput, type StartHandlers, startEach } from "./schedule.js";
+import { isContest, type OnceInput, type StartHandlers, startEach } from "./schedule.js";
 import type { SelectedCase } from "./select.js";
-import { hodgesLehmann, holm, signedRankInterval, signedRankP } from "./signed-rank.js";
-import { pairsOf, property, quantile, valueAt } from "./utils.js";
+import { property, quantile } from "./utils.js";
 
 /**
  * The package's own `package.json`: one directory above this module, which holds from `src/` and
@@ -118,168 +118,6 @@ function resultBase(selected: SelectedCase, runtime: FoundRuntime): ResultBase {
 }
 
 // ---------------------------------------------------------------------------
-// Contest judgment
-// ---------------------------------------------------------------------------
-
-/** How many timer resolutions per call a pair's ratio must clear past 1 to tell its contenders apart. */
-const RESOLUTIONS = 1.25;
-
-/** Two contenders of a contest, the signed-rank test of their repetitions, and whom it proves faster. */
-interface Verdict {
-  readonly a: MeasuredResult;
-  readonly b: MeasuredResult;
-  readonly p: number;
-  readonly pAdjusted: number;
-  readonly faster: MeasuredResult | null;
-  readonly tie: ContestPair["tie"];
-}
-
-/** The per-repetition `ln(median_b / median_a)` over the repetitions both contenders ran. */
-function logRatios(a: MeasuredResult, b: MeasuredResult): number[] {
-  const medians = new Map(
-    a.measurements.map(({ repetition, time }) => [repetition, time.stats.median]),
-  );
-  return b.measurements.flatMap(({ repetition, time }) => {
-    const median = medians.get(repetition);
-    return median === undefined ? [] : [Math.log(time.stats.median / median)];
-  });
-}
-
-/** The largest timer resolution per call among both contenders' measurements, over the smaller median. */
-function resolutionPerCall(a: MeasuredResult, b: MeasuredResult): number {
-  const perCall = [...a.measurements, ...b.measurements].map(
-    ({ time: { sampling } }) => sampling.timerResolutionNs / sampling.callsPerSample,
-  );
-  return Math.max(...perCall) / Math.min(a.time.median, b.time.median);
-}
-
-/** Why a pair has no verdict, or `null` when it is proven; see `ContestPair.tie`. */
-function tieOf(
-  pAdjusted: number,
-  estimate: number,
-  a: MeasuredResult,
-  b: MeasuredResult,
-): ContestPair["tie"] {
-  if (pAdjusted > ALPHA) return "repetitions";
-  const withinTimer = Math.exp(Math.abs(estimate)) - 1 <= RESOLUTIONS * resolutionPerCall(a, b);
-  return withinTimer ? "timer" : null;
-}
-
-/**
- * Tests every pair of `measured`, adjusting the p values by Holm's over all of them.
- *
- * @param measured - The contenders that never failed.
- * @returns A verdict per pair; a pair is proven when its adjusted p is at most `ALPHA` and its
- *   ratio clears 1 by more than `RESOLUTIONS` timer resolutions per call.
- */
-function verdictsOf(measured: readonly MeasuredResult[]): Verdict[] {
-  const tested = measured.flatMap((a, index) =>
-    measured.slice(index + 1).map((b) => {
-      const differences = logRatios(a, b);
-      return { a, b, p: signedRankP(differences), estimate: hodgesLehmann(differences) };
-    }),
-  );
-  const adjusted = holm(tested.map(({ p }) => p));
-  return tested.map(({ a, b, p, estimate }, index) => {
-    const pAdjusted = valueAt(adjusted, index);
-    const tie = tieOf(pAdjusted, estimate, a, b);
-    const winner = estimate > 0 ? a : b;
-    return { a, b, p, pAdjusted, faster: tie === null ? winner : null, tie };
-  });
-}
-
-/**
- * The pair of a verdict, `a` the earlier contender in `order`.
- *
- * @param verdict - The verdict.
- * @param order - The contest's contenders that never failed, sorted.
- * @param level - The interval's confidence level.
- * @returns The pair's ratio, interval and verdict.
- */
-function pairOf(verdict: Verdict, order: readonly MeasuredResult[], level: number): ContestPair {
-  const [a, b] =
-    order.indexOf(verdict.a) < order.indexOf(verdict.b)
-      ? [verdict.a, verdict.b]
-      : [verdict.b, verdict.a];
-  const differences = logRatios(a, b);
-  const [low, high] = signedRankInterval(differences, level);
-  return {
-    a: a.id,
-    b: b.id,
-    ratio: Math.exp(hodgesLehmann(differences)),
-    interval: [Math.exp(low), Math.exp(high)],
-    p: verdict.p,
-    pAdjusted: verdict.pAdjusted,
-    faster: verdict.faster?.id ?? null,
-    tie: verdict.tie,
-  };
-}
-
-/**
- * Judges a contest from its contenders' results. A contest left with fewer than two contenders
- * that never failed, or whose repetitions `n` fail `2 / 2ⁿ ≤ 0.05 / pairs`, is not judged: its
- * entry holds the times and no rank, ratio or pair.
- *
- * @param results - The contest's results on one runtime, in the order they were emitted.
- * @returns The contest's entry.
- */
-function contestOf(results: readonly [Result, ...Result[]]): Contest {
-  const [{ name, runtime }] = results;
-  const repetitionCount = Math.max(
-    ...results.flatMap(({ measurements }) =>
-      measurements.flatMap(({ repetition }) => (repetition === null ? [] : [repetition])),
-    ),
-  );
-  const measured = results.filter((result): result is MeasuredResult => result.status === "ok");
-  const failed = results
-    .filter((result): result is FailedResult => result.status === "failed")
-    .map(({ id }) => ({ id, time: null, ratio: null, rank: null }));
-  const pairCount = pairsOf(measured.length);
-  const head = { name, params: {}, runtime, repetitionCount };
-  const smallestP = 2 / 2 ** repetitionCount;
-  const tooFewRepetitions = smallestP > ALPHA / pairCount;
-  if (measured.length < 2 || tooFewRepetitions) {
-    const contenders = measured
-      .toSorted((left, right) => left.time.median - right.time.median)
-      .map(({ id, time }) => ({ id, time, ratio: null, rank: null }));
-    return { ...head, contenders: [...contenders, ...failed], pairs: [] };
-  }
-  const verdicts = verdictsOf(measured);
-  const rankOf = (result: MeasuredResult): number =>
-    1 +
-    verdicts.filter(
-      ({ a, b, faster }) => (a === result || b === result) && faster !== null && faster !== result,
-    ).length;
-  const ranked = measured
-    .map((result) => ({ result, rank: rankOf(result) }))
-    .toSorted((left, right) =>
-      left.rank === right.rank
-        ? left.result.time.median - right.result.time.median
-        : left.rank - right.rank,
-    );
-  const order = ranked.map(({ result }) => result);
-  const position = (id: string): number => order.findIndex((result) => result.id === id);
-  const pairs = verdicts
-    .map((verdict) => pairOf(verdict, order, 1 - ALPHA / pairCount))
-    .toSorted((left, right) =>
-      left.a === right.a
-        ? position(left.b) - position(right.b)
-        : position(left.a) - position(right.a),
-    );
-  const [fastest] = order;
-  const contenders = ranked.map(({ result, rank }) => ({
-    id: result.id,
-    time: result.time,
-    ratio:
-      result === fastest
-        ? 1
-        : (pairs.find((pair) => pair.a === fastest?.id && pair.b === result.id)?.ratio ?? null),
-    rank,
-  }));
-  return { ...head, contenders: [...contenders, ...failed], pairs };
-}
-
-// ---------------------------------------------------------------------------
 // Result handlers
 // ---------------------------------------------------------------------------
 
@@ -299,24 +137,34 @@ export function medianOf(values: readonly number[]): number {
 }
 
 /**
- * The result of a case whose every measuring child measured, its `time.median` the median of their
- * `time.stats.median`s.
+ * The result of a case whose every measuring child measured: its `time.median` the median of their
+ * `time.stats.median`s, and its `memory.median` that of the one measurement that read memory.
  *
  * @param selected - The case.
  * @param runtime - The runtime its children ran on.
  * @param measurements - Its measurements, in run order.
- * @returns The measured result.
+ * @returns The measured result, its `time` `null` when no measurement timed the case and its
+ *   `memory` `null` when none read memory.
  */
 function measuredResult(
   selected: SelectedCase,
   runtime: FoundRuntime,
   measurements: readonly [CaseMeasurement, ...CaseMeasurement[]],
 ): MeasuredResult {
-  const time: HeadlineTime = {
-    unit: "ns/call",
-    median: medianOf(measurements.map((measurement) => measurement.time.stats.median)),
+  const medians = measurements.flatMap(({ time }) => (time === null ? [] : [time.stats.median]));
+  const time: HeadlineTime | null =
+    medians.length === 0 ? null : { unit: "ns/call", median: medianOf(medians) };
+  const read = measurements.find(({ memory }) => memory !== null)?.memory ?? null;
+  const memory: HeadlineMemory | null =
+    read === null ? null : { unit: "B/call", median: read.stats?.median ?? null };
+  return {
+    ...resultBase(selected, runtime),
+    status: "ok",
+    error: null,
+    time,
+    memory,
+    measurements,
   };
-  return { ...resultBase(selected, runtime), status: "ok", error: null, time, measurements };
 }
 
 /**
@@ -350,9 +198,9 @@ function resultHandlers(
     finished: ({ runtime, selected, group, outcome, repetition, orderInRepetition }) => {
       const measurements = ran.get(selected) ?? [];
       if (outcome.status === "ok") {
-        const measured = outcome.result.time;
-        const time = keepsGc() ? measured : { ...measured, gc: null };
-        ran.set(selected, [...measurements, { repetition, orderInRepetition, time }]);
+        const { time: measured, memory } = outcome.result;
+        const time = measured === null || keepsGc() ? measured : { ...measured, gc: null };
+        ran.set(selected, [...measurements, { repetition, orderInRepetition, time, memory }]);
         return;
       }
       ran.delete(selected);
@@ -363,7 +211,11 @@ function resultHandlers(
         status: "failed",
         error,
         time: null,
-        measurements: [...measurements, { repetition, orderInRepetition, time: null }],
+        memory: null,
+        measurements: [
+          ...measurements,
+          { repetition, orderInRepetition, time: null, memory: null },
+        ],
       };
       const contestEnds =
         isContest(group) && group.every((member) => member === selected || failed.has(member));
@@ -427,6 +279,7 @@ function reportOptions(
 ): ReportOptions {
   return {
     runtimes: options.runtimes,
+    measure: options.measure,
     files: input.files === undefined || input.files.length === 0 ? null : [...input.files],
     filter: input.filter ?? null,
     minTime: options.minTime,
@@ -438,6 +291,24 @@ function reportOptions(
     nodeImport: options.nodeImport?.written ?? null,
     rawSamples: false,
   };
+}
+
+/** The runtimes whose measuring child reads the heap; any other returns `memory: null`. */
+const HEAP_READING: ReadonlySet<Runtime> = new Set(["node"]);
+
+/**
+ * Refuses a run that would read nothing: `measure` holds only `memory` while no runtime has a heap
+ * reading.
+ *
+ * @param options - The resolved options, whose `measure` and `runtimes` it reads.
+ * @throws `ConfigError` Naming the runtimes, when the run would read nothing.
+ */
+function requireReading(options: ResolvedOptions): void {
+  if (options.measure.includes("time")) return;
+  if (options.runtimes.some((runtime) => HEAP_READING.has(runtime))) return;
+  throw new ConfigError(
+    `measure holds only "memory", and no runtime in runtimes (${options.runtimes.join(", ")}) has a heap reading: add "node" to runtimes or "time" to measure`,
+  );
 }
 
 /** A random 32-bit seed for the repetition orders. */
@@ -465,8 +336,8 @@ function drawRandomSeed(): number {
  * @throws {@link Error} The error reading the package's `package.json`, before any child starts;
  *   what `onSelected` or `onPlanned` throws, before the first child of its phase starts; what
  *   `onResult` or `onDropped` throws, once a child has finished; or what starting a child throws.
- * @throws `ConfigError` When the options are invalid or the selection fails, before any
- *   measuring child starts.
+ * @throws `ConfigError` When the options are invalid, the selection fails, or `measure` holds only
+ *   `memory` while no runtime in `runtimes` has a heap reading, before any measuring child starts.
  */
 export async function run(input: RunInput): Promise<Report> {
   const startedAt = new Date().toISOString();
@@ -497,16 +368,20 @@ export async function run(input: RunInput): Promise<Report> {
   };
   const { options, interrupted } = await startEach<MeasureRequest>(
     input,
-    (resolved, selected) => ({
+    (resolved, selected, repetition) => ({
       mode: "measure",
       file: selected.path,
       id: selected.id,
       minTime: resolved.minTime,
       minSamples: resolved.minSampleCount,
       ...(callsPerSample === undefined ? {} : { callsPerSample }),
+      time: resolved.measure.includes("time"),
+      // A contender's memory is read once per contest, by its first repetition's child.
+      memory: resolved.measure.includes("memory") && (repetition === null || repetition === 1),
     }),
     {
       passed: (resolved, total, formed) => {
+        requireReading(resolved);
         contested = formed.length > 0;
         debug = resolved.debug;
         input.onSelected?.(reportOf(resolved, false), formed);

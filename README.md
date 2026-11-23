@@ -166,10 +166,10 @@ Common options:
 | `npx repset benchmarks/sort.bench.ts` | Run only the cases in that file                         |
 | `npx repset --filter '^sort/'`        | Run the cases whose id starts with `sort/`              |
 | `npx repset --runtime node,bun`       | Run every case on Node, then on Bun                     |
+| `npx repset --measure time,memory`    | Measure each case's time and memory                     |
 | `npx repset -o report.json`           | Also write the JSON report to `report.json`             |
 | `npx repset --once`                   | Run every case once, without timing, to check it works  |
 | `npx repset -d`                       | Print each failed case's stack and its process's output |
-| `npx repset --measure time,memory`    | Also measure the heap bytes each call allocates         |
 
 Node runs TypeScript files by stripping their types, but it does not map an import of `./foo.js` to
 `foo.ts`. If your benchmarks import TypeScript files that way, give Node a loader such as

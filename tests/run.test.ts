@@ -415,6 +415,20 @@ describe("run", () => {
       ]);
     });
 
+    it("times a case on runtimes with no heap reading when measure holds time and memory", async () => {
+      const report = await runHere({
+        runtimes: ["bun"],
+        measure: ["time", "memory"],
+        startChild: starter((request) =>
+          request.mode === "measure" ? answered({ ...request, memory: false }) : answered(request),
+        ),
+      });
+
+      expect(report.results.map((result) => [result.status, result.memory])).toStrictEqual([
+        ["ok", null],
+      ]);
+    });
+
     describe("when no runtime has a heap reading and measure holds only memory", () => {
       it.each<{ why: string; input: Partial<RunInput> }>([
         { why: "the runtimes given", input: { runtimes: ["bun"], measure: ["memory"] } },

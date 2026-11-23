@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { runCheck } from "../scripts/check-overhead.js";
-import type { Readers, RepsetReading } from "../scripts/check-overhead.js";
+import { runCheck } from "../scripts/check-memory-timing.js";
+import type { Readers } from "../scripts/check-memory-timing.js";
+import type { RepsetReading } from "../scripts/check-timing-accuracy.js";
 
 /** A repset reading whose timing lasted its `minTime`. */
 const READING: RepsetReading = {
@@ -13,14 +14,14 @@ const READING: RepsetReading = {
   minTime: 1000,
 };
 
-/** Readers for every scenario: baseline medians of 1000, and repset readings whose timing lasted their `minTime`. */
+/** Readers for every body: the same reading with memory measured as without. */
 const READERS: Readers = {
-  repset: () => READING,
-  baseline: () => 1000,
+  alone: () => READING,
+  withMemory: () => READING,
 };
 
 describe("runCheck", () => {
-  describe("when every scenario passes", () => {
+  describe("when no body's timing differs with memory measured", () => {
     it("returns 0", () => {
       const status = runCheck(READERS, () => undefined);
 

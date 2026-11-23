@@ -1,9 +1,10 @@
 /**
- * The overhead check: for each scenario, one per runtime, count mode and body, it pairs one run of
- * the built repset command with one run of the baseline loop in `check-overhead/baseline-child.ts`,
- * back to back, and judges the pairs with `check-overhead/verdict.ts`.
+ * The timing accuracy check: for each scenario, one per runtime, count mode and body, it pairs one
+ * run of the built repset command with one run of the baseline loop in
+ * `check-timing-accuracy/baseline-child.ts`, back to back, and judges the pairs with
+ * `check-timing-accuracy/verdict.ts`.
  *
- *   node --import tsx scripts/check-overhead.ts
+ *   node --import tsx scripts/check-timing-accuracy.ts
  *
  * Run it from the repository root, as the Taskfile does: every path it hands a child is relative to
  * the current directory. It reads `dist/`, so build first. Nothing in it runs two children at once:
@@ -19,15 +20,15 @@ import { CALLS_PER_SAMPLE } from "../src/command-line.js";
 import type { SamplingReport } from "../src/measure/measure.js";
 import { RUNTIMES, type Runtime } from "../src/measure/runtime.js";
 import { DEFAULT_TIMEOUT } from "../src/options.js";
-import type { FailedResult, Report } from "../src/report.js";
+import type { FailedResult, MeasuredResult, Report } from "../src/report.js";
 import { isRecord, property, thrownMessage, valueAt } from "../src/utils.js";
-import { BODY_NAMES, type BodyName, benchName } from "./check-overhead/bodies.js";
+import { BODY_NAMES, type BodyName, benchName } from "./check-timing-accuracy/bodies.js";
 import {
   judgeScenario,
   type Pairs,
   type RoundSummary,
   type ScenarioVerdict,
-} from "./check-overhead/verdict.js";
+} from "./check-timing-accuracy/verdict.js";
 
 // ---------------------------------------------------------------------------
 // Scenarios, readings and constants
@@ -73,11 +74,12 @@ interface Round {
 }
 
 const CLI = join("dist", "cli.js");
-const BENCH_FILE = join("scripts", "check-overhead", "overhead.bench.ts");
+const BENCH_FILE = join("scripts", "check-timing-accuracy", "timing-accuracy.bench.ts");
 const TS_LOADER = "tsx";
-const BASELINE_CHILD = join("scripts", "check-overhead", "baseline-child.ts");
+const BASELINE_CHILD = join("scripts", "check-timing-accuracy", "baseline-child.ts");
 
-const PAIRS = 12;
+/** The pairs one round of a timing check takes. */
+export const PAIRS = 12;
 
 const REPORT_SCHEMA: Report["schema"] = 1;
 
@@ -209,21 +211,26 @@ function onlyResult(
 /**
  * Turns one run of the repset command into a reading, refusing one the check cannot trust.
  *
- * @param scenario - The scenario the run read.
+ * @param name - What the run read, which every error names.
  * @param end - The command's exit status and the signal that killed it.
  * @param reportPath - The file the command wrote its report to.
+ * @param check - The caller's own check of the measured result and how its time was sampled, run
+ *   once the report holds a time.
  * @returns The result's process: its median, counts, timer resolution and timing length, with the
  *   report's `minTime`.
- * @throws Error naming the scenario when the case failed, naming its phase and message: the
- *   command exited 1 and its report holds a failed result, or exited 0 with a failed result.
- * @throws Error naming the scenario and how the command ended when it ended otherwise than with
- *   status 0.
- * @throws Error naming the scenario when the report of a run that exited 0 is missing, unreadable
- *   or not a report holding exactly one result, or its measurement holds no time or a count that
- *   does not match the scenario's.
+ * @throws Error naming `name` when the case failed, naming its phase and message: the command
+ *   exited 1 and its report holds a failed result, or exited 0 with a failed result.
+ * @throws Error naming `name` and how the command ended when it ended otherwise than with status 0.
+ * @throws Error naming `name` when the report of a run that exited 0 is missing, unreadable or not
+ *   a report holding exactly one result, or its measurement holds no time.
+ * @throws Whatever `check` throws.
  */
-export function repsetReading(scenario: Scenario, end: RunEnd, reportPath: string): RepsetReading {
-  const name = scenarioName(scenario);
+export function repsetReading(
+  name: string,
+  end: RunEnd,
+  reportPath: string,
+  check: (result: MeasuredResult, sampling: SamplingReport) => void,
+): RepsetReading {
   if (end.status !== 0) {
     // repset exits 1 when a case fails, and its report then says why.
     const failed = end.status === 1 ? failedResult(reportPath) : undefined;
@@ -236,7 +243,7 @@ export function repsetReading(scenario: Scenario, end: RunEnd, reportPath: strin
   const { time } = result.measurements[0];
   if (time === null) throw new Error(`${name}: repset's report holds no time`);
   const { stats, sampling } = time;
-  checkCount(name, scenario, sampling);
+  check(result, sampling);
   return {
     median: stats.median,
     callsPerSample: sampling.callsPerSample,
@@ -277,57 +284,85 @@ function checkedBaselineMedian(scenario: Scenario, end: RunEnd, stdout: string):
 }
 
 /**
- * Throws a spawn failure, such as a missing executable, as an error naming the scenario.
+ * Throws a spawn failure, such as a missing executable, as an error naming what the run read.
  *
- * @param scenario - The scenario the run read.
+ * @param name - What the run read.
  * @param error - The error `spawnSync` reported, if any.
- * @throws Error naming the scenario when `error` is set.
+ * @throws Error naming `name` when `error` is set.
  */
-function throwSpawnError(scenario: Scenario, error: Error | undefined): void {
+function throwSpawnError(name: string, error: Error | undefined): void {
   if (error !== undefined) {
-    throw new Error(`${scenarioName(scenario)}: cannot start the child: ${error.message}`, {
-      cause: error,
-    });
+    throw new Error(`${name}: cannot start the child: ${error.message}`, { cause: error });
+  }
+}
+
+/**
+ * Runs the built repset command once under the driver's own Node, with `--node-import tsx` and an
+ * `--output` file in a temporary directory it removes afterwards, and reads that report.
+ *
+ * `REPSET_CALLS_PER_SAMPLE` is removed from the run's environment, so warmup calibrates the count,
+ * unless `fixedCallsPerSample` sets it.
+ *
+ * @param name - What the run reads, which every error names.
+ * @param args - The arguments between `dist/cli.js` and `--node-import`: the benchmark file and the
+ *   options that pick the case and what to measure.
+ * @param check - The caller's own check of the measured result (see {@link repsetReading}).
+ * @param fixedCallsPerSample - The count to fix through `REPSET_CALLS_PER_SAMPLE`, if any.
+ * @returns The reading of the run's one result.
+ * @throws Error naming `name` when the command cannot start or its run cannot be trusted (see
+ *   {@link repsetReading}).
+ * @throws Whatever `check` throws.
+ * @throws The filesystem error from creating or removing the temporary directory.
+ */
+export function readRepsetRun(
+  name: string,
+  args: readonly string[],
+  check: (result: MeasuredResult, sampling: SamplingReport) => void,
+  fixedCallsPerSample?: number,
+): RepsetReading {
+  const dir = mkdtempSync(join(tmpdir(), "check-timing-accuracy-"));
+  try {
+    const outPath = join(dir, "report.json");
+    const { [CALLS_PER_SAMPLE]: _inherited, ...env } = process.env;
+    const run = spawnSync(
+      process.execPath,
+      [CLI, ...args, "--node-import", TS_LOADER, "--output", outPath],
+      {
+        env:
+          fixedCallsPerSample === undefined
+            ? env
+            : { ...env, [CALLS_PER_SAMPLE]: String(fixedCallsPerSample) },
+        stdio: ["ignore", "ignore", "inherit"],
+      },
+    );
+    throwSpawnError(name, run.error);
+    return repsetReading(name, run, outPath, check);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 }
 
 /**
  * Runs the repset command once on `scenario` under the driver's own Node, with
- * `REPSET_CALLS_PER_SAMPLE=1` for a one-call scenario and the variable removed for a calibrated one,
- * and reads its report from a temporary directory it removes afterwards.
+ * `REPSET_CALLS_PER_SAMPLE=1` for a one-call scenario and the variable removed for a calibrated
+ * one.
  *
  * @param scenario - The scenario to read.
  * @returns The reading of the scenario's one result.
- * @throws Error naming the scenario when the command cannot start or its run cannot be trusted
- *   (see {@link repsetReading}).
+ * @throws Error naming the scenario when the command cannot start, its run cannot be trusted (see
+ *   {@link repsetReading}), or its count does not match the scenario's.
  * @throws The filesystem error from creating or removing the temporary directory.
  */
 function readRepset(scenario: Scenario): RepsetReading {
-  const dir = mkdtempSync(join(tmpdir(), "check-overhead-"));
-  try {
-    const outPath = join(dir, "report.json");
-    const { [CALLS_PER_SAMPLE]: _inherited, ...env } = process.env;
-    const args = [
-      CLI,
-      BENCH_FILE,
-      "--runtime",
-      scenario.runtime,
-      "--filter",
-      `^${benchName(scenario.body)}$`,
-      "--node-import",
-      TS_LOADER,
-      "--output",
-      outPath,
-    ];
-    const run = spawnSync(process.execPath, args, {
-      env: scenario.countMode === "one-call" ? { ...env, [CALLS_PER_SAMPLE]: "1" } : env,
-      stdio: ["ignore", "ignore", "inherit"],
-    });
-    throwSpawnError(scenario, run.error);
-    return repsetReading(scenario, run, outPath);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const name = scenarioName(scenario);
+  return readRepsetRun(
+    name,
+    [BENCH_FILE, "--runtime", scenario.runtime, "--filter", `^${benchName(scenario.body)}$`],
+    (_result, sampling) => {
+      checkCount(name, scenario, sampling);
+    },
+    scenario.countMode === "one-call" ? 1 : undefined,
+  );
 }
 
 /** The executable each runtime's children start on. */
@@ -375,7 +410,7 @@ function readBaseline(
     encoding: "utf8",
     stdio: ["ignore", "pipe", "inherit"],
   });
-  throwSpawnError(scenario, run.error);
+  throwSpawnError(scenarioName(scenario), run.error);
   return checkedBaselineMedian(scenario, run, run.stdout);
 }
 
@@ -545,7 +580,8 @@ function scenarioReport(
 // ---------------------------------------------------------------------------
 
 /**
- * Runs the overhead check over every scenario, one reading at a time, printing each once judged.
+ * Runs the timing accuracy check over every scenario, one reading at a time, printing each once
+ * judged.
  *
  * @param readers - The two sides' readers; the real ones run `dist/cli.js` and the baseline child.
  * @param print - Where each scenario's lines go.

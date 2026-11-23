@@ -25,10 +25,18 @@ this file. It is gitignored for personal, machine-specific preferences and never
   `scripts/signed-rank-fixtures.py`, with the Python and scipy that `mise.lock` and `uv.lock` pin
 - `task check-package` — pack the package, install it in an empty app, import every entry and run
   the installed `repset --version` once, which loads the command's static imports. CI runs it.
-- `task check-overhead` — build, then compare repset's timings with a baseline loop. It exits 1 when
-  repset and the baseline differ significantly in the same direction in both rounds, or a calibrated
-  reading's timing lasted under its `minTime`. Run it before a release, alone on a quiet machine;
-  never in CI, and `task check` does not run it.
+- `task check-timing-accuracy` — build, then compare repset's timings with a baseline loop that
+  times the same bodies with nothing around the body call. It exits 1 when repset and the baseline
+  differ significantly in the same direction in both rounds, or a calibrated reading's timing lasted
+  under its `minTime`.
+- `task check-memory-timing` — build, then compare repset's timings on Node with `--measure time`
+  and with `--measure time,memory`, in alternating pairs. It exits 1 when a body's timing with
+  memory measured differs significantly from its timing alone, in the same direction, in both
+  rounds.
+
+  CI runs both timing checks, one after the other, on every pull request and release; `task check`
+  runs neither. A shared runner resolves only gaps above its own noise: before a release, also run
+  both alone on a quiet machine, which resolves the smaller ones.
 
 ## Tools (mise)
 

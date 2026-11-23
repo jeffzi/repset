@@ -1,4 +1,4 @@
-// The two bodies the overhead check times, each about a microsecond per call.
+// The two bodies the timing accuracy check times, each about a microsecond per call.
 //
 // `each` calls a small function per element through a helper, the shape the JIT compiles into the
 // loop around it, so a harness that changes what surrounds the body call changes that body's cost
@@ -26,13 +26,13 @@ export const BODY_NAMES = ["each", "inlined"] as const;
 export type BodyName = (typeof BODY_NAMES)[number];
 
 /**
- * The name the overhead bench registers `body` under.
+ * The name the timing accuracy bench registers `body` under.
  *
  * @param body - The body the case times.
- * @returns The bench name, `overhead/` followed by the body's name.
+ * @returns The bench name, `timing-accuracy/` followed by the body's name.
  */
 export function benchName(body: BodyName): string {
-  return `overhead/${body}`;
+  return `timing-accuracy/${body}`;
 }
 
 /**

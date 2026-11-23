@@ -63,12 +63,19 @@ tasks:
       - "{{.MISE}} uv run --locked scripts/signed-rank-fixtures.py tests/fixtures/signed-rank.json"
       - "{{.MISE}} npx oxfmt tests/fixtures/signed-rank.json"
 
-  check-overhead:
-    desc: Build, then compare repset's timings with a baseline loop; run alone, before a release
+  check-timing-accuracy:
+    desc: Build, then compare repset's timings with a baseline loop
     deps: [_deps]
     cmds:
       - task: build
-      - "{{.MISE}} node --import tsx scripts/check-overhead.ts"
+      - "{{.MISE}} node --import tsx scripts/check-timing-accuracy.ts"
+
+  check-memory-timing:
+    desc: Build, then compare repset's timings on Node with and without memory measured
+    deps: [_deps]
+    cmds:
+      - task: build
+      - "{{.MISE}} node --import tsx scripts/check-memory-timing.ts"
 
   check-package:
     desc:
@@ -177,7 +184,7 @@ tasks:
     internal: true
     deps: [_deps]
     cmds:
-      # The overhead check's benchmark file, the examples and docs/snippets/ import the built entry
+      # The timing checks' benchmark files, the examples and docs/snippets/ import the built entry
       # from dist/.
       - task: build
       - "{{.MISE}} npx tsc -p tsconfig.json"

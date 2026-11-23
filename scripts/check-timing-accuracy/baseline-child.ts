@@ -1,4 +1,4 @@
-// The overhead check's baseline: one body timed in a bare loop, nothing around the body call but
+// The timing accuracy check's baseline: one body timed in a bare loop, nothing around the body call but
 // the loop and the clock reads. It runs at the calls per sample and sample count repset's child
 // reported, and prints `{"median": <ns per call>}` on stdout.
 //

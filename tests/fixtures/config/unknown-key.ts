@@ -1,1 +1,1 @@
-export default { minSamples: 3, banana: 1 };
+export default { minSampleCount: 3, banana: 1 };

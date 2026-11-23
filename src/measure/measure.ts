@@ -97,14 +97,14 @@ export interface SamplingReport {
   /** Whether `callsPerSample` was given rather than calibrated by warmup. */
   readonly callsPerSampleFixed: boolean;
   /** The body's samples before its kept run: warmup's, plus every discarded timing attempt's. */
-  readonly warmupSamples: number;
+  readonly warmupSampleCount: number;
   /** How many timing attempts the body's sampler took, the kept one included. */
-  readonly timingAttempts: number;
+  readonly timingAttemptCount: number;
   /** The body's kept timing attempt's length on the clock, in milliseconds. */
   readonly timingMs: number;
 }
 
-/** A measurement in the shape of the report's per-process fields. */
+/** A measurement in the shape of the report's `time` block, before `rawSamples`. */
 export interface Measurement {
   readonly stats: Statistics;
   readonly sampling: SamplingReport;
@@ -258,8 +258,8 @@ export async function measure<State>(
       timerResolutionNs: resolutionMs * NS_PER_MS,
       callsPerSample: run.callsPerSample,
       callsPerSampleFixed: options.callsPerSample !== undefined,
-      warmupSamples: run.warmupSamples,
-      timingAttempts: run.timingAttempts,
+      warmupSampleCount: run.warmupSampleCount,
+      timingAttemptCount: run.timingAttemptCount,
       timingMs: run.timingMs,
     },
     checks: { ratioToEmptyBody },

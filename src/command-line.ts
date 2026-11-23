@@ -51,10 +51,13 @@ const OPTIONS: readonly (readonly [flags: string, help: string, conflicts?: read
       `Time each case for at least this many milliseconds (default: ${DEFAULT_MIN_TIME})`,
     ],
     [
-      "--min-samples <n>",
+      "--min-sample-count <n>",
       `Take at least this many samples of each case (default: ${DEFAULT_MIN_SAMPLES})`,
     ],
-    ["--rounds <n>", "Run each contest in this many rounds (default: by contest size)"],
+    [
+      "--contest-repetition-count <n>",
+      "Run each contest in this many repetitions (default: by contest size)",
+    ],
     [
       "--timeout <ms>",
       "Fail a case that takes longer than this many milliseconds on one runtime " +
@@ -73,6 +76,7 @@ const OPTIONS: readonly (readonly [flags: string, help: string, conflicts?: read
     ],
     ["--config <file>", `Use this config file instead of looking for ${CONFIG_NAMES.join(", ")}`],
     ["--no-color", "Turn off color, even on a terminal"],
+    ["-d, --debug", "Show debugging output"],
   ];
 
 /** The README's common commands; keep them in step with it. */
@@ -82,6 +86,7 @@ const EXAMPLES: readonly (readonly [string, string])[] = [
   ["repset --runtime node,bun", "Run every case on Node, then on Bun"],
   ["repset -o report.json", "Also write the JSON report to report.json"],
   ["repset --once", "Run every case once, without timing, to check it works"],
+  ["repset -d", "Print each failed case's stack and its process's output"],
 ];
 
 /** The project's repository on GitHub, which the help and the crash report link to. */
@@ -251,8 +256,9 @@ export function parseCommand(args: readonly string[], parser: Parser): Command {
       filter: text("filter"),
       runtimes: runtimeList(text("runtime")),
       minTime: decimal("min-time", text("minTime")),
-      minSamples: decimal("min-samples", text("minSamples")),
-      rounds: decimal("rounds", text("rounds")),
+      minSampleCount: decimal("min-sample-count", text("minSampleCount")),
+      contestRepetitionCount: decimal("contest-repetition-count", text("contestRepetitionCount")),
+      debug: values["debug"] === true ? true : undefined,
       timeout: decimal("timeout", text("timeout")),
       nodeImport: text("nodeImport"),
       config: text("config"),

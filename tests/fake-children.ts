@@ -35,17 +35,26 @@ export const findAny: FindRuntime = async (runtime) => found(runtime);
 export function measured(median: number): Measured {
   return {
     status: "ok",
-    stats: { min: 1, p25: 2, median, p75: 4, p99: 5, max: 6, mean: 3.5, sampleCount: 64 },
-    sampling: {
-      timerResolutionNs: 41.7,
-      callsPerSample: 2,
-      callsPerSampleFixed: false,
-      warmupSamples: 1000,
-      timingAttempts: 1,
-      timingMs: 1003.4,
+    time: {
+      stats: { min: 1, p25: 2, median, p75: 4, p99: 5, max: 6, mean: 3.5, sampleCount: 64 },
+      sampling: {
+        timerResolutionNs: 41.7,
+        callsPerSample: 2,
+        callsPerSampleFixed: false,
+        warmupSampleCount: 1000,
+        timingAttemptCount: 1,
+        timingMs: 1003.4,
+      },
+      checks: { ratioToEmptyBody: 120.5 },
+      gc: {
+        collectionCount: 3,
+        durationMs: 0.41,
+        maxDurationMs: 0.17,
+        nodeMinorCollectionCount: 3,
+        nodeMajorCollectionCount: 0,
+      },
+      rawSamples: null,
     },
-    checks: { ratioToEmptyBody: 120.5 },
-    gc: { count: 3, minor: 3, major: 0, totalMs: 0.41, maxMs: 0.17 },
   };
 }
 
@@ -108,7 +117,7 @@ export function failedOutcome(
 export const MELON = { message: "melon", stack: "at teardown" } as const;
 
 /** An answer that measures every request, and fails `concat/loop`'s second call in phase `fn` with `kiwi`. */
-export function failsLoopInRoundTwo(): (request: Asked) => Outcome {
+export function failsLoopInRepetitionTwo(): (request: Asked) => Outcome {
   let loopCalls = 0;
   return (request) => {
     if (request.id !== "concat/loop") return measuredOutcome(4656);

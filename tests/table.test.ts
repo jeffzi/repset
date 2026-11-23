@@ -9,7 +9,6 @@ import type {
   ContestContender,
   ContestPair,
   FailedResult,
-  MeasuredProcess,
   MeasuredResult,
   Result,
   ResultError,
@@ -18,8 +17,9 @@ import { failureLines, formatTable, paint, visibleWidth } from "../src/table.js"
 import { found, measured as measuredChild } from "./fake-children.js";
 
 type Runtime = Result["runtime"]["name"];
-type Stats = MeasuredProcess["stats"];
-type ResultBase = StrictOmit<Result, "status" | "error" | "median" | "processes">;
+type Measurement = MeasuredResult["measurements"][number];
+type Stats = Measurement["time"]["stats"];
+type ResultBase = StrictOmit<Result, "status" | "error" | "time" | "measurements">;
 
 /** The statistics of a case whose every time is `median`, measured over 64 samples. */
 function flatStats(median: number): Stats {
@@ -38,18 +38,10 @@ function flatStats(median: number): Stats {
 /** Statistics whose max and sample count print wider than the rest. */
 const WIDE_STATS: Stats = { ...flatStats(4656), max: 2_340_000, sampleCount: 1200 };
 
-/** The one process of a measured case, holding `stats`. */
-function measuredProcess(stats: Stats): MeasuredProcess {
-  const { sampling, checks } = measuredChild(stats.median);
-  return {
-    round: 0,
-    orderInRound: 0,
-    stats,
-    sampling,
-    checks,
-    gc: null,
-    rawSamples: null,
-  };
+/** The one measurement of a measured plain case, holding `stats`. */
+function measurement(stats: Stats): Measurement {
+  const { time } = measuredChild(stats.median);
+  return { repetition: null, orderInRepetition: null, time: { ...time, stats, gc: null } };
 }
 
 /** The runtime entry of a result or contest on `runtime`, at its fake version. */
@@ -76,8 +68,8 @@ function measured(id: string, runtime: Runtime, stats: Stats): MeasuredResult {
     ...resultBase(id, runtime),
     status: "ok",
     error: null,
-    median: stats.median,
-    processes: [measuredProcess(stats)],
+    time: { unit: "ns/call", median: stats.median },
+    measurements: [measurement(stats)],
   };
 }
 
@@ -92,18 +84,8 @@ function failed(
     ...resultBase(id, "node"),
     status: "failed",
     error: { phase, message, stack: null, teardownError, output: "" },
-    median: null,
-    processes: [
-      {
-        round: 0,
-        orderInRound: 0,
-        stats: null,
-        sampling: null,
-        checks: null,
-        gc: null,
-        rawSamples: null,
-      },
-    ],
+    time: null,
+    measurements: [{ repetition: null, orderInRepetition: null, time: null }],
   };
 }
 
@@ -139,7 +121,7 @@ function contender(
   ratio: number | null = null,
   rank: number | null = null,
 ): ContestContender {
-  return { id, median, ratio, rank };
+  return { id, time: median === null ? null : { unit: "ns/call", median }, ratio, rank };
 }
 
 /** The verdict of contenders `a` and `b` of contest `name`: the faster's key, or the kind of tie. */
@@ -147,7 +129,7 @@ function pair(
   name: string,
   [a, b]: readonly [string, string],
   [ratio, interval]: readonly [number, readonly [number, number]],
-  verdict: { readonly faster: string } | { readonly tie: "rounds" | "timer" },
+  verdict: { readonly faster: string } | { readonly tie: "repetitions" | "timer" },
 ): ContestPair {
   return {
     a: `${name}/${a}`,
@@ -161,10 +143,10 @@ function pair(
   };
 }
 
-/** The entry of contest `name` on Node over `rounds` rounds. */
+/** The entry of contest `name` on Node over `repetitionCount` repetitions. */
 function contest(
   name: string,
-  rounds: number,
+  repetitionCount: number,
   contenders: readonly ContestContender[],
   pairs: readonly ContestPair[],
 ): Contest {
@@ -172,7 +154,7 @@ function contest(
     name,
     params: {},
     runtime: runtimeOf("node"),
-    rounds,
+    repetitionCount,
     contenders,
     pairs,
   };
@@ -183,15 +165,15 @@ function onBun(entry: Contest): Contest {
   return { ...entry, runtime: runtimeOf("bun") };
 }
 
-/** The entry of contest `name` judged over `rounds` rounds, `fast` proven faster than `slow`. */
+/** The entry of contest `name` judged over `repetitions` repetitions, `fast` proven faster than `slow`. */
 function judgedContest(
   name: string,
-  rounds: number,
+  repetitions: number,
   [fast, slow]: readonly [string, string],
 ): Contest {
   return contest(
     name,
-    rounds,
+    repetitions,
     [contender(`${name}/${fast}`, 100, 1, 1), contender(`${name}/${slow}`, 200, 2, 2)],
     [pair(name, [fast, slow], [2, [1.9, 2.1]], { faster: fast })],
   );
@@ -202,7 +184,7 @@ function judgedResults(name: string, [fast, slow]: readonly [string, string]): M
   return [contenderResult(name, fast, 100), contenderResult(name, slow, 200)];
 }
 
-/** A contest not judged over 9 rounds, one contender measured and one failed, with its results. */
+/** A contest not judged over 9 repetitions, one contender measured and one failed, with its results. */
 function unfinishedContest(
   name: string,
   [finished, failedKey]: readonly [string, string],
@@ -222,13 +204,13 @@ function unfinishedContest(
   };
 }
 
-/** A contest of two finished contenders not judged over `rounds` rounds, with its results. */
-function notJudgedContest(rounds: number): { results: Result[]; entry: Contest } {
+/** A contest of two finished contenders not judged over `repetitions` repetitions, with its results. */
+function notJudgedContest(repetitions: number): { results: Result[]; entry: Contest } {
   return {
     results: [contenderResult("concat", "join", 806), contenderResult("concat", "loop", 1880)],
     entry: contest(
       "concat",
-      rounds,
+      repetitions,
       [contender("concat/join", 806), contender("concat/loop", 1880)],
       [],
     ),
@@ -243,15 +225,15 @@ function threeWayResults(name: string, runtime: Runtime = "node"): MeasuredResul
   return THREE_WAY.map((key, index) => contenderResult(name, key, 100 + index, runtime));
 }
 
-/** A contest `name` over `rounds` rounds among regex, split and scan, its regex–split and split–scan pairs tied by the given kinds, or proven for the first when null. */
+/** A contest `name` over `repetitions` repetitions among regex, split and scan, its regex–split and split–scan pairs tied by the given kinds, or proven for the first when null. */
 function threeWayContest(
   name: string,
-  rounds: number,
+  repetitions: number,
   [regexSplit, splitScan]: readonly [ContestPair["tie"], ContestPair["tie"]],
 ): Contest {
   return contest(
     name,
-    rounds,
+    repetitions,
     [
       contender(`${name}/regex`, 100, 1, 1),
       contender(`${name}/split`, 101, 1.01, 1),
@@ -275,18 +257,21 @@ function threeWayContest(
   );
 }
 
-/** A pattern for a note line of contest `name` naming every key of `named`, none of `unnamed` and no case id, with `--rounds rounds` advice, or none when null. */
+/** A pattern for a note line of contest `name` naming every key of `named`, none of `unnamed` and no case id, with `--contest-repetition-count repetitions` advice, or none when null. */
 function notePattern(
   name: string,
   named: readonly string[],
   unnamed: readonly string[],
-  rounds: number | null,
+  repetitions: number | null,
 ): RegExp {
   const keys = [
     ...named.map((key) => `(?=.*\\b${key}\\b)`),
     ...unnamed.map((key) => `(?!.*\\b${key}\\b)`),
   ];
-  const advice = rounds === null ? "(?!.*--rounds)" : `(?=.*--rounds ${rounds}\\b)`;
+  const advice =
+    repetitions === null
+      ? "(?!.*--contest-repetition-count)"
+      : `(?=.*--contest-repetition-count ${repetitions}\\b)`;
   return new RegExp(`^${keys.join("")}(?!.*${name}/)${advice}.*\\S`, "u");
 }
 
@@ -597,7 +582,7 @@ describe("formatTable", () => {
       expectBox(lines.slice(7, 13));
       expectBox(lines.slice(14, 18));
       expect([lines[0], lines[5], lines[13], lines[18]]).toStrictEqual(["node 24.1.0", "", "", ""]);
-      expect(lines[6]).toMatch(/^concat\b.*\b8 rounds$/u);
+      expect(lines[6]).toMatch(/^concat\b.*\b8 repetitions$/u);
       const rows = [lines[4], ...lines.slice(10, 13), lines[17]];
       expect(rows.map((row) => cellsOf(row ?? ""))).toStrictEqual([
         ["apple", "812 ns", "812 ns", "812 ns", "812 ns", "64"],
@@ -684,7 +669,7 @@ describe("formatTable", () => {
   });
 
   describe("when a contest ran on several runtimes", () => {
-    it("opens each runtime's sub-table with that runtime's rounds", () => {
+    it("opens each runtime's sub-table with that runtime's repetitions", () => {
       const results = [
         ...judgedResults("concat", ["join", "loop"]),
         contenderResult("concat", "join", 100, "bun"),
@@ -697,8 +682,8 @@ describe("formatTable", () => {
 
       const lines = tableLines(results, contests);
 
-      const nineRounds = lines.findIndex((line) => /^concat\b.*\b9 rounds$/u.test(line));
-      expect(nineRounds).toBeGreaterThan(headingIndex(lines, "bun"));
+      const nine = lines.findIndex((line) => /^concat\b.*\b9 repetitions$/u.test(line));
+      expect(nine).toBeGreaterThan(headingIndex(lines, "bun"));
     });
   });
 
@@ -717,10 +702,10 @@ describe("formatTable", () => {
     });
 
     it.each([
-      { rounds: 1, text: "1 round" },
-      { rounds: 3, text: "3 rounds" },
-    ])("heads the contest and closes it with not judged over $text", ({ rounds, text }) => {
-      const { results, entry } = notJudgedContest(rounds);
+      { repetitions: 1, text: "1 repetition" },
+      { repetitions: 3, text: "3 repetitions" },
+    ])("heads the contest and closes it with not judged over $text", ({ repetitions, text }) => {
+      const { results, entry } = notJudgedContest(repetitions);
 
       const lines = tableLines(results, [entry]);
 
@@ -754,12 +739,12 @@ describe("formatTable", () => {
       expect(cellsOf(lines[loop] ?? "")).toStrictEqual(["loop", "1.88 µs"]);
       expect(lines.slice(loop + 1, loop + 3)).toStrictEqual([
         expect.stringMatching(/^plus {6}│ \S.* kiwi$/u),
-        expect.stringMatching(/\b1 round$/u),
+        expect.stringMatching(/\b1 repetition$/u),
       ]);
     });
 
     describe("when fewer than two of its contenders finished", () => {
-      it("ends the sub-table with a not judged line that holds no round count", () => {
+      it("ends the sub-table with a not judged line that holds no repetition count", () => {
         const { results, entry } = unfinishedContest("concat", ["join", "loop"], 806);
 
         const lines = tableLines(results, [entry]);
@@ -768,7 +753,7 @@ describe("formatTable", () => {
         expect(loop).not.toBe(-1);
         const notJudged = lines[loop + 1];
         expect(notJudged).toMatch(/\S/u);
-        expect(notJudged).not.toMatch(/\bround/u);
+        expect(notJudged).not.toMatch(/\brepetition/u);
       });
     });
   });
@@ -776,29 +761,29 @@ describe("formatTable", () => {
   describe("when a contest ran", () => {
     describe("when no contest was judged", () => {
       describe("when no contest had two finished contenders", () => {
-        it("does not blame the rounds in the footer", () => {
+        it("does not blame the repetitions in the footer", () => {
           const { results, entry } = unfinishedContest("concat", ["join", "loop"], 806);
 
           const text = footer(results, [entry]);
 
           expect(text).toMatch(/\S/u);
-          expect(text).not.toMatch(/\bround/u);
+          expect(text).not.toMatch(/\brepetition/u);
         });
       });
 
       describe("when one contest had two finished contenders and another did not", () => {
-        it("blames the rounds in the footer as when every contest had them", () => {
+        it("blames the repetitions in the footer as when every contest had them", () => {
           const unfinished = unfinishedContest("parse", ["regex", "split"], 100);
           const finished = notJudgedContest(9);
-          const roundsFooter = footer(finished.results, [finished.entry]);
+          const repetitionsFooter = footer(finished.results, [finished.entry]);
 
           const text = footer(
             [...unfinished.results, ...finished.results],
             [unfinished.entry, finished.entry],
           );
 
-          expect(roundsFooter).toMatch(/\bround/u);
-          expect(text).toBe(roundsFooter);
+          expect(repetitionsFooter).toMatch(/\brepetition/u);
+          expect(text).toBe(repetitionsFooter);
         });
       });
 
@@ -850,12 +835,12 @@ describe("formatTable", () => {
       });
     });
 
-    describe("when a judged contest had pairs the rounds did not settle", () => {
-      it("names them by contender key under its table, recommending twice its rounds", () => {
+    describe("when a judged contest had pairs the repetitions did not settle", () => {
+      it("names them by contender key under its table, recommending twice its repetitions", () => {
         const results = [...judgedResults("concat", ["join", "loop"]), ...threeWayResults("parse")];
         const contests = [
           judgedContest("concat", 7, ["join", "loop"]),
-          threeWayContest("parse", 9, ["rounds", "rounds"]),
+          threeWayContest("parse", 9, ["repetitions", "repetitions"]),
         ];
 
         const lines = tableLines(results, contests);
@@ -868,7 +853,7 @@ describe("formatTable", () => {
     });
 
     describe("when a judged contest had pairs within the timer's resolution", () => {
-      it("names them by contender key under its table with no rounds advice", () => {
+      it("names them by contender key under its table with no repetitions advice", () => {
         const results = threeWayResults("parse");
 
         const lines = tableLines(results, [threeWayContest("parse", 9, [null, "timer"])]);
@@ -883,7 +868,7 @@ describe("formatTable", () => {
       it("prints a line for each kind under its table, each naming only its own pairs", () => {
         const results = threeWayResults("parse");
 
-        const lines = tableLines(results, [threeWayContest("parse", 9, ["rounds", "timer"])]);
+        const lines = tableLines(results, [threeWayContest("parse", 9, ["repetitions", "timer"])]);
 
         const notes = notesUnder(lines, "scan");
         expect(notes).toHaveLength(2);
@@ -905,7 +890,7 @@ describe("formatTable", () => {
       {
         lines: "each tie line",
         results: threeWayResults("parse"),
-        contests: [threeWayContest("parse", 9, ["rounds", "timer"])],
+        contests: [threeWayContest("parse", 9, ["repetitions", "timer"])],
         select: (lines: readonly string[]) => notesUnder(lines, "scan"),
       },
       {

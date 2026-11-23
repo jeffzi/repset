@@ -10,7 +10,6 @@ import { SPAWN_TIMEOUT_MS } from "./spawn-limits.js";
 /** The files the README embeds; each imports `repset`, which resolves to the built `dist/`. */
 const SNIPPETS = fileURLToPath(new URL("../docs/snippets/", import.meta.url));
 
-/** Every snippet file, by name. */
 const SNIPPET_FILES = readdirSync(SNIPPETS).filter((name) => name.endsWith(".bench.ts"));
 
 describe("the README's snippet files", () => {

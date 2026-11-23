@@ -34,7 +34,7 @@ const FOOTER = `Each case was measured once, in its own process. ${COMPARISON_TO
 const PLAIN_FOOTER = `Each plain case was measured once, in its own process. ${COMPARISON_TOOL}`;
 
 const NONE_JUDGED_FOOTER =
-  "No contest was judged: a verdict needs more rounds than these contests ran. Without a verdict, these medians do not order the contenders.";
+  "No contest was judged: a verdict needs more repetitions than these contests ran. Without a verdict, these medians do not order the contenders.";
 
 const NONE_FINISHED_FOOTER =
   "No contest was judged: a verdict needs two contenders that finished, and each of these contests had fewer.";
@@ -50,6 +50,10 @@ interface Block {
   readonly contest: Contest | null;
   readonly results: Result[];
 }
+
+// ---------------------------------------------------------------------------
+// Text primitives
+// ---------------------------------------------------------------------------
 
 /**
  * Styles `text` when `color` holds. The caller has judged the stream, so the escape codes come
@@ -101,18 +105,22 @@ function formatTime(ns: number): string {
   return `${significant(value)} ${TIME_UNITS[unit]}`;
 }
 
+// ---------------------------------------------------------------------------
+// Boxed table layout
+// ---------------------------------------------------------------------------
+
 /**
- * Formats a measured case's row; the median comes from the result, the other statistics from its
- * one process.
+ * Formats a measured case's row; the median comes from the result's time, the other statistics
+ * from its one measurement.
  *
  * @param result - The measured result.
  * @returns Its id, median, mean, min, max and sample count, the times per call.
  */
 function measuredCells(result: MeasuredResult): string[] {
-  const { stats } = result.processes[0];
+  const { stats } = result.measurements[0].time;
   return [
     result.id,
-    formatTime(result.median),
+    formatTime(result.time.median),
     formatTime(stats.mean),
     formatTime(stats.min),
     formatTime(stats.max),
@@ -280,6 +288,10 @@ const PLAIN_COLUMNS: Columns = {
   labelOf: ({ id }) => id,
 };
 
+// ---------------------------------------------------------------------------
+// Contest sub-tables
+// ---------------------------------------------------------------------------
+
 /** What a contender's row shows first: its key in the contest, or its case id when it has none. */
 function contenderLabel(result: Result): string {
   return result.contender ?? result.id;
@@ -295,11 +307,11 @@ function contenderLabel(result: Result): string {
  */
 function contenderCells(contest: Contest, result: MeasuredResult): string[] {
   const label = contenderLabel(result);
-  if (contest.pairs.length === 0) return [label, formatTime(result.median)];
+  if (contest.pairs.length === 0) return [label, formatTime(result.time.median)];
   const entry = contest.contenders.find(({ id }) => id === result.id);
   const ratio = entry?.ratio == null ? "" : `${entry.ratio.toFixed(2)}×`;
   const rank = entry?.rank == null ? "" : String(entry.rank);
-  return [label, formatTime(result.median), ratio, rank];
+  return [label, formatTime(result.time.median), ratio, rank];
 }
 
 /**
@@ -308,9 +320,9 @@ function contenderCells(contest: Contest, result: MeasuredResult): string[] {
  *
  * @param contest - The contest's entry.
  * @param results - Its contenders' results, which give each case id its key.
- * @returns A line on the pairs the rounds did not settle, recommending twice the contest's rounds,
- *   then a line on the pairs whose gap is within the timer's resolution; a line only for a kind
- *   some pair has.
+ * @returns A line on the pairs the repetitions did not settle, recommending twice the contest's
+ *   repetitions, then a line on the pairs whose gap is within the timer's resolution; a line only
+ *   for a kind some pair has.
  */
 function tieLines(contest: Contest, results: readonly Result[]): string[] {
   const keyOf = new Map(results.map((result) => [result.id, contenderLabel(result)]));
@@ -320,7 +332,10 @@ function tieLines(contest: Contest, results: readonly Result[]): string[] {
       .map(({ a, b }) => `${keyOf.get(a) ?? a} and ${keyOf.get(b) ?? b}`)
       .join(", ");
   const advice: readonly (readonly [ContestPair["tie"], string])[] = [
-    ["rounds", `Run it with --rounds ${String(2 * contest.rounds)} to tell them apart.`],
+    [
+      "repetitions",
+      `Run it with --contest-repetition-count ${String(2 * contest.repetitionCount)} to tell them apart.`,
+    ],
     ["timer", "Their gap is too small for the timer to measure."],
   ];
   return advice.flatMap(([tie, sentence]) => {
@@ -331,7 +346,7 @@ function tieLines(contest: Contest, results: readonly Result[]): string[] {
 
 /** Whether two or more of `contest`'s contenders finished, as a verdict needs. */
 function twoFinished(contest: Contest): boolean {
-  return contest.contenders.filter(({ median }) => median !== null).length >= 2;
+  return contest.contenders.filter(({ time }) => time !== null).length >= 2;
 }
 
 /**
@@ -339,12 +354,12 @@ function twoFinished(contest: Contest): boolean {
  *
  * @param contest - The contest's entry.
  * @param contestResults - Its contenders' results.
- * @param color - Whether to show the name bold, the rounds, header and the lines under the rows
- *   dim, and each failure in red.
- * @returns The contest's name and rounds, a rule, the column header, a rule, a row per contender
- *   in the entry's order, then, when the contest was judged, a line per kind of tie its pairs had,
- *   and when it was not, the `not judged` line: its rounds, or that fewer than two contenders
- *   finished.
+ * @param color - Whether to show the name bold, the repetitions, header and the lines under the
+ *   rows dim, and each failure in red.
+ * @returns The contest's name and repetitions, a rule, the column header, a rule, a row per
+ *   contender in the entry's order, then, when the contest was judged, a line per kind of tie its
+ *   pairs had, and when it was not, the `not judged` line: its repetitions, or that fewer than two
+ *   contenders finished.
  */
 function contestLines(
   contest: Contest,
@@ -357,10 +372,11 @@ function contestLines(
   );
   const judged = contest.pairs.length > 0;
   const header = judged ? CONTEST_HEADER : CONTEST_HEADER.slice(0, 2);
-  const rounds = `${String(contest.rounds)} round${contest.rounds === 1 ? "" : "s"}`;
-  const reason = twoFinished(contest) ? rounds : TOO_FEW_FINISHED;
+  const { repetitionCount } = contest;
+  const repetitions = `${String(repetitionCount)} repetition${repetitionCount === 1 ? "" : "s"}`;
+  const reason = twoFinished(contest) ? repetitions : TOO_FEW_FINISHED;
   return [
-    `${paint("bold", contest.name, color)}${paint("dim", ` · ${rounds}`, color)}`,
+    `${paint("bold", contest.name, color)}${paint("dim", ` · ${repetitions}`, color)}`,
     ...boxLines(
       {
         header,
@@ -376,6 +392,10 @@ function contestLines(
     ),
   ];
 }
+
+// ---------------------------------------------------------------------------
+// Sections and the table
+// ---------------------------------------------------------------------------
 
 /**
  * Splits a runtime's results into blocks in run order: each contest's results in one block,
@@ -434,8 +454,8 @@ function sectionLines(blocks: readonly Block[], color: boolean): string[] {
  * The footer lines that say why no contest was judged, none when some contest was.
  *
  * @param contests - The contests that ran, at least one.
- * @returns Nothing when some contest was judged; otherwise that none was, blaming the rounds when
- *   some contest had two contenders that finished and the failed contenders otherwise.
+ * @returns Nothing when some contest was judged; otherwise that none was, blaming the repetitions
+ *   when some contest had two contenders that finished and the failed contenders otherwise.
  */
 function contestFooter(contests: readonly Contest[]): string[] {
   if (contests.some(({ pairs }) => pairs.length > 0)) return [];
@@ -454,8 +474,8 @@ export type ScheduledContests = ReadonlyMap<Runtime, ReadonlySet<string>>;
  * @param results - The runtime's results, in run order.
  * @param finished - The entries of the contests that finished on the runtime.
  * @param scheduled - The case ids of the contenders scheduled in a contest on the runtime.
- * @returns An entry per stopped contest, not judged, listing its failed contenders, its rounds the
- *   last round one of them reached.
+ * @returns An entry per stopped contest, not judged, listing its failed contenders, its repetition
+ *   count the last repetition one of them reached.
  */
 function stoppedContests(
   results: readonly Result[],
@@ -471,10 +491,12 @@ function stoppedContests(
       name,
       params: {},
       runtime,
-      rounds: Math.max(
-        ...contenders.flatMap(({ processes }) => processes.map(({ round }) => round)),
+      repetitionCount: Math.max(
+        ...contenders.flatMap(({ measurements }) =>
+          measurements.flatMap(({ repetition }) => (repetition === null ? [] : [repetition])),
+        ),
       ),
-      contenders: contenders.map(({ id }) => ({ id, median: null, ratio: null, rank: null })),
+      contenders: contenders.map(({ id }) => ({ id, time: null, ratio: null, rank: null })),
       pairs: [],
     };
   });

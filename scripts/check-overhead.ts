@@ -220,7 +220,7 @@ function onlyResult(
  * @throws Error naming the scenario and how the command ended when it ended otherwise than with
  *   status 0.
  * @throws Error naming the scenario when the report of a run that exited 0 is missing, unreadable
- *   or not a report holding exactly one result, or the process's count does not match the
+ *   or not a report holding exactly one result, or the measurement's count does not match the
  *   scenario's.
  */
 function repsetReading(scenario: Scenario, end: RunEnd, reportPath: string): RepsetReading {
@@ -234,7 +234,7 @@ function repsetReading(scenario: Scenario, end: RunEnd, reportPath: string): Rep
   }
   const { report, result } = onlyResult(name, reportPath);
   if (result.status === "failed") throw new Error(caseFailure(name, result));
-  const { stats, sampling } = result.processes[0];
+  const { stats, sampling } = result.measurements[0].time;
   checkCount(name, scenario, sampling);
   return {
     median: stats.median,

@@ -210,7 +210,10 @@ function announcing(context: Context): typeof realStartChild {
 /** What a run, a once run and a selection take from the context alike. */
 function childInput(
   context: Context,
-): Pick<OnceInput, "cwd" | "signal" | "findRuntime" | "startChild" | "onPlanned"> {
+): Pick<
+  OnceInput,
+  "cwd" | "signal" | "findRuntime" | "startChild" | "onPlanned" | "onDebugFailure"
+> {
   return {
     cwd: context.cwd,
     signal: context.signal,
@@ -218,6 +221,9 @@ function childInput(
     startChild: announcing(context),
     onPlanned: (total) => {
       context.progress.planned(total);
+    },
+    onDebugFailure: ({ error, output }) => {
+      context.progress.printing(failureText(error.stack, output));
     },
   };
 }
@@ -426,6 +432,14 @@ function withNewline(text: string): string {
   return text.endsWith("\n") ? text : `${text}\n`;
 }
 
+/** A failure's stack, then its child's output, each ending with a newline; either may be empty. */
+function failureText(stack: string | null, output: string): string {
+  return [stack ?? "", output]
+    .filter((text) => text !== "")
+    .map(withNewline)
+    .join("");
+}
+
 /**
  * Prints a `ConfigError`; a failed listing's stack and output tail come before its message.
  *
@@ -434,12 +448,9 @@ function withNewline(text: string): string {
  * @param color - Whether `stderr` shows color.
  */
 function printError(stderr: Output, error: ConfigError, color: boolean): void {
-  if (error instanceof ListingError) {
-    for (const text of [error.failureStack ?? "", error.output]) {
-      if (text !== "") stderr.write(withNewline(text));
-    }
-  }
-  stderr.write(errorLine(error.message, color));
+  const failure =
+    error instanceof ListingError ? failureText(error.failureStack, error.output) : "";
+  stderr.write(`${failure}${errorLine(error.message, color)}`);
 }
 
 /** What a crash report names beside the error. */

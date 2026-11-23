@@ -138,21 +138,49 @@ function listingLine(listedCase: object): string {
   return `${JSON.stringify({ status: "ok", cases: [listedCase] })}\n`;
 }
 
+/** The collections a measurement on Node reports, as the child writes them. */
+const NODE_GC = {
+  collectionCount: 3,
+  durationMs: 0.5,
+  maxDurationMs: 0.25,
+  nodeMinorCollectionCount: 2,
+  nodeMajorCollectionCount: 1,
+} as const;
+
+/** A measurement line, complete in every field, with the given `status` and `gc`. */
+function measuredLine(status: string, gc: object | null): string {
+  return JSON.stringify({
+    status,
+    time: {
+      stats: { min: 1, p25: 1, median: 1, p75: 1, p99: 1, max: 1, mean: 1, sampleCount: 8 },
+      sampling: {
+        timerResolutionNs: 1,
+        callsPerSample: 1,
+        warmupSampleCount: 1,
+        timingAttemptCount: 1,
+        timingMs: 5,
+        callsPerSampleFixed: false,
+      },
+      checks: { ratioToEmptyBody: 1 },
+      gc,
+      rawSamples: null,
+    },
+  });
+}
+
+/** A measure request whose `file` is a measurement line, complete but for `gc`, that `echo.ts` writes back. */
+function echoingMeasured(gc: object | null): ChildRequest {
+  return {
+    mode: "measure",
+    file: `${measuredLine("ok", gc)}\n`,
+    id: "apple",
+    minTime: 5,
+    minSamples: 8,
+  };
+}
+
 /** A measurement complete in every field, whose `status` alone does not answer a measure request. */
-const MEASURED_PEAR_LINE = JSON.stringify({
-  status: "pear",
-  stats: { min: 1, p25: 1, median: 1, p75: 1, p99: 1, max: 1, mean: 1, sampleCount: 8 },
-  sampling: {
-    timerResolutionNs: 1,
-    callsPerSample: 1,
-    warmupSamples: 1,
-    timingAttempts: 1,
-    timingMs: 5,
-    callsPerSampleFixed: false,
-  },
-  checks: { ratioToEmptyBody: 1 },
-  gc: null,
-});
+const MEASURED_PEAR_LINE = measuredLine("pear", null);
 
 describe("findRuntime", { timeout: SPAWN_TIMEOUT_MS }, () => {
   describe("when the runtime is the one the parent runs on", () => {
@@ -332,6 +360,15 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
         },
       },
       {
+        why: "a measurement holding its collections",
+        request: echoingMeasured(NODE_GC),
+        expected: {
+          status: "ok",
+          result: expect.objectContaining({ time: expect.objectContaining({ gc: NODE_GC }) }),
+          output: "",
+        },
+      },
+      {
         why: "the child's own failure with no stack",
         request: echoing(
           '{"status":"failed","error":{"phase":"load","message":"kiwi","stack":null,"teardownError":null}}\n',
@@ -391,6 +428,10 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
         ),
       },
       { why: "a failure with no teardownError", request: echoing(failureLine(FN_KIWI)) },
+      {
+        why: "a measurement whose collections lack the major count",
+        request: echoingMeasured({ ...NODE_GC, nodeMajorCollectionCount: undefined }),
+      },
       {
         why: "a failure whose teardownError has no stack",
         request: echoing(failureLine({ ...FN_KIWI, teardownError: { message: "melon" } })),
@@ -554,7 +595,7 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
 
         expect(outcome).toMatchObject({
           status: "ok",
-          result: { status: "ok", stats: { sampleCount: expect.any(Number) } },
+          result: { status: "ok", time: { stats: { sampleCount: expect.any(Number) } } },
         });
       });
     });

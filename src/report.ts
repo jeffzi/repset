@@ -5,7 +5,7 @@
  * `schema` and never a key.
  */
 
-import type { ChildError, ListedCase, Measured } from "./child.js";
+import type { ChildError, ListedCase, MeasuredTime } from "./child.js";
 import type { Runtime } from "./measure/runtime.js";
 
 /** Every option that shaped the run, after the caller's options and the config were merged. */
@@ -15,10 +15,11 @@ export interface ReportOptions {
   readonly files: readonly string[] | null;
   readonly filter: string | null;
   readonly minTime: number;
-  readonly minSamples: number;
-  /** The `rounds` option, or `null` when each contest's size sets its count. */
-  readonly rounds: number | null;
-  /** The seed of the round orders, or `null` when the run holds no contest. */
+  readonly minSampleCount: number;
+  /** The `contestRepetitionCount` option, or `null` when each contest's size sets its count. */
+  readonly contestRepetitionCount: number | null;
+  readonly debug: boolean;
+  /** The seed of the repetition orders, or `null` when the run holds no contest. */
   readonly seed: number | null;
   readonly timeout: number;
   /** The module Node children import first, as the config file or the caller wrote it. */
@@ -27,13 +28,13 @@ export interface ReportOptions {
 }
 
 /** The host the run measured on. */
-export interface Machine {
+export interface Host {
   readonly os: string;
   readonly arch: string;
   /** The first listed CPU's model, or `null` when the OS lists no CPU. */
   readonly cpu: string | null;
   /** The number of logical CPUs, or `null` when the OS lists none. */
-  readonly cores: number | null;
+  readonly coreCount: number | null;
 }
 
 /** Why a case failed, with the tail of its child's stdout and stderr. */
@@ -41,22 +42,32 @@ export interface ResultError extends ChildError {
   readonly output: string;
 }
 
-/** One measuring process of a measured case, holding its statistics, sampling and checks. */
-export interface MeasuredProcess extends Pick<Measured, "stats" | "sampling" | "checks" | "gc"> {
-  readonly round: number;
-  readonly orderInRound: number;
-  readonly rawSamples: null;
+/**
+ * One measuring child of a case: its repetition and its order in it, both from 1 for a contender
+ * and `null` for a plain case, which has no repetition.
+ */
+interface MeasurementPlace {
+  readonly repetition: number | null;
+  readonly orderInRepetition: number | null;
 }
 
-/** The process of a failed case, holding `null` for what it did not reach. */
-interface FailedProcess {
-  readonly round: number;
-  readonly orderInRound: number;
-  readonly stats: null;
-  readonly sampling: null;
-  readonly checks: null;
-  readonly gc: null;
-  readonly rawSamples: null;
+/**
+ * The measurement of one measuring child that measured its case; its `time.gc` is `null` unless the
+ * `debug` option is on, whatever the runtime delivers.
+ */
+export interface CaseMeasurement extends MeasurementPlace {
+  readonly time: MeasuredTime;
+}
+
+/** The measurement of the measuring child that failed, holding `null` for the time it did not take. */
+interface FailedMeasurement extends MeasurementPlace {
+  readonly time: null;
+}
+
+/** A case's headline time: the median of its measurements' medians, in nanoseconds per call. */
+export interface HeadlineTime {
+  readonly unit: "ns/call";
+  readonly median: number;
 }
 
 /** What every result holds, whether its case was measured or failed. */
@@ -67,23 +78,23 @@ export interface ResultBase extends Pick<ListedCase, "id" | "name" | "contender"
   readonly runtime: { readonly name: Runtime; readonly version: string };
 }
 
-/** A case that was measured: its median is the median of its processes' medians. */
+/** A case that was measured, one measurement per measuring child. */
 export interface MeasuredResult extends ResultBase {
   readonly status: "ok";
   readonly error: null;
-  readonly median: number;
-  readonly processes: readonly [MeasuredProcess, ...MeasuredProcess[]];
+  readonly time: HeadlineTime;
+  readonly measurements: readonly [CaseMeasurement, ...CaseMeasurement[]];
 }
 
 /**
- * A case that failed: `error` says why, and its processes are those that ran, the failed one last,
- * holding `null` for what it did not reach.
+ * A case that failed: `error` says why, and its measurements are those of the children that ran,
+ * the failed one last, holding `null` for the time it did not take.
  */
 export interface FailedResult extends ResultBase {
   readonly status: "failed";
   readonly error: ResultError;
-  readonly median: null;
-  readonly processes: readonly [...MeasuredProcess[], FailedProcess];
+  readonly time: null;
+  readonly measurements: readonly [...CaseMeasurement[], FailedMeasurement];
 }
 
 /** One case's result on one runtime. */
@@ -91,11 +102,11 @@ export type Result = MeasuredResult | FailedResult;
 
 /**
  * A contender of a judged contest, or of one that cannot be judged with `ratio` and `rank` `null`;
- * a failed contender has a `null` median too.
+ * a failed contender has a `null` time too.
  */
 export interface ContestContender {
   readonly id: string;
-  readonly median: number | null;
+  readonly time: HeadlineTime | null;
   /** Its pair's ratio with the fastest contender, 1 for the fastest itself. */
   readonly ratio: number | null;
   /** 1 plus the number of contenders proven faster. */
@@ -106,11 +117,11 @@ export interface ContestContender {
 export interface ContestPair {
   readonly a: string;
   readonly b: string;
-  /** The exp of the Hodges–Lehmann estimate of the per-round `ln(median_b / median_a)`. */
+  /** The exp of the Hodges–Lehmann estimate of the per-repetition `ln(median_b / median_a)`. */
   readonly ratio: number;
   /** The exact signed-rank interval of `ratio` at the level `1 − 0.05 / pairs`. */
   readonly interval: readonly [number, number];
-  /** The exact two-sided signed-rank p value over the rounds. */
+  /** The exact two-sided signed-rank p value over the repetitions. */
   readonly p: number;
   /** `p` adjusted by Holm's over the contest's pairs. */
   readonly pAdjusted: number;
@@ -119,12 +130,13 @@ export interface ContestPair {
   /**
    * Why the pair has no verdict:
    *
-   * - `"rounds"`: `pAdjusted` is above 0.05, so the rounds did not tell the contenders apart.
+   * - `"repetitions"`: `pAdjusted` is above 0.05, so the repetitions did not tell the contenders
+   *   apart.
    * - `"timer"`: `pAdjusted` is at most 0.05, but `ratio` is within 1.25 timer resolutions per
    *   call of 1, a gap too small for the timer to measure.
    * - `null`: the pair is proven, and `faster` names the faster contender.
    */
-  readonly tie: "rounds" | "timer" | null;
+  readonly tie: "repetitions" | "timer" | null;
 }
 
 /** One contest on one runtime: its contenders, and a verdict per pair of those that never failed. */
@@ -132,7 +144,7 @@ export interface Contest {
   readonly name: string;
   readonly params: Readonly<Record<string, never>>;
   readonly runtime: ResultBase["runtime"];
-  readonly rounds: number;
+  readonly repetitionCount: number;
   /** Sorted by rank then median, by median alone when not judged, the failed ones last. */
   readonly contenders: readonly ContestContender[];
   readonly pairs: readonly ContestPair[];
@@ -148,7 +160,7 @@ export interface Report {
   /** Whether the stop signal ended the run before every case ran. */
   readonly interrupted: boolean;
   readonly options: ReportOptions;
-  readonly machine: Machine;
+  readonly host: Host;
   /** The results that finished, in run order. */
   readonly results: readonly Result[];
   /** The contests that finished, in run order. */

@@ -5,8 +5,9 @@ export default {
   include: ["bench/*.ts"],
   runtimes: ["bun", "node"],
   minTime: 0,
-  minSamples: 1,
-  rounds: 1,
+  minSampleCount: 1,
+  contestRepetitionCount: 1,
+  debug: true,
   timeout: MAX_TIMER_DELAY_MS,
   nodeImport: "tsx",
 };

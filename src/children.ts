@@ -66,7 +66,6 @@ interface Captured {
   readonly output: string;
 }
 
-/** The mode of a child's request. */
 type Mode = ChildRequest["mode"];
 
 /** The result a child that succeeded gives, by the mode of its request. */

@@ -81,7 +81,6 @@ function measuredAt(median: number, callsPerSample: number): Outcome {
   };
 }
 
-/** `count` copies of `value`. */
 function repeated<T>(value: T, count: number): T[] {
   return Array<T>(count).fill(value);
 }
@@ -101,7 +100,6 @@ function sortedPairs(report: Report): ContestPair[] {
   return byContenders(report.contests[0]?.pairs ?? []);
 }
 
-/** How many of `items` equal `item`. */
 function countOf(items: readonly string[], item: string): number {
   return items.filter((candidate) => candidate === item).length;
 }

@@ -25,7 +25,6 @@ function codeBlockContent(markdown: string): string | undefined {
     ?.groups?.["content"]?.replace(/^\n+|\n+$/gu, "");
 }
 
-/** The content of `path` under `dir`. */
 function read(dir: string, path: string): string {
   return readFileSync(join(dir, path), "utf8");
 }

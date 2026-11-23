@@ -63,7 +63,6 @@ const CASES = fixtureCases();
 /** Decimal digits to which the scipy fixture values must match. */
 const FIXTURE_DIGITS = 12;
 
-/** Decimal digits to which a Holm-adjusted p value must match. */
 const HOLM_DIGITS = 15;
 
 const INTERVALS = CASES.flatMap((fixture) =>

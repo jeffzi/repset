@@ -86,6 +86,10 @@ interface GroupStart<R extends ChildRequest> {
   readonly onDebugFailure: OnceInput["onDebugFailure"];
 }
 
+// ---------------------------------------------------------------------------
+// Seeded ordering
+// ---------------------------------------------------------------------------
+
 /** Mulberry32: numbers uniform in [0, 1), the same sequence for the same 32-bit `seed`. */
 function seeded(seed: number): () => number {
   let state = seed >>> 0;
@@ -106,6 +110,10 @@ function shuffled<T>(items: readonly T[], random: () => number): T[] {
   }
   return order;
 }
+
+// ---------------------------------------------------------------------------
+// Contest planning
+// ---------------------------------------------------------------------------
 
 /**
  * Groups the selected cases into what runs in turn: each plain case alone, and the selected
@@ -161,6 +169,10 @@ function repetitionsOf(size: number, contestRepetitionCount: number | undefined)
     if (pAtOneDissent <= ALPHA / pairs) return count;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Starting children
+// ---------------------------------------------------------------------------
 
 /** One repetition of a group: its cases in the order they start. */
 interface Repetition {

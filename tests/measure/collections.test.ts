@@ -24,8 +24,10 @@ function gcEntry({ kind, startTime, duration }: Collection): object {
 }
 
 /**
- * Stubs `PerformanceObserver` with one that supports `gc` entries and delivers an entry for each
- * of `collections` in a microtask once observing starts.
+ * Stubs `PerformanceObserver` with one that supports `gc` entries and delivers its entries in a
+ * microtask once observing starts.
+ *
+ * @param collections - The collections the stub delivers, one `gc` entry each.
  */
 function deliversCollections(collections: readonly Collection[]): void {
   const entries = collections.map(gcEntry);

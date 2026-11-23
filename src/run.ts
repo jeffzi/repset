@@ -79,6 +79,10 @@ export interface OnceRun {
   readonly results: readonly OnceResult[];
 }
 
+// ---------------------------------------------------------------------------
+// Report scaffolding
+// ---------------------------------------------------------------------------
+
 /**
  * Reads the `version` string of a `package.json`.
  *
@@ -112,6 +116,10 @@ function resultBase(selected: SelectedCase, runtime: FoundRuntime): ResultBase {
     setupPerCall: selected.setupPerCall,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Contest judgment
+// ---------------------------------------------------------------------------
 
 /** How many timer resolutions per call a pair's ratio must clear past 1 to tell its contenders apart. */
 const RESOLUTIONS = 1.25;
@@ -271,6 +279,10 @@ function contestOf(results: readonly [Result, ...Result[]]): Contest {
   return { ...head, contenders: [...contenders, ...failed], pairs };
 }
 
+// ---------------------------------------------------------------------------
+// Result handlers
+// ---------------------------------------------------------------------------
+
 /**
  * Reads the median of `values`, interpolated between the two middle values when their count is
  * even.
@@ -377,6 +389,10 @@ function resultHandlers(
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// Run entry points
+// ---------------------------------------------------------------------------
 
 /**
  * Describes the host.

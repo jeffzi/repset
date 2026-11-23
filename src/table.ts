@@ -51,6 +51,10 @@ interface Block {
   readonly results: Result[];
 }
 
+// ---------------------------------------------------------------------------
+// Text primitives
+// ---------------------------------------------------------------------------
+
 /**
  * Styles `text` when `color` holds. The caller has judged the stream, so the escape codes come
  * whatever stream `styleText` would judge by default.
@@ -100,6 +104,10 @@ function formatTime(ns: number): string {
   }
   return `${significant(value)} ${TIME_UNITS[unit]}`;
 }
+
+// ---------------------------------------------------------------------------
+// Boxed table layout
+// ---------------------------------------------------------------------------
 
 /**
  * Formats a measured case's row; the median comes from the result's time, the other statistics
@@ -280,6 +288,10 @@ const PLAIN_COLUMNS: Columns = {
   labelOf: ({ id }) => id,
 };
 
+// ---------------------------------------------------------------------------
+// Contest sub-tables
+// ---------------------------------------------------------------------------
+
 /** What a contender's row shows first: its key in the contest, or its case id when it has none. */
 function contenderLabel(result: Result): string {
   return result.contender ?? result.id;
@@ -380,6 +392,10 @@ function contestLines(
     ),
   ];
 }
+
+// ---------------------------------------------------------------------------
+// Sections and the table
+// ---------------------------------------------------------------------------
 
 /**
  * Splits a runtime's results into blocks in run order: each contest's results in one block,

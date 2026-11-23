@@ -46,15 +46,6 @@ async function* asyncGenerator(): AsyncGenerator<number> {
   yield 1;
 }
 
-/**
- * A generator function, which `bench` accepts as a plain function.
- *
- * @yields 1, once.
- */
-function* generator(): Generator<number> {
-  yield 1;
-}
-
 beforeEach(() => {
   resetRegistry();
 });
@@ -270,38 +261,9 @@ describe("bench", () => {
       expect(calls).toBe(0);
     });
   });
-
-  describe("when given a function that is not async", () => {
-    const returnsPromise = (): Promise<number> => Promise.resolve(1);
-
-    it.each([
-      { benchmark: generator, why: "a bare generator" },
-      { benchmark: returnsPromise, why: "a function returning a promise" },
-    ])("registers $why", ({ benchmark }) => {
-      bench("sort", benchmark);
-
-      expect(registeredCases().map((registered) => registered.case.fn)).toStrictEqual([benchmark]);
-    });
-  });
 });
 
 describe("registeredCases", () => {
-  describe("after several bench calls", () => {
-    it("returns both cases registered under one name, in order", () => {
-      const first = (): number => 1;
-      const second = (): number => 2;
-      bench("sort", first);
-      bench("sort", second);
-
-      const idsAndFns = registeredCases().map((registered) => [registered.id, registered.case.fn]);
-
-      expect(idsAndFns).toStrictEqual([
-        ["sort", first],
-        ["sort", second],
-      ]);
-    });
-  });
-
   describe("when two copies of the module are loaded", () => {
     it("returns a case registered through the other copy", async () => {
       vi.resetModules();

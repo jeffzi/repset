@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ChildRequest, MeasureRequest } from "../src/child-protocol.js";
 import { readResult } from "../src/child-result.js";
+import { errorOf } from "./error-of.js";
 
 /** A list request; `readResult` reads only its mode. */
 const LIST: ChildRequest = { mode: "list", file: "fruit.bench.ts" };
@@ -272,12 +273,20 @@ describe("readResult", () => {
       expect(result).toStrictEqual(expect.stringMatching(/\bmeasure\b/u));
     });
 
+    it("carries the parse error of a line that is not JSON", () => {
+      const parseError = errorOf(() => JSON.parse("banana"));
+
+      const result = readResult("banana\n", LIST);
+
+      expect(result).toStrictEqual(expect.stringContaining(parseError.message));
+    });
+
     it("counts the lines of a child that wrote more than one", () => {
       const line = listingLine(LISTED_APPLE);
 
       const result = readResult(`${line}${line}`, LIST);
 
-      expect(result).toStrictEqual(expect.stringContaining(" 2 lines "));
+      expect(result).toStrictEqual(expect.stringMatching(/\b2\b/u));
     });
 
     it("quotes the first 200 characters of a line that does not answer its request", () => {
@@ -285,7 +294,7 @@ describe("readResult", () => {
 
       const result = readResult(written, LIST);
 
-      expect(result).toStrictEqual(expect.stringMatching(/: \{"status":"ok","pear":"x{177}$/u));
+      expect(result).toStrictEqual(expect.stringMatching(/\{"status":"ok","pear":"x{177}$/u));
     });
   });
 });

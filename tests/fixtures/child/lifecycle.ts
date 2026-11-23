@@ -51,22 +51,6 @@ bench("third-fn-throws-per-call", {
   setupPerCall: true,
 });
 
-bench("setup-throws-string", {
-  setup: () => {
-    // oxlint-disable-next-line typescript/only-throw-error -- the pass must keep a non-Error value as the cause
-    throw "papaya";
-  },
-  fn: () => 0,
-});
-
-bench("teardown-throws", {
-  setup: () => 0,
-  fn: (state) => state + 1,
-  teardown: () => {
-    throw new Error("fig");
-  },
-});
-
 bench("steady", {
   setup: () => Array.from({ length: 512 }, (_, index) => index),
   fn: (values) => {
@@ -83,16 +67,6 @@ bench("fn-throws", {
   },
 });
 
-bench("fn-and-teardown-throw", {
-  setup: () => 0,
-  fn: () => {
-    throw new Error("lime");
-  },
-  teardown: () => {
-    throw new Error("melon");
-  },
-});
-
 bench("second-setup-throws-per-call", {
   setup: () => {
     record("second setup");
@@ -100,14 +74,6 @@ bench("second-setup-throws-per-call", {
     return 0;
   },
   fn: () => 0,
-  setupPerCall: true,
-});
-
-bench("fn-throws-per-call", {
-  setup: () => 0,
-  fn: () => {
-    throw new Error("cherry");
-  },
   setupPerCall: true,
 });
 

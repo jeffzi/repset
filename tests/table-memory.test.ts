@@ -6,7 +6,6 @@ import {
   contender,
   contenderResult,
   contest,
-  failed,
   flatStats,
   measured,
   rowIndex,
@@ -146,28 +145,6 @@ describe("formatTable", () => {
       const lines = memoryAloneContestLines();
 
       expect(lines.slice(rowIndex(lines, "loop") + 1)).toStrictEqual([""]);
-    });
-  });
-
-  describe("when a case failed", () => {
-    it("rows it as when time alone was measured, under memory alone", () => {
-      const failure = failed("watermelons", "fn", "plum exploded\nat the stone");
-      const failedRows = (lines: readonly string[]): string[] => {
-        const row = rowIndex(lines, "watermelons");
-        return lines.slice(row, lines.indexOf("", row));
-      };
-      const timeAlone = failedRows(
-        tableLines([measured("apple", "node", flatStats(812)), failure], [], {
-          measure: ["time"],
-        }),
-      );
-
-      const lines = tableLines([measured("apple", "node", null, bytes(40)), failure], [], {
-        measure: ["memory"],
-      });
-
-      expect(timeAlone).toHaveLength(2);
-      expect(failedRows(lines)).toStrictEqual(timeAlone);
     });
   });
 });

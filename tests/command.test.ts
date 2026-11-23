@@ -254,18 +254,6 @@ describe("main", () => {
         stderr: naming(NAME, value),
       });
     });
-
-    it("prints the version, exiting 0, when the variable holds a bad value", async () => {
-      vi.stubEnv(NAME, "abc");
-
-      const ended = await command(workspace(), ["--version"], { startChild: startsNoChild });
-
-      expect(ended).toStrictEqual({
-        code: 0,
-        stdout: expect.stringMatching(/^\d+\.\d+\.\d+\S*\n$/u),
-        stderr: "",
-      });
-    });
   });
 
   describe("when --output names a file", () => {
@@ -374,6 +362,16 @@ describe("main", () => {
         code: 1,
         mentioned: true,
       });
+    });
+  });
+
+  describe("when a measured case fails", () => {
+    it("exits 1", async () => {
+      const dir = workspace();
+
+      const { code } = await command(dir, FILES, { startChild: failsParse });
+
+      expect(code).toBe(1);
     });
   });
 

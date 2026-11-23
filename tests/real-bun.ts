@@ -38,17 +38,3 @@ export function requiresRealBunHere(): boolean {
   const bunInstalled = bunExecutableFound(spawnSync("bun", ["--version"]));
   return requiresRealBun(bunInstalled, process.env["CI"]);
 }
-
-/** A runtime real-process tests cover, and whether it must run on this machine. */
-export interface RuntimeHere {
-  readonly runtime: "node" | "bun";
-  readonly here: boolean;
-}
-
-/** The runtimes real-process tests cover, each with whether it must run on this machine. */
-export function runtimesHere(): readonly RuntimeHere[] {
-  return [
-    { runtime: "node", here: true },
-    { runtime: "bun", here: requiresRealBunHere() },
-  ];
-}

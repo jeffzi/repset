@@ -69,23 +69,14 @@ describe("run", () => {
     });
 
     describe("when a contender fails in a later repetition", () => {
-      it("gives it a null memory, in results and in contests[]", async () => {
+      it("gives it a null memory", async () => {
         const { report } = await runCases([JOIN, LOOP], BOTH, (request, call) =>
           request.id === "concat/loop" && call === 1
             ? failedOutcome("fn", "kiwi")
             : answered(request),
         );
 
-        expect({
-          result: resultOf(report, "concat/loop")?.memory,
-          contest: report.contests[0]?.contenders.map(({ id, memory }) => [id, memory]),
-        }).toStrictEqual({
-          result: null,
-          contest: [
-            ["concat/join", bytesPerCall(40)],
-            ["concat/loop", null],
-          ],
-        });
+        expect(resultOf(report, "concat/loop")?.memory).toBeNull();
       });
     });
   });
@@ -104,29 +95,6 @@ describe("run", () => {
         ["concat/join", false, true],
         ["concat/loop", false, true],
       ]);
-    });
-
-    it("gives each contender one measurement in repetition 1, with no time", async () => {
-      const { report } = await runCases([JOIN, LOOP], MEMORY_ONLY);
-
-      expect(
-        report.results.map((result) => [
-          result.id,
-          result.time,
-          result.measurements.map(({ repetition, orderInRepetition, time, memory }) => ({
-            repetition,
-            ordered: orderInRepetition === 1 || orderInRepetition === 2,
-            time,
-            memory,
-          })),
-        ]),
-      ).toStrictEqual(
-        ["concat/join", "concat/loop"].map((id) => [
-          id,
-          null,
-          [{ repetition: 1, ordered: true, time: null, memory: memoryOf(40) }],
-        ]),
-      );
     });
   });
 

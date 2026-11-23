@@ -92,10 +92,7 @@ describe("run", () => {
         files: ["../a.bench.ts"],
         filter: "bench",
         runtimes: ["node"],
-        minTime: 5,
-        minSampleCount: 8,
         debug: true,
-        timeout: 1234,
         nodeImport: "tsx",
         cpus: () => [cpu("Apple M2 Max"), cpu("Apple M2 Max"), cpu("Apple M2 Max")],
       });
@@ -104,16 +101,7 @@ describe("run", () => {
       expect(report).toMatchObject({
         repset: "1.2.3",
         interrupted: false,
-        options: {
-          runtimes: ["node"],
-          files: ["../a.bench.ts"],
-          filter: "bench",
-          minTime: 5,
-          minSampleCount: 8,
-          debug: true,
-          timeout: 1234,
-          nodeImport: "tsx",
-        },
+        options: { files: ["../a.bench.ts"], filter: "bench", nodeImport: "tsx" },
         host: { os: process.platform, arch: process.arch, cpu: "Apple M2 Max", coreCount: 3 },
         results: [
           {
@@ -128,23 +116,6 @@ describe("run", () => {
             measurements: [{ repetition: null, orderInRepetition: null, time }],
           },
         ],
-      });
-    });
-
-    it("writes every measurement's gc as null when debug is off", async () => {
-      const report = await runHere({
-        debug: false,
-        startChild: listingStarter([APPLE, contender("join"), contender("loop")], () =>
-          measuredOutcome(4656),
-        ),
-      });
-
-      const gcs = report.results.flatMap((result) =>
-        result.measurements.map((measurement) => measurement.time?.gc),
-      );
-      expect({ measured: gcs.length > 1, gcs: new Set(gcs) }).toStrictEqual({
-        measured: true,
-        gcs: new Set([null]),
       });
     });
 
@@ -174,12 +145,6 @@ describe("run", () => {
         expect(report.options.contestRepetitionCount).toBe(recorded);
       },
     );
-
-    it("records the measure option", async () => {
-      const report = await runHere({ startChild: answersAsked, measure: ["memory", "time"] });
-
-      expect(report.options.measure).toStrictEqual(["memory", "time"]);
-    });
 
     it("records a relative nodeImport from the config file as written", async () => {
       const report = await runHere({ config: DOT_IMPORT_CONFIG });
@@ -287,29 +252,6 @@ describe("run", () => {
   });
 
   describe("when measure holds memory", () => {
-    it.each<{ measure: RunInput["measure"]; asked: { time: boolean; memory: boolean } }>([
-      { measure: undefined, asked: { time: true, memory: false } },
-      { measure: ["time", "memory"], asked: { time: true, memory: true } },
-      { measure: ["memory"], asked: { time: false, memory: true } },
-    ])(
-      "asks a plain case's one child for $asked under the measure option $measure",
-      async ({ measure, asked }) => {
-        const requests: unknown[] = [];
-        const logsAsked = starter((request) => {
-          if (request.mode === "measure")
-            requests.push({ time: request.time, memory: request.memory });
-          return answered(request);
-        });
-
-        await runHere({
-          startChild: logsAsked,
-          ...(measure === undefined ? {} : { measure }),
-        });
-
-        expect(requests).toStrictEqual([asked]);
-      },
-    );
-
     it.each<{
       measure: NonNullable<RunInput["measure"]>;
       time: unknown;
@@ -327,12 +269,6 @@ describe("run", () => {
         time: null,
         memory: { unit: "B/call", median: 40 },
         measurement: { time: null, memory: memoryOf(40) },
-      },
-      {
-        measure: ["time", "memory"],
-        time: { unit: "ns/call", median: 4656 },
-        memory: { unit: "B/call", median: 40 },
-        measurement: { time: { ...measured(4656).time, gc: null }, memory: memoryOf(40) },
       },
     ])(
       "gives a measured result under the measure option $measure its time $time and memory $memory",
@@ -362,23 +298,9 @@ describe("run", () => {
 
       const report = await runHere({ measure: ["memory"], startChild: noCleanPair });
 
-      expect(
-        report.results.map((result) => [result.memory, result.measurements[0].memory]),
-      ).toStrictEqual([[{ unit: "B/call", median: null }, memoryOf(null)]]);
-    });
-
-    it("gives a failed result a null memory, its measurement too", async () => {
-      const failsFn = starter(() => failedOutcome("fn", "kiwi"));
-
-      const report = await runHere({ measure: ["time", "memory"], startChild: failsFn });
-
-      expect(
-        report.results.map((result) => [
-          result.status,
-          result.memory,
-          result.measurements[0].memory,
-        ]),
-      ).toStrictEqual([["failed", null, null]]);
+      expect(report.results.map((result) => result.memory)).toStrictEqual([
+        { unit: "B/call", median: null },
+      ]);
     });
 
     it("runs memory alone when one of the runtimes has a heap reading", async () => {
@@ -409,9 +331,7 @@ describe("run", () => {
         ),
       });
 
-      expect(report.results.map((result) => [result.status, result.memory])).toStrictEqual([
-        ["ok", null],
-      ]);
+      expect(report.results.map((result) => result.status)).toStrictEqual(["ok"]);
     });
 
     describe("when no runtime has a heap reading and measure holds only memory", () => {

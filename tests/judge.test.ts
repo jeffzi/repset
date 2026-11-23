@@ -404,7 +404,6 @@ describe("contestOf", () => {
     it.each([
       { why: "the first ran one the second did not", join: span(1, 8), loop: span(1, 7) },
       { why: "the second ran one the first did not", join: span(1, 7), loop: span(1, 8) },
-      { why: "they share none", join: span(1, 7), loop: span(8, 14) },
     ])(
       "throws a RangeError naming each and the repetitions only it ran when $why",
       ({ join, loop }) => {

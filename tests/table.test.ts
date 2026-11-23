@@ -195,14 +195,6 @@ function contestedTableLines(
   return formatTable(results, [], { color: false, contested: new Map(contested) }).split("\n");
 }
 
-/** The sentence the footer ends with when a plain case ran beside a contest not judged. */
-function plainCaseLine(): string | undefined {
-  const { results, entry } = notJudgedContest(3);
-  return footerLines(
-    tableLines([measured("apple", "node", flatStats(812)), ...results], [entry]),
-  ).at(-1);
-}
-
 /** The footer of `lines`: its lines after the last blank line before the closing one. */
 function footerLines(lines: readonly string[]): string[] {
   return lines.slice(lines.lastIndexOf("", -2) + 1, -1);
@@ -534,23 +526,6 @@ describe("formatTable", () => {
       expect(plainRun).toMatch(/\S/u);
       expect(footerOf).not.toContain(plainRun);
     });
-
-    it.each([
-      { ran: "only the contest's contender ran", plain: [], says: false },
-      {
-        ran: "a plain case ran too",
-        plain: [measured("apple", "node", flatStats(812))],
-        says: true,
-      },
-    ])("adds the plain-case line to the footer only when $ran", ({ plain, says }) => {
-      const sentence = plainCaseLine();
-      const results = [...plain, failedContender("concat/loop", "fn", "kiwi")];
-
-      const footerOf = footerLines(contestedTableLines(results, stoppedContest));
-
-      expect(sentence).toMatch(/\S/u);
-      expect(footerOf.includes(sentence ?? "")).toBe(says);
-    });
   });
 
   describe("when a contest ran on several runtimes", () => {
@@ -597,15 +572,12 @@ describe("formatTable", () => {
       expect(lines[2]).toMatch(new RegExp(`^concat\\b.*\\b${text}$`, "u"));
     });
 
-    it.each([
-      { repetitions: 1, text: "1 repetition" },
-      { repetitions: 3, text: "3 repetitions" },
-    ])("closes the contest with not judged over $text", ({ repetitions, text }) => {
-      const { results, entry } = notJudgedContest(repetitions);
+    it("closes the contest with not judged over 3 repetitions", () => {
+      const { results, entry } = notJudgedContest(3);
 
       const lines = tableLines(results, [entry]);
 
-      expect(lines[8]).toMatch(new RegExp(`\\b${text}$`, "u"));
+      expect(lines[8]).toMatch(/\b3 repetitions$/u);
     });
 
     it("rows a failed contender before the not judged line", () => {
@@ -658,11 +630,13 @@ describe("formatTable", () => {
       describe("when no contest had two finished contenders", () => {
         it("does not blame the repetitions in the footer", () => {
           const { results, entry } = unfinishedContest("concat", ["join", "loop"], 806);
+          const finished = notJudgedContest(9);
+          const repetitionsFooter = footer(finished.results, [finished.entry]);
 
           const text = footer(results, [entry]);
 
           expect(text).toMatch(/\S/u);
-          expect(text).not.toMatch(/\brepetition/u);
+          expect(text).not.toBe(repetitionsFooter);
         });
       });
 

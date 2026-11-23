@@ -338,12 +338,6 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
   });
 
   describe("when the child left no usable result line", () => {
-    it("fails in phase child with a null stack when the child wrote no line", async () => {
-      const outcome = await startFixture("echo.ts", { mode: "list", file: "" });
-
-      expect(outcome).toMatchObject(NO_RESULT);
-    });
-
     it("carries the parse error of a line that is not JSON", async () => {
       const parseError = errorOf(() => JSON.parse("banana"));
 

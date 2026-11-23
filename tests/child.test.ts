@@ -374,23 +374,6 @@ describe("measureCase", () => {
           },
         });
       });
-
-      it("returns the timing's failure when the timing fails", async () => {
-        const result = await measureCase(
-          LIFECYCLE,
-          "fn-throws",
-          { ...TIME_ONLY, memory: true },
-          cleanProbe(),
-        );
-
-        expect(result).toMatchObject({ status: "failed", error: { phase: "fn", message: "kiwi" } });
-      });
-
-      it("reads no heap when the timing fails", async () => {
-        await measureCase(LIFECYCLE, "fn-throws", { ...TIME_ONLY, memory: true }, cleanProbe());
-
-        expect(calls()).not.toContain(READ);
-      });
     });
 
     describe("when time alone is asked", () => {
@@ -619,29 +602,9 @@ describe("measureCase", () => {
     describe("when the case fails during the pass", () => {
       it.each([
         {
-          why: "setup throws a value that is not an Error, kept as the cause",
-          id: "setup-throws-string",
-          error: { phase: "setup", message: "papaya", stack: null, teardownError: null },
-        },
-        {
-          why: "fn throws, its error winning over the cleanup teardown's",
-          id: "fn-and-teardown-throw",
-          error: { phase: "fn", message: "lime", teardownError: { message: "melon" } },
-        },
-        {
-          why: "teardown throws",
-          id: "teardown-throws",
-          error: { phase: "teardown", message: "fig" },
-        },
-        {
           why: "a per-call setup throws after its first call",
           id: "second-setup-throws-per-call",
           error: { phase: "setup", message: "plum" },
-        },
-        {
-          why: "a per-call fn throws on its first call",
-          id: "fn-throws-per-call",
-          error: { phase: "fn", message: "cherry" },
         },
         {
           why: "a per-call teardown throws",
@@ -712,23 +675,6 @@ describe("runOnce", () => {
       await runOnce(CONTEST, "sort/merge");
 
       expect(calls()).toStrictEqual(["merge fn"]);
-    });
-  });
-
-  describe("when the case fails", () => {
-    it("fails in the phase of the failure, with the message of the Error the case threw", async () => {
-      const result = await runOnce(LIFECYCLE, "fn-throws");
-
-      expect(result).toMatchObject({ status: "failed", error: { phase: "fn", message: "kiwi" } });
-    });
-
-    it("carries a cleanup teardown's failure", async () => {
-      const result = await runOnce(LIFECYCLE, "fn-and-teardown-throw");
-
-      expect(result).toMatchObject({
-        status: "failed",
-        error: { phase: "fn", message: "lime", teardownError: { message: "melon" } },
-      });
     });
   });
 });

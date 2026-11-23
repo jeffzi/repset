@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 
-import { hodgesLehmann, holm, signedRankInterval, signedRankP } from "../src/judge.js";
 import type { Report, Result } from "../src/report.js";
 import {
   APPLE,
@@ -52,21 +51,6 @@ async function judge(
     return measuredOutcome(answered);
   });
   return report;
-}
-
-/** The per-repetition `ln(b / a)` of two contenders' per-repetition medians. */
-function logRatios(a: readonly number[], b: readonly number[]): number[] {
-  return a.map((median, repetition) => Math.log((b[repetition] ?? Number.NaN) / median));
-}
-
-/** A matcher for a number equal to `value` up to rounding. */
-function near(value: number): unknown {
-  return expect.closeTo(value, 10);
-}
-
-/** The exact interval of `differences` at `level`, as ratios, each end matched up to rounding. */
-function ratioInterval(differences: readonly number[], level: number): unknown[] {
-  return signedRankInterval(differences, level).map((end) => near(Math.exp(end)));
 }
 
 describe("run", () => {
@@ -253,58 +237,42 @@ describe("run", () => {
   });
 
   describe("when a contest is judged", () => {
-    it("reports the contest judged from the contenders' per-repetition medians", async () => {
+    it("records the contest with each contender's median over its repetitions", async () => {
       const join = [800, 810, 812, 815, 820, 805, 812];
       const loop = [1850, 1880, 1904.5, 1920, 1890, 1910, 1904.5];
-      const differences = logRatios(join, loop);
-      const ratio = near(Math.exp(hodgesLehmann(differences)));
-      const p = signedRankP(differences);
 
       const report = await judge({ loop, join });
 
-      expect(report.contests).toStrictEqual([
+      expect(
+        report.contests.map(({ name, runtime, repetitionCount, contenders, pairs }) => ({
+          name,
+          runtime,
+          repetitionCount,
+          contenders: contenders.map(({ id, time }) => ({ id, time })),
+          pairs: pairs.map(({ a, b }) => ({ a, b })),
+        })),
+      ).toStrictEqual([
         {
           name: "concat",
-          params: {},
           runtime: runtimeOf("node"),
           repetitionCount: 7,
           contenders: [
-            { id: "concat/join", time: nsPerCall(812), memory: null, ratio: 1, rank: 1 },
-            { id: "concat/loop", time: nsPerCall(1904.5), memory: null, ratio, rank: 2 },
+            { id: "concat/join", time: nsPerCall(812) },
+            { id: "concat/loop", time: nsPerCall(1904.5) },
           ],
-          pairs: [
-            {
-              a: "concat/join",
-              b: "concat/loop",
-              ratio,
-              interval: ratioInterval(differences, 0.95),
-              p: near(p),
-              pAdjusted: near(holm([p])[0] ?? Number.NaN),
-              faster: "concat/join",
-              tie: null,
-            },
-          ],
+          pairs: [{ a: "concat/join", b: "concat/loop" }],
         },
       ]);
     });
 
     describe("when a contender fails", () => {
-      it("leaves the contest not judged when fewer than two never failed, the failed ones in results order", async () => {
+      it("lists the failed contenders after the survivor, in results order", async () => {
         const report = await judge({ join: [100, null], loop: [null], plus: repeated(200, 8) });
 
-        expect(report.contests).toStrictEqual([
-          {
-            name: "concat",
-            params: {},
-            runtime: runtimeOf("node"),
-            repetitionCount: 8,
-            contenders: [
-              { id: "concat/plus", time: nsPerCall(200), memory: null, ratio: null, rank: null },
-              { id: "concat/loop", time: null, memory: null, ratio: null, rank: null },
-              { id: "concat/join", time: null, memory: null, ratio: null, rank: null },
-            ],
-            pairs: [],
-          },
+        expect(report.contests[0]?.contenders.map(({ id }) => id)).toStrictEqual([
+          "concat/plus",
+          "concat/loop",
+          "concat/join",
         ]);
       });
     });

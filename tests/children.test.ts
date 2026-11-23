@@ -501,16 +501,27 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
       );
 
       // Without the collection forced before each sample, a collection lands inside the samples
-      // of this body and the pass halves its calls per sample. That holds only while V8 starts
-      // with a small young generation: at `--min-semi-space-size=16` the reading stays at 64
-      // without the forced collection. A Node release that starts larger can leave this test
-      // passing with the collection gone, so a pass here alone does not show the collection holds.
+      // of this body and the pass halves its calls per sample. That holds only while V8's young
+      // generation is small: at `--min-semi-space-size=16` the reading stays at 64 without the
+      // forced collection. Capping the semi-space at 1 MB keeps it small whatever size a Node
+      // release starts with, so the test keeps catching a removed collection.
       it("reads a body allocating a 1024-element array per call at 64 calls per sample", async () => {
+        vi.stubEnv("NODE_OPTIONS", "--max-semi-space-size=1");
+
         const outcome = await startBuiltChild(NODE, measuringMemory("array"), BUILT_OPTIONS);
 
         expect(outcome).toMatchObject({
           status: "ok",
           result: { memory: { sampling: { callsPerSample: 64 } } },
+        });
+      });
+
+      it("halves to one call per sample and keeps no reading when every call collects", async () => {
+        const outcome = await startBuiltChild(NODE, measuringMemory("collect"), BUILT_OPTIONS);
+
+        expect(outcome).toMatchObject({
+          status: "ok",
+          result: { memory: { stats: null, sampling: { callsPerSample: 1 } } },
         });
       });
     });

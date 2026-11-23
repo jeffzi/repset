@@ -27,11 +27,16 @@ bench("object", () => {
   return objectSink;
 });
 
-// A 1024-element array per call is enough garbage that, while V8 starts with a small young
-// generation, a collection lands inside a sample unless one is forced before it.
+// A 1024-element array per call is enough garbage that, while V8's young generation is small, a
+// collection lands inside a sample unless one is forced before it.
 bench("array", () => {
   arraySink = Array.from({ length: 1024 }, () => 0);
   return arraySink;
+});
+
+// The child exposes the collector, so every call runs a collection inside its sample.
+bench("collect", () => {
+  globalThis.gc?.();
 });
 
 bench("zero-per-call", {

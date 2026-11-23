@@ -6,7 +6,8 @@
 // `setupPerCall` cases do. `bench` comes from the built entry, so the measuring child loads one
 // copy of repset, the built one, as a user's child does.
 import { bench } from "../dist/index.js";
-import { BODIES, buildState } from "./check-timing-accuracy/bodies.js";
+import { memoryBenchName } from "./check-memory-timing-bodies.js";
+import { BODIES, BODY_NAMES, buildState } from "./check-timing-accuracy/bodies.js";
 
 /**
  * The allocating body's state: a counter, so no call's object is a constant, and the last object.
@@ -25,11 +26,11 @@ const SCATTER_STRIDE = 7919;
 
 const SCATTER_MODULUS = 101;
 
-bench("check-memory-timing/each", { setup: buildState, fn: BODIES.each });
+for (const name of BODY_NAMES) {
+  bench(memoryBenchName(name), { setup: buildState, fn: BODIES[name] });
+}
 
-bench("check-memory-timing/inlined", { setup: buildState, fn: BODIES.inlined });
-
-bench("check-memory-timing/allocating", {
+bench(memoryBenchName("allocating"), {
   setup: (): Holder => ({ calls: 0, latest: undefined }),
   fn: (holder) => {
     holder.calls += 1;
@@ -37,7 +38,7 @@ bench("check-memory-timing/allocating", {
   },
 });
 
-bench("check-memory-timing/setup-per-call", {
+bench(memoryBenchName("setup-per-call"), {
   setupPerCall: true,
   setup: (): number[] =>
     Array.from({ length: SORTED_SIZE }, (_, index) => (index * SCATTER_STRIDE) % SCATTER_MODULUS),

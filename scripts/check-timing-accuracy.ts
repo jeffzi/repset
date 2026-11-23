@@ -475,7 +475,14 @@ function roundLabel(roundIndex: number): string {
   return roundIndex === 0 ? "first" : "confirmation";
 }
 
-function scenarioLine(name: string, text: string): string {
+/**
+ * Prefixes one line of a timing check's output with the name of what it judged.
+ *
+ * @param name - The scenario's or body's name.
+ * @param text - The rest of the line.
+ * @returns `<name>  <text>`.
+ */
+export function scenarioLine(name: string, text: string): string {
   return `${name}  ${text}`;
 }
 
@@ -483,10 +490,33 @@ function pairPlace(name: string, roundIndex: number, pairIndex: number): string 
   return scenarioLine(name, `${roundLabel(roundIndex)} round, pair ${String(pairIndex + 1)}:`);
 }
 
-function summaryLine(name: string, roundIndex: number, summary: RoundSummary): string {
+/** What a round's summary line calls each side of its pairs. */
+export interface SideLabels {
+  readonly baseline: string;
+  readonly repset: string;
+}
+
+const CHECK_SIDES: SideLabels = { baseline: "baseline", repset: "repset" };
+
+/**
+ * Lays out one round's summary: both medians, the gap, the mean paired difference, whose sign is
+ * the direction the verdict tests, and the p-value.
+ *
+ * @param name - The scenario's or body's name.
+ * @param roundIndex - 0 for the first round, 1 for the confirmation.
+ * @param summary - The verdict's summary of the round.
+ * @param sides - What the line calls the baseline side and the repset side.
+ * @returns The summary line.
+ */
+export function summaryLine(
+  name: string,
+  roundIndex: number,
+  summary: RoundSummary,
+  sides: SideLabels,
+): string {
   return scenarioLine(
     name,
-    `${roundLabel(roundIndex)} round  baseline ${summary.baselineMedian.toFixed(1)} ns  repset ${summary.repsetMedian.toFixed(1)} ns  gap ${formatSigned(summary.gap * 100)}%  mean diff ${formatSigned(summary.meanDifference)} ns  p=${summary.pValue.toFixed(4)}`,
+    `${roundLabel(roundIndex)} round  ${sides.baseline} ${summary.baselineMedian.toFixed(1)} ns  ${sides.repset} ${summary.repsetMedian.toFixed(1)} ns  gap ${formatSigned(summary.gap * 100)}%  mean diff ${formatSigned(summary.meanDifference)} ns  p=${summary.pValue.toFixed(4)}`,
   );
 }
 
@@ -511,7 +541,7 @@ function roundLines(
     const repset = valueAt(pairs.repset, pairIndex);
     return `${pairPlace(name, roundIndex, pairIndex)}  baseline ${String(baseline)}  repset ${String(repset)}`;
   });
-  return [summaryLine(name, roundIndex, summary), ...pairLines];
+  return [summaryLine(name, roundIndex, summary, CHECK_SIDES), ...pairLines];
 }
 
 /**
@@ -590,6 +620,9 @@ function scenarioReport(
  * @throws Error naming the scenario when a reading cannot be trusted; the real repset reader's
  *   filesystem errors from creating or removing its temporary directory, which name no scenario;
  *   whatever a caller-supplied reader throws; and whatever `print` throws.
+ * @throws RangeError when a round's arrays are empty or differ in length, or a round holds fewer
+ *   repset medians than baseline ones.
+ * @throws Error when a confirmation round was taken but the verdict holds no confirmation summary.
  */
 export function runCheck(readers: Readers, print: (text: string) => void = console.log): 0 | 1 {
   let failed = false;

@@ -13,19 +13,27 @@
  */
 import { join } from "node:path";
 
-import { PAIRS, readRepsetRun, type RepsetReading } from "./check-timing-accuracy.js";
-import { judgeScenario, type Pairs, type RoundSummary } from "./check-timing-accuracy/verdict.js";
-
-const BODY_NAMES = ["each", "inlined", "allocating", "setup-per-call"] as const;
-
-type BodyName = (typeof BODY_NAMES)[number];
+import {
+  MEMORY_BODY_NAMES,
+  type MemoryBodyName,
+  memoryBenchName,
+} from "./check-memory-timing-bodies.js";
+import {
+  PAIRS,
+  readRepsetRun,
+  type RepsetReading,
+  scenarioLine,
+  type SideLabels,
+  summaryLine,
+} from "./check-timing-accuracy.js";
+import { judgeScenario, type Pairs } from "./check-timing-accuracy/verdict.js";
 
 /** The two sides of a pair: each takes one reading of a body. */
 export interface Readers {
   /** Reads the body with `--measure time`. */
-  readonly alone: (body: BodyName) => RepsetReading;
+  readonly alone: (body: MemoryBodyName) => RepsetReading;
   /** Reads the body with `--measure time,memory`. */
-  readonly withMemory: (body: BodyName) => RepsetReading;
+  readonly withMemory: (body: MemoryBodyName) => RepsetReading;
 }
 
 type Side = keyof Readers;
@@ -35,6 +43,8 @@ type Pair = Readonly<Record<Side, RepsetReading>>;
 const BENCH_FILE = join("scripts", "check-memory-timing.bench.ts");
 
 const MEASURE: Readonly<Record<Side, string>> = { alone: "time", withMemory: "time,memory" };
+
+const SIDES: SideLabels = { baseline: MEASURE.alone, repset: MEASURE.withMemory };
 
 // ---------------------------------------------------------------------------
 // Reading repset
@@ -50,7 +60,7 @@ const MEASURE: Readonly<Record<Side, string>> = { alone: "time", withMemory: "ti
  *   trusted, or a run with memory measured holds no memory reading.
  * @throws The filesystem error from creating or removing the run's temporary directory.
  */
-function readRun(body: BodyName, side: Side): RepsetReading {
+function readRun(body: MemoryBodyName, side: Side): RepsetReading {
   const name = `${body} (--measure ${MEASURE[side]})`;
   return readRepsetRun(
     name,
@@ -59,7 +69,7 @@ function readRun(body: BodyName, side: Side): RepsetReading {
       "--runtime",
       "node",
       "--filter",
-      `^check-memory-timing/${body}$`,
+      `^${memoryBenchName(body)}$`,
       "--measure",
       MEASURE[side],
     ],
@@ -84,7 +94,7 @@ function readRun(body: BodyName, side: Side): RepsetReading {
  * @returns Both sides' readings.
  * @throws Whatever a reader throws.
  */
-function readPair(body: BodyName, readers: Readers, aloneFirst: boolean): Pair {
+function readPair(body: MemoryBodyName, readers: Readers, aloneFirst: boolean): Pair {
   if (aloneFirst) {
     const alone = readers.alone(body);
     return { alone, withMemory: readers.withMemory(body) };
@@ -106,7 +116,7 @@ function readPair(body: BodyName, readers: Readers, aloneFirst: boolean): Pair {
  *   side.
  * @throws Whatever a reader throws.
  */
-function takeRound(body: BodyName, readers: Readers): Pairs {
+function takeRound(body: MemoryBodyName, readers: Readers): Pairs {
   const baseline: number[] = [];
   const repset: number[] = [];
   const perCallResolutions: number[] = [];
@@ -120,19 +130,6 @@ function takeRound(body: BodyName, readers: Readers): Pairs {
     );
   }
   return { baseline, repset, perCallResolutions };
-}
-
-/**
- * Lays out one round's summary: both medians, the gap and the p-value.
- *
- * @param body - The body the round read.
- * @param roundIndex - 0 for the first round, 1 for the confirmation.
- * @param summary - The verdict's summary of the round.
- * @returns The summary line.
- */
-function summaryLine(body: BodyName, roundIndex: number, summary: RoundSummary): string {
-  const label = roundIndex === 0 ? "first" : "confirmation";
-  return `${body}  ${label} round  time ${summary.baselineMedian.toFixed(1)} ns  time,memory ${summary.repsetMedian.toFixed(1)} ns  gap ${(summary.gap * 100).toFixed(2)}%  p=${summary.pValue.toFixed(4)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -149,15 +146,18 @@ function summaryLine(body: BodyName, roundIndex: number, summary: RoundSummary):
  * @throws Error naming the body and the side when a reading cannot be trusted; the real reader's
  *   filesystem errors from creating or removing its temporary directory, which name no body;
  *   whatever a caller-supplied reader throws; and whatever `print` throws.
+ * @throws RangeError when a round's arrays are empty or differ in length.
  */
 export function runCheck(readers: Readers, print: (text: string) => void = console.log): 0 | 1 {
   let failed = false;
-  for (const body of BODY_NAMES) {
+  for (const body of MEMORY_BODY_NAMES) {
     const verdict = judgeScenario(takeRound(body, readers), () => takeRound(body, readers));
     const summaries =
       verdict.confirmation === undefined ? [verdict.first] : [verdict.first, verdict.confirmation];
-    const lines = summaries.map((summary, roundIndex) => summaryLine(body, roundIndex, summary));
-    lines.push(`${body}  ${verdict.passed ? "pass" : "FAIL"}`);
+    const lines = summaries.map((summary, roundIndex) =>
+      summaryLine(body, roundIndex, summary, SIDES),
+    );
+    lines.push(scenarioLine(body, verdict.passed ? "pass" : "FAIL"));
     failed ||= !verdict.passed;
     print(lines.join("\n"));
   }

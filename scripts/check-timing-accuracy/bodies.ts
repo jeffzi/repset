@@ -53,6 +53,7 @@ export function buildState(): State {
  *
  * @param points - The points to visit.
  * @param visit - Called once per point, in order.
+ * @throws Whatever `visit` throws, unwrapped.
  */
 function each(points: readonly Point[], visit: (point: Point) => void): void {
   for (let index = 0; index < points.length; index++) {

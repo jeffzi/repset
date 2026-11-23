@@ -30,7 +30,7 @@ import {
   APPLE,
   contender,
   failedOutcome,
-  failsLoopInRoundTwo,
+  failsLoopInRepetitionTwo,
   listingStarter,
   measuredOutcome,
   ranOnce,
@@ -39,6 +39,7 @@ import {
   startsNoChild,
   stopped,
 } from "./fake-children.js";
+import { fixturePath } from "./fixture-path.js";
 import { reportAt } from "./report-file.js";
 
 /** A child starter that ends as stopped once the run is aborted, and measures every case before. */
@@ -50,8 +51,8 @@ describe("main", () => {
     clearShellEnv();
   });
 
-  describe("when files with runtimes, a filter, timing limits, a loader and an output are given", () => {
-    it("hands the positional files, --runtime, --filter, --min-time, --min-samples, --timeout, --node-import and --output to the run", async () => {
+  describe("when files with runtimes, a filter, run limits, debug, a loader and an output are given", () => {
+    it("hands the positional files, --runtime, --filter, --min-time, --min-sample-count, --contest-repetition-count, -d, --timeout, --node-import and --output to the run", async () => {
       const dir = workspace();
 
       const { code } = await command(dir, [
@@ -62,8 +63,11 @@ describe("main", () => {
         "fast",
         "--min-time",
         "2.5",
-        "--min-samples",
+        "--min-sample-count",
         "8",
+        "--contest-repetition-count",
+        "3",
+        "-d",
         "--timeout",
         "1234",
         "--node-import",
@@ -72,12 +76,30 @@ describe("main", () => {
         "report.json",
       ]);
 
-      const { runtimes, files, filter, minTime, minSamples, timeout, nodeImport } = reportAt(
-        join(dir, "report.json"),
-      ).options;
+      const {
+        runtimes,
+        files,
+        filter,
+        minTime,
+        minSampleCount,
+        contestRepetitionCount,
+        debug,
+        timeout,
+        nodeImport,
+      } = reportAt(join(dir, "report.json")).options;
       expect({
         code,
-        options: { runtimes, files, filter, minTime, minSamples, timeout, nodeImport },
+        options: {
+          runtimes,
+          files,
+          filter,
+          minTime,
+          minSampleCount,
+          contestRepetitionCount,
+          debug,
+          timeout,
+          nodeImport,
+        },
       }).toStrictEqual({
         code: 0,
         options: {
@@ -85,11 +107,32 @@ describe("main", () => {
           files: ["sort.bench.ts"],
           filter: "fast",
           minTime: 2.5,
-          minSamples: 8,
+          minSampleCount: 8,
+          contestRepetitionCount: 3,
+          debug: true,
           timeout: 1234,
           nodeImport: "tsx",
         },
       });
+    });
+  });
+
+  describe("when the config file sets debug", () => {
+    it.each([
+      {
+        config: "debug-on.ts",
+        args: [],
+        why: "keeps the config file's true when no flag is given",
+      },
+      {
+        config: "debug-off.ts",
+        args: ["--debug"],
+        why: "takes --debug over the config file's false",
+      },
+    ])("$why", async ({ config, args }) => {
+      const { report } = await runWithReport(["--config", fixturePath("config", config), ...args]);
+
+      expect(report.options.debug).toBe(true);
     });
   });
 
@@ -298,9 +341,11 @@ describe("main", () => {
         },
       );
 
-      await command(dir, ["sort.bench.ts", "--rounds", "2", "--output", "report.json"], {
-        startChild: readsReport,
-      });
+      await command(
+        dir,
+        ["sort.bench.ts", "--contest-repetition-count", "2", "--output", "report.json"],
+        { startChild: readsReport },
+      );
 
       expect(written).toStrictEqual([[2, 1]]);
     });
@@ -485,17 +530,17 @@ describe("main", () => {
       },
     );
 
-    it("lowers the live line's total by the rounds a failed contender will not run, keeping its started count", async () => {
+    it("lowers the live line's total by the repetitions a failed contender will not run, keeping its started count", async () => {
       const stderr = terminalOf(80);
       const seen: string[][] = [];
-      const loopFailsInRoundTwo = listingStarter(
+      const loopFailsInRepetitionTwo = listingStarter(
         [contender("join"), contender("loop"), contender("plus")],
-        failsLoopInRoundTwo(),
+        failsLoopInRepetitionTwo(),
       );
 
-      await command(workspace(), ["--rounds", "4", "sort.bench.ts"], {
+      await command(workspace(), ["--contest-repetition-count", "4", "sort.bench.ts"], {
         stderr,
-        startChild: watching(stderr, seen, loopFailsInRoundTwo),
+        startChild: watching(stderr, seen, loopFailsInRepetitionTwo),
       });
 
       const counts = seen.slice(1).map((rows) =>

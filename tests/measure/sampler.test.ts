@@ -334,7 +334,7 @@ describe("sampleSharedState", () => {
 
       const result = run(fake, COARSE_RESOLUTION, { minTime: 0, minSamples: 10 });
 
-      expect(result.timingAttempts).toBe(1);
+      expect(result.timingAttemptCount).toBe(1);
     });
   });
 
@@ -348,22 +348,22 @@ describe("sampleSharedState", () => {
 
         const result = run(fake, COARSE_RESOLUTION);
 
-        expect(result.timingAttempts).toBe(1);
+        expect(result.timingAttemptCount).toBe(1);
       });
 
       it.each([
-        { multiples: 199.75, timingAttempts: 1 },
-        { multiples: 199.25, timingAttempts: 2 },
+        { multiples: 199.75, timingAttemptCount: 1 },
+        { multiples: 199.25, timingAttemptCount: 2 },
       ])(
-        "counts $multiples multiples of the resolution as rounded, taking $timingAttempts runs",
-        ({ multiples, timingAttempts }) => {
+        "counts $multiples multiples of the resolution as rounded, taking $timingAttemptCount runs",
+        ({ multiples, timingAttemptCount }) => {
           const fake = harness((_sample, timed) =>
             timed ? coarse(multiples) / 200 : COARSE_RESOLUTION,
           );
 
           const result = run(fake, COARSE_RESOLUTION);
 
-          expect(result.timingAttempts).toBe(timingAttempts);
+          expect(result.timingAttemptCount).toBe(timingAttemptCount);
         },
       );
     });
@@ -402,7 +402,7 @@ describe("sampleSharedState", () => {
 
         const result = run(fake, COARSE_RESOLUTION);
 
-        expect(result.timingAttempts).toBe(2);
+        expect(result.timingAttemptCount).toBe(2);
       });
 
       it("times the next run at least one call larger when its shortest sample spans 200 times the resolution", () => {
@@ -415,7 +415,7 @@ describe("sampleSharedState", () => {
         const result = run(fake, resolutionMs);
 
         expect(new Set(fake.sampleCalls.slice(fake.collectsAt[1]))).toStrictEqual(new Set([2]));
-        expect(result.timingAttempts).toBe(2);
+        expect(result.timingAttemptCount).toBe(2);
       });
     });
 
@@ -501,8 +501,8 @@ describe("sampleSharedState", () => {
 
         const result = run(fake, COARSE_RESOLUTION);
 
-        expect(result.timingAttempts).toBe(3);
-        expect(result.warmupSamples).toBe(fake.collectsAt[2]);
+        expect(result.timingAttemptCount).toBe(3);
+        expect(result.warmupSampleCount).toBe(fake.collectsAt[2]);
       });
 
       it("reports the kept run's length alone", () => {
@@ -685,7 +685,7 @@ describe("samplePerCall", () => {
 
         const result = runPerCall(fake, { resolutionMs: FINE_RESOLUTION });
 
-        expect(result.warmupSamples).toBe(16);
+        expect(result.warmupSampleCount).toBe(16);
       });
 
       it("runs 64 timed samples", () => {

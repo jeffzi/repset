@@ -22,12 +22,12 @@ const ROOT = fileURLToPath(new URL("../", import.meta.url));
 
 const OPTIONS_MODULE = new URL("../src/options.ts", import.meta.url).href;
 
-/** The `minSamples` that `config` resolves to in a spawned Node process, through Node's own loader. */
-function minSamplesInNode(config: string): string {
+/** The `minSampleCount` that `config` resolves to in a spawned Node process, through Node's own loader. */
+function minSampleCountInNode(config: string): string {
   const script = [
     `const { resolveOptions } = await import(${JSON.stringify(OPTIONS_MODULE)});`,
     `const resolved = await resolveOptions({ cwd: ${JSON.stringify(FIXTURES)}, config: ${JSON.stringify(config)} });`,
-    "process.stdout.write(String(resolved.minSamples));",
+    "process.stdout.write(String(resolved.minSampleCount));",
   ].join("\n");
   return execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
     cwd: ROOT,
@@ -52,8 +52,9 @@ const DEFAULTS = {
   includeBase: FIXTURES,
   runtimes: DEFAULT_RUNTIMES,
   minTime: DEFAULT_MIN_TIME,
-  minSamples: DEFAULT_MIN_SAMPLES,
-  rounds: undefined,
+  minSampleCount: DEFAULT_MIN_SAMPLES,
+  contestRepetitionCount: undefined,
+  debug: false,
   timeout: DEFAULT_TIMEOUT,
   nodeImport: undefined,
   filter: undefined,
@@ -70,7 +71,7 @@ describe("resolveOptions", () => {
     it("reads the one config file the working directory holds", async () => {
       const resolved = await resolveOptions({ cwd: fixture("found") });
 
-      expect(resolved.minSamples).toBe(3);
+      expect(resolved.minSampleCount).toBe(3);
     });
 
     it("rejects a working directory that holds several config files, naming them", async () => {
@@ -91,9 +92,9 @@ describe("resolveOptions", () => {
     );
 
     it("reads a file whose path a raw import would misread", { timeout: SPAWN_TIMEOUT_MS }, () => {
-      const minSamples = minSamplesInNode("hash#name.ts");
+      const minSampleCount = minSampleCountInNode("hash#name.ts");
 
-      expect(minSamples).toBe("6");
+      expect(minSampleCount).toBe("6");
     });
 
     it("rejects a config path the file system cannot stat", async () => {
@@ -148,6 +149,7 @@ describe("resolveOptions", () => {
       { name: "include-number.ts", option: "include", shown: "7" },
       { name: "runtime-unknown.ts", option: "runtimes", shown: "deno" },
       { name: "node-import-number.ts", option: "nodeImport", shown: "5" },
+      { name: "debug-string.ts", option: "debug", shown: "yes" },
     ])("rejects $name, naming $option and the value", async ({ name, option, shown }) => {
       const result = resolveHere({ config: name });
 
@@ -166,8 +168,12 @@ describe("resolveOptions", () => {
       { options: { runtimes: ["node", "bun", "node"] }, option: "runtimes", shown: "node" },
       { options: { minTime: -1 }, option: "minTime", shown: "-1" },
       { options: { minTime: Number.NaN }, option: "minTime", shown: "NaN" },
-      { options: { minSamples: 1.5 }, option: "minSamples", shown: "1.5" },
-      { options: { rounds: 0 }, option: "rounds", shown: "0" },
+      { options: { minSampleCount: 1.5 }, option: "minSampleCount", shown: "1.5" },
+      {
+        options: { contestRepetitionCount: 0 },
+        option: "contestRepetitionCount",
+        shown: "0",
+      },
       { options: { timeout: 0 }, option: "timeout", shown: "0" },
       { options: { timeout: 2.5 }, option: "timeout", shown: "2.5" },
       { options: { timeout: 2_147_483_648 }, option: "timeout", shown: "2147483648" },
@@ -199,8 +205,9 @@ describe("resolveOptions", () => {
         includeBase: FIXTURES,
         runtimes: ["bun", "node"],
         minTime: 0,
-        minSamples: 1,
-        rounds: 1,
+        minSampleCount: 1,
+        contestRepetitionCount: 1,
+        debug: true,
         timeout: 2_147_483_647,
         nodeImport: { written: "tsx", resolved: "tsx" },
         filter: undefined,
@@ -213,8 +220,9 @@ describe("resolveOptions", () => {
         include: ["*.bench.mjs"],
         runtimes: ["node"],
         minTime: 7,
-        minSamples: 9,
-        rounds: 6,
+        minSampleCount: 9,
+        contestRepetitionCount: 6,
+        debug: false,
         timeout: 200,
         nodeImport: "jiti",
         filter: "^a",
@@ -225,8 +233,9 @@ describe("resolveOptions", () => {
         includeBase: FIXTURES,
         runtimes: ["node"],
         minTime: 7,
-        minSamples: 9,
-        rounds: 6,
+        minSampleCount: 9,
+        contestRepetitionCount: 6,
+        debug: false,
         timeout: 200,
         nodeImport: { written: "jiti", resolved: "jiti" },
         filter: /^a/u,

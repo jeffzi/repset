@@ -12,11 +12,12 @@ import type { FoundRuntime } from "./children.js";
 import type { Runtime } from "./measure/runtime.js";
 import type { ResolvedOptions } from "./options.js";
 import type {
+  CaseMeasurement,
   Contest,
   ContestPair,
   FailedResult,
-  Machine,
-  MeasuredProcess,
+  HeadlineTime,
+  Host,
   MeasuredResult,
   Report,
   ReportOptions,
@@ -42,7 +43,7 @@ export interface RunInput extends OnceInput {
   readonly onResult?: ((result: Result, contests: readonly Contest[]) => void) | undefined;
   /**
    * Receives the number of planned measuring children that will no longer start when a contender
-   * fails: the rounds of its contest still to come on that runtime.
+   * fails: the repetitions of its contest still to come on that runtime.
    */
   readonly onDropped?: ((count: number) => void) | undefined;
   /**
@@ -59,7 +60,7 @@ export interface RunInput extends OnceInput {
   readonly callsPerSample?: number | undefined;
   /** The `package.json` whose version the report records; the package's own by default. */
   readonly packageJson?: string | undefined;
-  /** Draws the seed of the round orders when the run starts; a random 32-bit integer by default. */
+  /** Draws the seed of the repetition orders when the run starts; a random 32-bit integer by default. */
   readonly drawSeed?: (() => number) | undefined;
 }
 
@@ -77,15 +78,6 @@ export interface OnceRun {
   readonly interrupted: boolean;
   readonly results: readonly OnceResult[];
 }
-
-/** What the process of a failed child did not reach. */
-const NOTHING_MEASURED = {
-  stats: null,
-  sampling: null,
-  checks: null,
-  gc: null,
-  rawSamples: null,
-} as const;
 
 /**
  * Reads the `version` string of a `package.json`.
@@ -124,7 +116,7 @@ function resultBase(selected: SelectedCase, runtime: FoundRuntime): ResultBase {
 /** How many timer resolutions per call a pair's ratio must clear past 1 to tell its contenders apart. */
 const RESOLUTIONS = 1.25;
 
-/** Two contenders of a contest, the signed-rank test of their rounds, and whom it proves faster. */
+/** Two contenders of a contest, the signed-rank test of their repetitions, and whom it proves faster. */
 interface Verdict {
   readonly a: MeasuredResult;
   readonly b: MeasuredResult;
@@ -134,21 +126,23 @@ interface Verdict {
   readonly tie: ContestPair["tie"];
 }
 
-/** The per-round `ln(median_b / median_a)` over the rounds both contenders ran. */
+/** The per-repetition `ln(median_b / median_a)` over the repetitions both contenders ran. */
 function logRatios(a: MeasuredResult, b: MeasuredResult): number[] {
-  const medians = new Map(a.processes.map((process) => [process.round, process.stats.median]));
-  return b.processes.flatMap((process) => {
-    const median = medians.get(process.round);
-    return median === undefined ? [] : [Math.log(process.stats.median / median)];
+  const medians = new Map(
+    a.measurements.map(({ repetition, time }) => [repetition, time.stats.median]),
+  );
+  return b.measurements.flatMap(({ repetition, time }) => {
+    const median = medians.get(repetition);
+    return median === undefined ? [] : [Math.log(time.stats.median / median)];
   });
 }
 
-/** The largest timer resolution per call among both contenders' processes, over the smaller median. */
+/** The largest timer resolution per call among both contenders' measurements, over the smaller median. */
 function resolutionPerCall(a: MeasuredResult, b: MeasuredResult): number {
-  const perCall = [...a.processes, ...b.processes].map(
-    ({ sampling }) => sampling.timerResolutionNs / sampling.callsPerSample,
+  const perCall = [...a.measurements, ...b.measurements].map(
+    ({ time: { sampling } }) => sampling.timerResolutionNs / sampling.callsPerSample,
   );
-  return Math.max(...perCall) / Math.min(a.median, b.median);
+  return Math.max(...perCall) / Math.min(a.time.median, b.time.median);
 }
 
 /** Why a pair has no verdict, or `null` when it is proven; see `ContestPair.tie`. */
@@ -158,7 +152,7 @@ function tieOf(
   a: MeasuredResult,
   b: MeasuredResult,
 ): ContestPair["tie"] {
-  if (pAdjusted > ALPHA) return "rounds";
+  if (pAdjusted > ALPHA) return "repetitions";
   const withinTimer = Math.exp(Math.abs(estimate)) - 1 <= RESOLUTIONS * resolutionPerCall(a, b);
   return withinTimer ? "timer" : null;
 }
@@ -215,29 +209,31 @@ function pairOf(verdict: Verdict, order: readonly MeasuredResult[], level: numbe
 
 /**
  * Judges a contest from its contenders' results. A contest left with fewer than two contenders
- * that never failed, or whose rounds `n` fail `2 / 2ⁿ ≤ 0.05 / pairs`, is not judged: its entry
- * holds the medians and no rank, ratio or pair.
+ * that never failed, or whose repetitions `n` fail `2 / 2ⁿ ≤ 0.05 / pairs`, is not judged: its
+ * entry holds the times and no rank, ratio or pair.
  *
  * @param results - The contest's results on one runtime, in the order they were emitted.
  * @returns The contest's entry.
  */
 function contestOf(results: readonly [Result, ...Result[]]): Contest {
   const [{ name, runtime }] = results;
-  const rounds = Math.max(
-    ...results.flatMap(({ processes }) => processes.map(({ round }) => round)),
+  const repetitionCount = Math.max(
+    ...results.flatMap(({ measurements }) =>
+      measurements.flatMap(({ repetition }) => (repetition === null ? [] : [repetition])),
+    ),
   );
   const measured = results.filter((result): result is MeasuredResult => result.status === "ok");
   const failed = results
     .filter((result): result is FailedResult => result.status === "failed")
-    .map(({ id }) => ({ id, median: null, ratio: null, rank: null }));
+    .map(({ id }) => ({ id, time: null, ratio: null, rank: null }));
   const pairCount = pairsOf(measured.length);
-  const head = { name, params: {}, runtime, rounds };
-  const smallestP = 2 / 2 ** rounds;
-  const tooFewRounds = smallestP > ALPHA / pairCount;
-  if (measured.length < 2 || tooFewRounds) {
+  const head = { name, params: {}, runtime, repetitionCount };
+  const smallestP = 2 / 2 ** repetitionCount;
+  const tooFewRepetitions = smallestP > ALPHA / pairCount;
+  if (measured.length < 2 || tooFewRepetitions) {
     const contenders = measured
-      .toSorted((left, right) => left.median - right.median)
-      .map(({ id, median }) => ({ id, median, ratio: null, rank: null }));
+      .toSorted((left, right) => left.time.median - right.time.median)
+      .map(({ id, time }) => ({ id, time, ratio: null, rank: null }));
     return { ...head, contenders: [...contenders, ...failed], pairs: [] };
   }
   const verdicts = verdictsOf(measured);
@@ -249,7 +245,9 @@ function contestOf(results: readonly [Result, ...Result[]]): Contest {
   const ranked = measured
     .map((result) => ({ result, rank: rankOf(result) }))
     .toSorted((left, right) =>
-      left.rank === right.rank ? left.result.median - right.result.median : left.rank - right.rank,
+      left.rank === right.rank
+        ? left.result.time.median - right.result.time.median
+        : left.rank - right.rank,
     );
   const order = ranked.map(({ result }) => result);
   const position = (id: string): number => order.findIndex((result) => result.id === id);
@@ -263,7 +261,7 @@ function contestOf(results: readonly [Result, ...Result[]]): Contest {
   const [fastest] = order;
   const contenders = ranked.map(({ result, rank }) => ({
     id: result.id,
-    median: result.median,
+    time: result.time,
     ratio:
       result === fastest
         ? 1
@@ -289,43 +287,46 @@ export function medianOf(values: readonly number[]): number {
 }
 
 /**
- * The result of a case whose every process measured, its median the median of theirs.
+ * The result of a case whose every measuring child measured, its `time.median` the median of their
+ * `time.stats.median`s.
  *
  * @param selected - The case.
  * @param runtime - The runtime its children ran on.
- * @param processes - Its processes, in run order.
+ * @param measurements - Its measurements, in run order.
  * @returns The measured result.
  */
 function measuredResult(
   selected: SelectedCase,
   runtime: FoundRuntime,
-  processes: readonly [MeasuredProcess, ...MeasuredProcess[]],
+  measurements: readonly [CaseMeasurement, ...CaseMeasurement[]],
 ): MeasuredResult {
-  return {
-    ...resultBase(selected, runtime),
-    status: "ok",
-    error: null,
-    median: medianOf(processes.map((process) => process.stats.median)),
-    processes,
+  const time: HeadlineTime = {
+    unit: "ns/call",
+    median: medianOf(measurements.map((measurement) => measurement.time.stats.median)),
   };
+  return { ...resultBase(selected, runtime), status: "ok", error: null, time, measurements };
 }
 
 /**
- * The handlers that turn measuring children into results: a case gathers one process per round;
- * a failed child finishes its case at once, and the rest finish when their group's last round
- * ends. A contest's entry is recorded just before its last result is emitted: the last survivor's
- * when its last round ends, or the last failure's when no contender is left running. A group the
- * stop signal ends gives no further result and no entry.
+ * The handlers that turn measuring children into results: a case gathers one measurement per
+ * repetition; a failed child finishes its case at once, and the rest finish when their group's last
+ * repetition ends. A contest's entry is recorded just before its last result is emitted: the last
+ * survivor's when its last repetition ends, or the last failure's when no contender is left
+ * running. A group the stop signal ends gives no further result and no entry.
  *
  * @param emit - Receives each result as it finishes.
  * @param record - Receives each contest's entry as it finishes.
+ * @param keepsGc - Tells whether the resolved `debug` option is on, asked for each child because
+ *   the options resolve after these handlers are built; when it returns false, each measurement's
+ *   `gc` is `null`.
  * @returns The handlers of each child's outcome and of each group's end.
  */
 function resultHandlers(
   emit: (result: Result) => void,
   record: (contest: Contest) => void,
+  keepsGc: () => boolean,
 ): Pick<StartHandlers<"measure">, "finished" | "ended"> {
-  const ran = new Map<SelectedCase, MeasuredProcess[]>();
+  const ran = new Map<SelectedCase, CaseMeasurement[]>();
   const failed = new Map<SelectedCase, FailedResult>();
   const takeFailures = (group: readonly SelectedCase[]): FailedResult[] =>
     [...failed].flatMap(([selected, result]) => {
@@ -334,24 +335,23 @@ function resultHandlers(
       return [result];
     });
   return {
-    finished: ({ runtime, selected, group, outcome, round, orderInRound }) => {
-      const processes = ran.get(selected) ?? [];
+    finished: ({ runtime, selected, group, outcome, repetition, orderInRepetition }) => {
+      const measurements = ran.get(selected) ?? [];
       if (outcome.status === "ok") {
-        const { stats, sampling, checks, gc } = outcome.result;
-        const measuring = { round, orderInRound, stats, sampling, checks, gc, rawSamples: null };
-        ran.set(selected, [...processes, measuring]);
+        const measured = outcome.result.time;
+        const time = keepsGc() ? measured : { ...measured, gc: null };
+        ran.set(selected, [...measurements, { repetition, orderInRepetition, time }]);
         return;
       }
       ran.delete(selected);
       const { phase, message, stack, teardownError } = outcome.error;
       const error = { phase, message, stack, teardownError, output: outcome.output };
-      const failing = { round, orderInRound, ...NOTHING_MEASURED };
       const result: FailedResult = {
         ...resultBase(selected, runtime),
         status: "failed",
         error,
-        median: null,
-        processes: [...processes, failing],
+        time: null,
+        measurements: [...measurements, { repetition, orderInRepetition, time: null }],
       };
       const contestEnds =
         isContest(group) && group.every((member) => member === selected || failed.has(member));
@@ -382,16 +382,16 @@ function resultHandlers(
  * Describes the host.
  *
  * @param cpus - Lists the host's logical CPUs.
- * @returns The OS, the architecture, the first CPU's model and the CPU count; `cpu` and `cores`
- *   are `null` when `cpus` lists none.
+ * @returns The OS, the architecture, the first CPU's model and the CPU count; `cpu` and
+ *   `coreCount` are `null` when `cpus` lists none.
  */
-function machineOf(cpus: () => readonly { readonly model: string }[]): Machine {
+function hostOf(cpus: () => readonly { readonly model: string }[]): Host {
   const listed = cpus();
   return {
     os: process.platform,
     arch: process.arch,
     cpu: listed[0]?.model ?? null,
-    cores: listed.length === 0 ? null : listed.length,
+    coreCount: listed.length === 0 ? null : listed.length,
   };
 }
 
@@ -401,7 +401,7 @@ function machineOf(cpus: () => readonly { readonly model: string }[]): Machine {
  *
  * @param input - The caller's options.
  * @param options - The resolved options.
- * @param seed - The seed of the round orders, `null` when the run holds no contest.
+ * @param seed - The seed of the repetition orders, `null` when the run holds no contest.
  * @returns The report's options.
  */
 function reportOptions(
@@ -414,8 +414,9 @@ function reportOptions(
     files: input.files === undefined || input.files.length === 0 ? null : [...input.files],
     filter: input.filter ?? null,
     minTime: options.minTime,
-    minSamples: options.minSamples,
-    rounds: options.rounds ?? null,
+    minSampleCount: options.minSampleCount,
+    contestRepetitionCount: options.contestRepetitionCount ?? null,
+    debug: options.debug,
     seed,
     timeout: options.timeout,
     nodeImport: options.nodeImport?.written ?? null,
@@ -423,26 +424,26 @@ function reportOptions(
   };
 }
 
-/** A random 32-bit seed for the round orders. */
+/** A random 32-bit seed for the repetition orders. */
 function drawRandomSeed(): number {
   return randomInt(2 ** 32);
 }
 
 /**
  * Runs a benchmark run: resolves the options, selects the cases, then measures each selected case
- * on each runtime in its own child, one at a time, and each contest in rounds of one child per
+ * on each runtime in its own child, one at a time, and each contest in repetitions of one child per
  * contender. It never prints.
  *
  * A failed case is a result with an `error`, never a throw, and does not stop the run. A plain
  * case's result is emitted when its child ends, a failed contender's when its failing child ends,
- * and the other contenders' when their contest's last round ends. When the stop signal fires, the
- * running child is killed, its case and the unfinished contenders of its contest get no result,
- * and no further child starts.
+ * and the other contenders' when their contest's last repetition ends. When the stop signal fires,
+ * the running child is killed, its case and the unfinished contenders of its contest get no
+ * result, and no further child starts.
  *
  * @param input - The caller's options, the positional files, the stop signal, the result,
- *   selection, plan and dropped-children callbacks, the calls per sample to fix, and the functions that look a
- *   runtime up, start a child, list the CPUs, draw the seed and name the `package.json` to read
- *   the version from, the real ones by default.
+ *   selection, plan and dropped-children callbacks, the calls per sample to fix, and the functions
+ *   that look a runtime up, start a child, list the CPUs, draw the seed and name the
+ *   `package.json` to read the version from, the real ones by default.
  * @returns The report of the results that finished, with `interrupted` set when the stop signal
  *   ended the run.
  * @throws {@link Error} The error reading the package's `package.json`, before any child starts;
@@ -454,11 +455,12 @@ function drawRandomSeed(): number {
 export async function run(input: RunInput): Promise<Report> {
   const startedAt = new Date().toISOString();
   const repset = await packageVersion(input.packageJson);
-  const machine = machineOf(input.cpus ?? realCpus);
+  const host = hostOf(input.cpus ?? realCpus);
   const seed = (input.drawSeed ?? drawRandomSeed)();
   const results: Result[] = [];
   const contests: Contest[] = [];
   let contested = false;
+  let debug = false;
   const { callsPerSample } = input;
   const reportOf = (options: ResolvedOptions, interrupted: boolean): Report => ({
     schema: 1,
@@ -466,7 +468,7 @@ export async function run(input: RunInput): Promise<Report> {
     startedAt,
     interrupted,
     options: reportOptions(input, options, contested ? seed : null),
-    machine,
+    host,
     results: [...results],
     contests: [...contests],
   });
@@ -484,17 +486,18 @@ export async function run(input: RunInput): Promise<Report> {
       file: selected.path,
       id: selected.id,
       minTime: resolved.minTime,
-      minSamples: resolved.minSamples,
+      minSamples: resolved.minSampleCount,
       ...(callsPerSample === undefined ? {} : { callsPerSample }),
     }),
     {
       passed: (resolved, total, formed) => {
         contested = formed.length > 0;
+        debug = resolved.debug;
         input.onSelected?.(reportOf(resolved, false), formed);
         input.onPlanned?.(total);
       },
       dropped: input.onDropped,
-      ...resultHandlers(emit, record),
+      ...resultHandlers(emit, record, () => debug),
     },
     seed,
   );
@@ -503,8 +506,8 @@ export async function run(input: RunInput): Promise<Report> {
 
 /**
  * Runs every selected case once per runtime, each in its own child, with no timing, one at a time
- * in selection order; a contest's contenders run once each, forming no rounds. A failed case does
- * not stop it.
+ * in selection order; a contest's contenders run once each, forming no repetitions. A failed case
+ * does not stop it.
  *
  * @param input - The caller's options, the positional files, the stop signal, the plan callback,
  *   and the functions that look a runtime up and start a child, the real ones by default.

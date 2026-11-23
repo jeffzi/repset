@@ -1,1 +1,1 @@
-export const minSamples = 3;
+export const minSampleCount = 3;

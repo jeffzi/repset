@@ -5,19 +5,27 @@
 
 import { property } from "../utils.js";
 
-/** `detail.kind` of a Node `gc` performance entry for a scavenge (`NODE_PERFORMANCE_GC_MINOR`). */
-const GC_MINOR = 1;
+/**
+ * `detail.kind` values of a Node `gc` performance entry for a young-generation collection: a
+ * scavenge (`NODE_PERFORMANCE_GC_MINOR`) and V8's minor mark-sweep.
+ */
+const GC_MINOR_KINDS: ReadonlySet<unknown> = new Set([1, 2]);
 
 /** `detail.kind` of a Node `gc` performance entry for a full mark-compact (`NODE_PERFORMANCE_GC_MAJOR`). */
 const GC_MAJOR = 4;
 
-/** The collections a `gc` performance observer saw while the body's samples were timed. */
+/**
+ * The collections a `gc` performance observer saw while the body's samples were timed.
+ *
+ * Only minor and major collections count: incremental-marking steps and weak-callback processing
+ * are parts of a collection, not collections of their own.
+ */
 export interface GcDuringTiming {
-  readonly count: number;
-  readonly minor: number;
-  readonly major: number;
-  readonly totalMs: number;
-  readonly maxMs: number;
+  readonly collectionCount: number;
+  readonly durationMs: number;
+  readonly maxDurationMs: number;
+  readonly nodeMinorCollectionCount: number;
+  readonly nodeMajorCollectionCount: number;
 }
 
 /** The real-time bounds, on the `performance.now()` timeline, of the body's timed samples. */
@@ -76,23 +84,30 @@ function nextTurn(): Promise<void> {
 }
 
 /**
- * Counts collections by kind and sums their durations.
+ * Counts the minor and major collections and sums their durations.
  *
  * @param entries - The `gc` performance entries to count.
- * @returns How many there were, how many were minor and major, and their total and longest
- *   duration in milliseconds.
+ * @returns How many minor and major collections there were, how many of each, and their total and
+ *   longest duration in milliseconds.
  */
 function summarizeCollections(entries: readonly PerformanceEntry[]): GcDuringTiming {
   let minor = 0;
   let major = 0;
-  let totalMs = 0;
-  let maxMs = 0;
+  let durationMs = 0;
+  let maxDurationMs = 0;
   for (const entry of entries) {
     const kind = property(property(entry, "detail"), "kind");
-    if (kind === GC_MINOR) minor += 1;
-    if (kind === GC_MAJOR) major += 1;
-    totalMs += entry.duration;
-    maxMs = Math.max(maxMs, entry.duration);
+    if (GC_MINOR_KINDS.has(kind)) minor += 1;
+    else if (kind === GC_MAJOR) major += 1;
+    else continue;
+    durationMs += entry.duration;
+    maxDurationMs = Math.max(maxDurationMs, entry.duration);
   }
-  return { count: entries.length, minor, major, totalMs, maxMs };
+  return {
+    collectionCount: minor + major,
+    durationMs,
+    maxDurationMs,
+    nodeMinorCollectionCount: minor,
+    nodeMajorCollectionCount: major,
+  };
 }

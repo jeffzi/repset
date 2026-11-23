@@ -783,8 +783,8 @@ describe("measure", () => {
           timerResolutionNs: 125_000,
           callsPerSample: 2,
           callsPerSampleFixed: true,
-          warmupSamples: WARMUP_MIN_SAMPLES,
-          timingAttempts: 1,
+          warmupSampleCount: WARMUP_MIN_SAMPLES,
+          timingAttemptCount: 1,
           timingMs: expect.any(Number),
         },
         checks: { ratioToEmptyBody: 1600 },
@@ -810,9 +810,9 @@ describe("measure", () => {
       const result = await run(fake);
 
       const observed = result.gc;
-      expect(observed?.major).toBeGreaterThanOrEqual(1);
-      expect(observed?.maxMs).toBeGreaterThan(0);
-      expect(observed?.totalMs).toBeGreaterThanOrEqual(observed?.maxMs ?? Number.NaN);
+      expect(observed?.nodeMajorCollectionCount).toBeGreaterThanOrEqual(1);
+      expect(observed?.maxDurationMs).toBeGreaterThan(0);
+      expect(observed?.durationMs).toBeGreaterThanOrEqual(observed?.maxDurationMs ?? Number.NaN);
     });
 
     it("counts the minor collections a body forces while timed", async () => {
@@ -820,7 +820,7 @@ describe("measure", () => {
 
       const result = await run(fake);
 
-      expect(result.gc?.minor).toBeGreaterThanOrEqual(1);
+      expect(result.gc?.nodeMinorCollectionCount).toBeGreaterThanOrEqual(1);
     });
 
     it("counts the forced GC a body forces during the kept timing attempt, leaving out those it forces during a discarded one", async () => {
@@ -836,7 +836,7 @@ describe("measure", () => {
 
       const result = await measure(fake.benchmark, { now: fake.now });
 
-      expect(result.gc?.count).toBe(1);
+      expect(result.gc?.collectionCount).toBe(1);
     });
 
     it("counts none for a body that allocates nothing, leaving out the forced GC before timing", async () => {
@@ -853,11 +853,11 @@ describe("measure", () => {
       const result = await measure(benchmark, { now: clock.now, callsPerSample: 1 });
 
       expect(result.gc).toStrictEqual({
-        count: 0,
-        minor: 0,
-        major: 0,
-        totalMs: 0,
-        maxMs: 0,
+        collectionCount: 0,
+        durationMs: 0,
+        maxDurationMs: 0,
+        nodeMinorCollectionCount: 0,
+        nodeMajorCollectionCount: 0,
       });
     });
   });

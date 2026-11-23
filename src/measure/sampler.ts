@@ -98,12 +98,12 @@ export interface SamplerResult {
   /** The count every sample of the kept run ran, or the fixed count when one was given. */
   readonly callsPerSample: number;
   /** How many timing attempts were taken, the kept one included. */
-  readonly timingAttempts: number;
+  readonly timingAttemptCount: number;
   /**
    * The samples run before the kept run: warmup's, plus every sample of each discarded timing attempt.
    * A call outside any clock read, such as the per-call sampler's collection run, is not a sample.
    */
-  readonly warmupSamples: number;
+  readonly warmupSampleCount: number;
   /**
    * The kept run's length on the sampler's clock, in milliseconds, from the start of its first
    * sample to the end of its last; for the per-call sampler, every setup and teardown in between
@@ -112,7 +112,7 @@ export interface SamplerResult {
   readonly timingMs: number;
 }
 
-type WarmupResult = Pick<SamplerResult, "callsPerSample" | "warmupSamples">;
+type WarmupResult = Pick<SamplerResult, "callsPerSample" | "warmupSampleCount">;
 
 // ---------------------------------------------------------------------------
 // Count calibration
@@ -258,7 +258,7 @@ export function recordWarmup(progress: WarmupProgress, spanMs: number): void {
  * @returns The count warmup ended on, and the samples it recorded.
  */
 function warmedUp(progress: WarmupProgress): WarmupResult {
-  return { callsPerSample: progress.count, warmupSamples: progress.samples };
+  return { callsPerSample: progress.count, warmupSampleCount: progress.samples };
 }
 
 // ---------------------------------------------------------------------------
@@ -478,28 +478,28 @@ export function sampleSharedState<State>(options: SharedStateOptions<State>): Sa
     callsPerSample === undefined ? calibratedSampleMs(resolutionMs) : warmed.shortestMs,
   );
   let calls = warmed.callsPerSample;
-  let warmupSamples = warmed.warmupSamples;
-  let timingAttempts = 1;
+  let warmupSampleCount = warmed.warmupSampleCount;
+  let timingAttemptCount = 1;
   let run = timingAttempt(timed, calls, spans, options);
   if (callsPerSample === undefined) {
     while (!isKept(spans, run, resolutionMs)) {
       calls = grownCount(calls, spans.subarray(0, run.stored), resolutionMs);
-      if (timingAttempts === MAX_TIMING_ATTEMPTS) {
+      if (timingAttemptCount === MAX_TIMING_ATTEMPTS) {
         throw new CalibrationError(
-          `${String(timingAttempts)} timing attempts were discarded; the next would need ${String(calls)} calls per sample`,
+          `${String(timingAttemptCount)} timing attempts were discarded; the next would need ${String(calls)} calls per sample`,
         );
       }
-      warmupSamples += run.stored;
+      warmupSampleCount += run.stored;
       run = timingAttempt(timed, calls, spans, options);
-      timingAttempts += 1;
+      timingAttemptCount += 1;
     }
   }
   return {
     spans,
     sampleCount: run.stored,
     callsPerSample: calls,
-    timingAttempts,
-    warmupSamples,
+    timingAttemptCount,
+    warmupSampleCount,
     timingMs: run.lengthMs,
   };
 }
@@ -657,9 +657,9 @@ function timePerCallSamples<State>(
  *
  * @param options - The lifecycle, the forced GC, the holder of the state in flight, `minTime` and
  *   `minSamples`, and the clock.
- * @returns The timed spans, the calls per sample, `timingAttempts` of 1 (this sampler never checks a
- *   timing attempt or times again), warmup's samples without the forced GC's call, and the
- *   timed run's wall time, every setup and teardown in it included.
+ * @returns The timed spans, the calls per sample, `timingAttemptCount` of 1 (this sampler never
+ *   checks a timing attempt or times again), warmup's samples without the forced GC's call, and
+ *   the timed run's wall time, every setup and teardown in it included.
  * @throws Whatever `setup`, `fn`, `teardown` or `collect` throws, leaving the state built and not
  *   torn down, if any, in `options.inFlight`; and CalibrationError when warmup's calibrated count
  *   would pass `ceil(200 × resolution / 0.1 ns)`, naming the count asked for and the cap, before any
@@ -686,8 +686,8 @@ export function samplePerCall<State>(options: PerCallOptions<State>): SamplerRes
     spans,
     sampleCount,
     callsPerSample: warmed.callsPerSample,
-    timingAttempts: 1,
-    warmupSamples: warmed.warmupSamples,
+    timingAttemptCount: 1,
+    warmupSampleCount: warmed.warmupSampleCount,
     timingMs,
   };
 }

@@ -23,6 +23,8 @@ export interface Progress {
   dropped(count: number): void;
   /** Shows that the phase's next child starts, doing what `text` says. */
   starting(text: string): void;
+  /** Prints `text`, whole lines, above the live line, which shows again beneath it. */
+  printing(text: string): void;
   /** Stops the indicator and erases the live line; calling it again does nothing. */
   stop(): void;
 }
@@ -34,6 +36,9 @@ function linePerChild(stderr: Output): Progress {
     dropped: () => undefined,
     starting: (text) => {
       stderr.write(`${text}\n`);
+    },
+    printing: (text) => {
+      stderr.write(text);
     },
     stop: () => undefined,
   };
@@ -83,6 +88,10 @@ function liveLine(stderr: Output, color: boolean): Progress {
         frame = (frame + 1) % FRAMES.length;
         draw();
       }, FRAME_MS).unref();
+      draw();
+    },
+    printing: (text) => {
+      stderr.write(`${CLEAR_ROW}${text}`);
       draw();
     },
     stop: () => {

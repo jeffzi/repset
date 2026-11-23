@@ -81,12 +81,13 @@ describe("run", () => {
         filter: "bench",
         runtimes: ["node"],
         minTime: 5,
-        minSamples: 8,
+        minSampleCount: 8,
+        debug: true,
         timeout: 1234,
         nodeImport: "tsx",
         cpus: () => [cpu("Apple M2 Max"), cpu("Apple M2 Max"), cpu("Apple M2 Max")],
       });
-      const { stats, sampling, checks, gc } = measured(4656);
+      const { time } = measured(4656);
 
       expect(report).toMatchObject({
         repset: "1.2.3",
@@ -96,11 +97,12 @@ describe("run", () => {
           files: ["../a.bench.ts"],
           filter: "bench",
           minTime: 5,
-          minSamples: 8,
+          minSampleCount: 8,
+          debug: true,
           timeout: 1234,
           nodeImport: "tsx",
         },
-        machine: { os: process.platform, arch: process.arch, cpu: "Apple M2 Max", cores: 3 },
+        host: { os: process.platform, arch: process.arch, cpu: "Apple M2 Max", coreCount: 3 },
         results: [
           {
             id: "a.bench.ts",
@@ -110,10 +112,27 @@ describe("run", () => {
             setupPerCall: true,
             status: "ok",
             error: null,
-            median: 4656,
-            processes: [{ stats, sampling, checks, gc }],
+            time: { unit: "ns/call", median: 4656 },
+            measurements: [{ repetition: null, orderInRepetition: null, time }],
           },
         ],
+      });
+    });
+
+    it("writes every measurement's gc as null when debug is off", async () => {
+      const report = await runHere({
+        debug: false,
+        startChild: listingStarter([APPLE, contender("join"), contender("loop")], () =>
+          measuredOutcome(4656),
+        ),
+      });
+
+      const gcs = report.results.flatMap((result) =>
+        result.measurements.map((measurement) => measurement.time?.gc),
+      );
+      expect({ measured: gcs.length > 1, gcs: new Set(gcs) }).toStrictEqual({
+        measured: true,
+        gcs: new Set([null]),
       });
     });
 
@@ -131,13 +150,18 @@ describe("run", () => {
     });
 
     it.each([
-      { rounds: 5, recorded: 5 },
-      { rounds: undefined, recorded: null },
-    ])("records the rounds option $rounds as $recorded", async ({ rounds, recorded }) => {
-      const report = await runHere(rounds === undefined ? {} : { rounds });
+      { contestRepetitionCount: 5, recorded: 5 },
+      { contestRepetitionCount: undefined, recorded: null },
+    ])(
+      "records the contestRepetitionCount option $contestRepetitionCount as $recorded",
+      async ({ contestRepetitionCount, recorded }) => {
+        const report = await runHere(
+          contestRepetitionCount === undefined ? {} : { contestRepetitionCount },
+        );
 
-      expect(report.options.rounds).toBe(recorded);
-    });
+        expect(report.options.contestRepetitionCount).toBe(recorded);
+      },
+    );
 
     it("records a relative nodeImport from the config file as written", async () => {
       const report = await runHere({ config: DOT_IMPORT_CONFIG });
@@ -146,14 +170,14 @@ describe("run", () => {
     });
 
     describe("when the OS lists no CPU", () => {
-      it("records a null cpu and cores", async () => {
+      it("records a null cpu and coreCount", async () => {
         const report = await runHere({ cpus: () => [] });
 
-        expect(report.machine).toStrictEqual({
+        expect(report.host).toStrictEqual({
           os: process.platform,
           arch: process.arch,
           cpu: null,
-          cores: null,
+          coreCount: null,
         });
       });
     });
@@ -172,7 +196,7 @@ describe("run", () => {
   });
 
   describe("when several cases are selected", () => {
-    it("starts one measuring child per case per runtime, runtime by runtime, with the merged minTime and minSamples", async () => {
+    it("starts one measuring child per case per runtime, runtime by runtime, with the merged minTime and minSampleCount", async () => {
       const echo = starter((request, runtime) => {
         const asked = [runtime.runtime, basename(request.file), request.id];
         if (request.mode === "measure")
@@ -184,7 +208,7 @@ describe("run", () => {
         files: ["zeta.bench.ts", "a.bench.ts"],
         runtimes: ["bun", "node"],
         minTime: 7,
-        minSamples: 9,
+        minSampleCount: 9,
         startChild: echo,
       });
 
@@ -237,8 +261,8 @@ describe("run", () => {
           setupPerCall: false,
           status: "failed",
           error: { ...error, output: "plum\n" },
-          median: null,
-          processes: [{ stats: null }],
+          time: null,
+          measurements: [{ repetition: null, orderInRepetition: null, time: null }],
         },
       ]);
     });
@@ -258,7 +282,7 @@ describe("run", () => {
         },
       });
 
-      expect(report.results.map((result) => result.median)).toStrictEqual([0, 1, 2, 3]);
+      expect(report.results.map((result) => result.time?.median)).toStrictEqual([0, 1, 2, 3]);
       expect(received).toStrictEqual(report.results);
     });
   });
@@ -275,7 +299,7 @@ describe("run", () => {
         },
       });
 
-      expect(report.results.map((result) => result.median)).toStrictEqual([1]);
+      expect(report.results.map((result) => result.time?.median)).toStrictEqual([1]);
       expect(selected).toStrictEqual({ ...report, results: [] });
     });
 
@@ -443,9 +467,9 @@ describe("runOnce", () => {
     });
   });
 
-  it("runs each selected contender once in selection order, forming no rounds", async () => {
+  it("runs each selected contender once in selection order, forming no repetitions", async () => {
     const outcome = await runOnceHere({
-      rounds: 3,
+      contestRepetitionCount: 3,
       startChild: listingStarter(
         [APPLE, contender("join"), BANANA, contender("loop")],
         () => ranOnce,

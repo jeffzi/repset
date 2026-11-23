@@ -24,9 +24,14 @@ export interface Config {
   /** Timing lasts at least this many milliseconds. */
   readonly minTime?: number | undefined;
   /** Timing takes at least this many samples. */
-  readonly minSamples?: number | undefined;
-  /** How many rounds each contest runs in; unset leaves the count to the contest's size. */
-  readonly rounds?: number | undefined;
+  readonly minSampleCount?: number | undefined;
+  /** How many repetitions each contest runs in; unset leaves the count to the contest's size. */
+  readonly contestRepetitionCount?: number | undefined;
+  /**
+   * Prints each failed case's stack and its child's output to stderr as it fails, and keeps each
+   * measurement's `gc` in the report, where it is `null` otherwise; off by default.
+   */
+  readonly debug?: boolean | undefined;
   /** The longest one child may run, in milliseconds; a child that passes it fails its case. */
   readonly timeout?: number | undefined;
   /** A module Node children import first, such as a TypeScript loader. Bun children ignore it. */
@@ -83,9 +88,10 @@ export interface ResolvedOptions {
   readonly includeBase: string;
   readonly runtimes: readonly Runtime[];
   readonly minTime: number;
-  readonly minSamples: number;
-  /** `undefined` leaves the count of rounds to each contest's size. */
-  readonly rounds?: number | undefined;
+  readonly minSampleCount: number;
+  /** `undefined` leaves the count of repetitions to each contest's size. */
+  readonly contestRepetitionCount?: number | undefined;
+  readonly debug: boolean;
   readonly timeout: number;
   readonly nodeImport: NodeImport | undefined;
   readonly filter: RegExp | undefined;
@@ -110,8 +116,9 @@ const OPTION_KEYS: Readonly<Record<OptionName, true>> = {
   include: true,
   runtimes: true,
   minTime: true,
-  minSamples: true,
-  rounds: true,
+  minSampleCount: true,
+  contestRepetitionCount: true,
+  debug: true,
   timeout: true,
   nodeImport: true,
 };
@@ -248,6 +255,11 @@ function checkedTimeout(value: unknown): number {
   return value;
 }
 
+function checkedBoolean(option: string, value: unknown): boolean {
+  if (typeof value !== "boolean") throw invalid(option, "a boolean", value);
+  return value;
+}
+
 function checkedString(option: string, value: unknown): string {
   if (typeof value !== "string") throw invalid(option, "a string", value);
   return value;
@@ -271,8 +283,13 @@ function checkedConfig(values: Readonly<Partial<Record<OptionName, unknown>>>): 
     include: given(values.include, checkedInclude),
     runtimes: given(values.runtimes, checkedRuntimes),
     minTime: given(values.minTime, checkedMinTime),
-    minSamples: given(values.minSamples, (value) => checkedPositiveInteger("minSamples", value)),
-    rounds: given(values.rounds, (value) => checkedPositiveInteger("rounds", value)),
+    minSampleCount: given(values.minSampleCount, (value) =>
+      checkedPositiveInteger("minSampleCount", value),
+    ),
+    contestRepetitionCount: given(values.contestRepetitionCount, (value) =>
+      checkedPositiveInteger("contestRepetitionCount", value),
+    ),
+    debug: given(values.debug, (value) => checkedBoolean("debug", value)),
     timeout: given(values.timeout, checkedTimeout),
     nodeImport: given(values.nodeImport, (value) => checkedString("nodeImport", value)),
   };
@@ -316,14 +333,16 @@ export async function resolveOptions(options: OptionsInput): Promise<ResolvedOpt
   const file = configPath(options);
   const fromFile = file === undefined ? {} : checkedConfig(await loadConfig(file));
   const caller = checkedConfig(options);
+  const merged = <K extends OptionName>(key: K): Config[K] => caller[key] ?? fromFile[key];
   return {
-    include: caller.include ?? fromFile.include ?? DEFAULT_INCLUDE,
+    include: merged("include") ?? DEFAULT_INCLUDE,
     includeBase: file === undefined ? options.cwd : dirname(file),
-    runtimes: caller.runtimes ?? fromFile.runtimes ?? DEFAULT_RUNTIMES,
-    minTime: caller.minTime ?? fromFile.minTime ?? DEFAULT_MIN_TIME,
-    minSamples: caller.minSamples ?? fromFile.minSamples ?? DEFAULT_MIN_SAMPLES,
-    rounds: caller.rounds ?? fromFile.rounds,
-    timeout: caller.timeout ?? fromFile.timeout ?? DEFAULT_TIMEOUT,
+    runtimes: merged("runtimes") ?? DEFAULT_RUNTIMES,
+    minTime: merged("minTime") ?? DEFAULT_MIN_TIME,
+    minSampleCount: merged("minSampleCount") ?? DEFAULT_MIN_SAMPLES,
+    contestRepetitionCount: merged("contestRepetitionCount"),
+    debug: merged("debug") ?? false,
+    timeout: merged("timeout") ?? DEFAULT_TIMEOUT,
     nodeImport: resolvedNodeImport(caller.nodeImport, fromFile.nodeImport, file),
     filter: given(options.filter, checkedFilter),
   };

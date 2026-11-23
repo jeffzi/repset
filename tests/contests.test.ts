@@ -10,7 +10,7 @@ import {
   type CaseToList,
   contender,
   failedOutcome,
-  failsLoopInRoundTwo,
+  failsLoopInRepetitionTwo,
   found,
   listingStarter,
   measured,
@@ -54,24 +54,29 @@ function chunks<T>(items: readonly T[], size: number): T[][] {
   );
 }
 
-/** Each process of `result` as its round, its order in the round and its median. */
-function processesOf(result: Result): (number | null)[][] {
-  return result.processes.map((process) => [
-    process.round,
-    process.orderInRound,
-    process.stats?.median ?? null,
+/** Each measurement of `result` as its repetition, its order in the repetition and its median. */
+function measurementsOf(result: Result): (number | null)[][] {
+  return result.measurements.map((measurement) => [
+    measurement.repetition,
+    measurement.orderInRepetition,
+    measurement.time?.stats.median ?? null,
   ]);
 }
 
-/** What a contender's child answers in one round: its median, a whole outcome, or `null` to fail. */
+/** The headline time of a contender whose median is `median` nanoseconds per call. */
+function nsPerCall(median: number): { unit: "ns/call"; median: number } {
+  return { unit: "ns/call", median };
+}
+
+/** What a contender's child answers in one repetition: its median, a whole outcome, or `null` to fail. */
 type Answered = number | Outcome | null;
 
 /** An outcome measuring the median `median` at `callsPerSample` calls per sample. */
 function measuredAt(median: number, callsPerSample: number): Outcome {
-  const result = measured(median);
+  const { time } = measured(median);
   return {
     status: "ok",
-    result: { ...result, sampling: { ...result.sampling, callsPerSample } },
+    result: { status: "ok", time: { ...time, sampling: { ...time.sampling, callsPerSample } } },
     output: "",
   };
 }
@@ -101,16 +106,16 @@ function countOf(items: readonly string[], item: string): number {
   return items.filter((candidate) => candidate === item).length;
 }
 
-/** Runs the contest `concat`, its contenders listed in key order, each child answered by round. */
+/** Runs the contest `concat`, its contenders listed in key order, each child answered by repetition. */
 async function judge(
-  byRound: Readonly<Record<string, readonly Answered[]>>,
+  byRepetition: Readonly<Record<string, readonly Answered[]>>,
   input: Partial<RunInput> = {},
-  cases: readonly CaseToList[] = Object.keys(byRound).map((key) => contender(key)),
+  cases: readonly CaseToList[] = Object.keys(byRepetition).map((key) => contender(key)),
 ): Promise<Report> {
   const nextCall = callCounter();
   const { report } = await runCases([...cases], input, (request) => {
     const call = nextCall(request.id);
-    const scheduled = byRound[request.id.slice("concat/".length)]?.[call];
+    const scheduled = byRepetition[request.id.slice("concat/".length)]?.[call];
     const answered = scheduled === undefined ? 4656 : scheduled;
     if (answered === null) return failedOutcome("fn", "kiwi");
     return typeof answered === "number" ? measuredOutcome(answered) : answered;
@@ -118,9 +123,9 @@ async function judge(
   return report;
 }
 
-/** The per-round `ln(b / a)` of two contenders' per-round medians. */
+/** The per-repetition `ln(b / a)` of two contenders' per-repetition medians. */
 function logRatios(a: readonly number[], b: readonly number[]): number[] {
-  return a.map((median, round) => Math.log((b[round] ?? Number.NaN) / median));
+  return a.map((median, repetition) => Math.log((b[repetition] ?? Number.NaN) / median));
 }
 
 /** A matcher for a number equal to `value` up to rounding. */
@@ -142,14 +147,14 @@ function byContenders<T extends Pick<ContestPair, "a" | "b">>(pairs: readonly T[
 
 const NODE = { name: "node", version: found("node").version };
 
-/** Per-round medians where `plus` is proven faster than `join` and `loop` is told apart from neither. */
+/** Per-repetition medians where `plus` is proven faster than `join` and `loop` is told apart from neither. */
 const TIED = {
   join: repeated(200, 8),
   loop: [50, 250, 50, 250, 50, 250, 50, 250],
   plus: repeated(100, 8),
 };
 
-/** Per-round medians of a three-contender contest whose three pairs are each proven. */
+/** Per-repetition medians of a three-contender contest whose three pairs are each proven. */
 const THREE_PROVEN = {
   plus: repeated(100, 8),
   loop: [95, 160, 140, 155, 145, 150, 165, 135],
@@ -169,7 +174,7 @@ const THREE_PROVEN_DIFFERENCES = THREE_PROVEN_PAIRS.map(([a, b]) =>
 
 describe("run", () => {
   describe("when a contest runs", () => {
-    it("reports to onPlanned every round of each contest among the measuring children", async () => {
+    it("reports to onPlanned every repetition of each contest among the measuring children", async () => {
       const planned: number[] = [];
 
       await runCases([APPLE, JOIN, LOOP], {
@@ -182,10 +187,10 @@ describe("run", () => {
       expect(planned.at(-1)).toBe(30);
     });
 
-    it("runs all of a contest's rounds at its first contender's place, one child per contender back to back, on each runtime", async () => {
+    it("runs all of a contest's repetitions at its first contender's place, one child per contender back to back, on each runtime", async () => {
       const { started } = await runCases([APPLE, JOIN, BANANA, LOOP], {
         runtimes: ["bun", "node"],
-        rounds: 2,
+        contestRepetitionCount: 2,
       });
 
       const onRuntime = (offset: number): unknown[] => {
@@ -199,7 +204,7 @@ describe("run", () => {
       ]);
     });
 
-    it("runs a lone selected contender once, keeping its contender key, as a plain case", async () => {
+    it("runs a lone selected contender once, keeping its contender key, as a plain case with no repetition", async () => {
       const { report } = await runCases([APPLE, JOIN, LOOP], { filter: "apple|join" });
 
       expect(
@@ -207,48 +212,56 @@ describe("run", () => {
           result.id,
           result.name,
           result.contender,
-          processesOf(result),
+          measurementsOf(result),
         ]),
       ).toStrictEqual([
-        ["apple", "apple", null, [[1, 1, 4656]]],
-        ["concat/join", "concat", "join", [[1, 1, 4656]]],
+        ["apple", "apple", null, [[null, null, 4656]]],
+        ["concat/join", "concat", "join", [[null, null, 4656]]],
       ]);
     });
 
-    it("runs 12 rounds for 8 contenders when rounds is not given", async () => {
+    it("runs 12 repetitions for 8 contenders when contestRepetitionCount is not given", async () => {
       const cases = Array.from({ length: 8 }, (_, index) => contender(`c${String(index)}`));
 
       const { report } = await runCases(cases);
 
-      expect(report.results.map((result) => result.processes.length)).toStrictEqual(
+      expect(report.results.map((result) => result.measurements.length)).toStrictEqual(
         Array<number>(8).fill(12),
       );
     });
 
     it.each([
-      { rounds: 3, medians: { "concat/join": 40, "concat/loop": 30 } },
-      { rounds: 4, medians: { "concat/join": 30, "concat/loop": 45 } },
+      { repetitions: 3, medians: { "concat/join": 40, "concat/loop": 30 } },
+      { repetitions: 4, medians: { "concat/join": 30, "concat/loop": 45 } },
     ])(
-      "gives each contender one process per round in run order, its median the median of theirs, over $rounds rounds",
-      async ({ rounds, medians }) => {
-        const byRound: Record<string, number[]> = {
+      "gives each contender one measurement per repetition in run order, its median the median of theirs, over $repetitions repetitions",
+      async ({ repetitions, medians }) => {
+        const byRepetition: Record<string, number[]> = {
           "concat/join": [50, 10, 40, 20],
           "concat/loop": [30, 60, 5, 70],
         };
         const nextCall = callCounter();
         const answer: Answer = (request) => {
           const call = nextCall(request.id);
-          return measuredOutcome(byRound[request.id]?.[call] ?? 0);
+          return measuredOutcome(byRepetition[request.id]?.[call] ?? 0);
         };
 
-        const { report, started } = await runCases([JOIN, LOOP], { rounds }, answer);
+        const { report, started } = await runCases(
+          [JOIN, LOOP],
+          { contestRepetitionCount: repetitions },
+          answer,
+        );
 
         const expectedOf = (id: "concat/join" | "concat/loop"): unknown[] => {
           const orders = started.flatMap((startedId, index) =>
             startedId === id ? [(index % 2) + 1] : [],
           );
-          const processes = orders.map((order, round) => [round + 1, order, byRound[id]?.[round]]);
-          return [id, "concat", id.slice("concat/".length), medians[id], processes];
+          const measurements = orders.map((order, repetition) => [
+            repetition + 1,
+            order,
+            byRepetition[id]?.[repetition],
+          ]);
+          return [id, "concat", id.slice("concat/".length), nsPerCall(medians[id]), measurements];
         };
         expect(
           report.results
@@ -257,14 +270,14 @@ describe("run", () => {
               result.id,
               result.name,
               result.contender,
-              result.median,
-              processesOf(result),
+              result.time,
+              measurementsOf(result),
             ]),
         ).toStrictEqual([expectedOf("concat/join"), expectedOf("concat/loop")]);
       },
     );
 
-    describe("when the round orders are drawn", () => {
+    describe("when the repetition orders are drawn", () => {
       it("records the seed drawn when the run starts", async () => {
         const { report } = await runCases([JOIN, LOOP], { drawSeed: () => 1234 });
 
@@ -289,7 +302,10 @@ describe("run", () => {
         const started: string[] = [];
 
         for (let seed = 1; seed <= 1000; seed += 1) {
-          const seeded = await runCases([JOIN, LOOP, PLUS], { rounds: 6, drawSeed: () => seed });
+          const seeded = await runCases([JOIN, LOOP, PLUS], {
+            contestRepetitionCount: 6,
+            drawSeed: () => seed,
+          });
           started.push(...seeded.started);
         }
 
@@ -303,19 +319,19 @@ describe("run", () => {
     });
 
     describe("when a contender's child fails", () => {
-      /** Runs `concat` over 4 rounds with `concat/loop` failing in round 2, logging starts and results. */
-      async function runWithLoopFailingInRoundTwo(input: Partial<RunInput> = {}): Promise<{
+      /** Runs `concat` over 4 repetitions with `concat/loop` failing in repetition 2, logging starts and results. */
+      async function runWithLoopFailingInRepetitionTwo(input: Partial<RunInput> = {}): Promise<{
         report: Report;
         started: string[];
         events: string[];
       }> {
         const events: string[] = [];
-        const answer = failsLoopInRoundTwo();
+        const answer = failsLoopInRepetitionTwo();
         const { report, started } = await runCases(
           [JOIN, LOOP, PLUS],
           {
             ...input,
-            rounds: 4,
+            contestRepetitionCount: 4,
             onResult: (result) => {
               events.push(`result ${result.id}`);
             },
@@ -328,8 +344,8 @@ describe("run", () => {
         return { report, started, events };
       }
 
-      it("gives it a failed result holding the processes that ran, the failed one last", async () => {
-        const { report, started } = await runWithLoopFailingInRoundTwo();
+      it("gives it a failed result holding the measurements that ran, the failed one last", async () => {
+        const { report, started } = await runWithLoopFailingInRepetitionTwo();
 
         const orders = started.flatMap((id, index) =>
           id === "concat/loop" ? [(index % 3) + 1] : [],
@@ -338,13 +354,13 @@ describe("run", () => {
         expect({
           status: loop?.status,
           error: loop?.error?.message,
-          median: loop?.median,
-          processes: loop === undefined ? [] : processesOf(loop),
+          time: loop?.time,
+          measurements: loop === undefined ? [] : measurementsOf(loop),
         }).toStrictEqual({
           status: "failed",
           error: "kiwi",
-          median: null,
-          processes: [
+          time: null,
+          measurements: [
             [1, orders[0], 17],
             [2, orders[1], null],
           ],
@@ -352,14 +368,14 @@ describe("run", () => {
       });
 
       it("emits its result before the next child starts", async () => {
-        const { events } = await runWithLoopFailingInRoundTwo();
+        const { events } = await runWithLoopFailingInRepetitionTwo();
 
         const failedAt = events.lastIndexOf("start concat/loop");
         expect(events[failedAt + 1]).toBe("result concat/loop");
       });
 
-      it("runs it in no later round while the rest run every round", async () => {
-        const { started } = await runWithLoopFailingInRoundTwo();
+      it("runs it in no later repetition while the rest run every repetition", async () => {
+        const { started } = await runWithLoopFailingInRepetitionTwo();
 
         expect({
           join: countOf(started, "concat/join"),
@@ -369,7 +385,7 @@ describe("run", () => {
       });
 
       it("gives every contender exactly one result", async () => {
-        const { events } = await runWithLoopFailingInRoundTwo();
+        const { events } = await runWithLoopFailingInRepetitionTwo();
 
         expect({
           join: countOf(events, "result concat/join"),
@@ -378,11 +394,11 @@ describe("run", () => {
         }).toStrictEqual({ join: 1, loop: 1, plus: 1 });
       });
 
-      it("reports its rounds still to come as dropped, once, so planned minus dropped is the children started", async () => {
+      it("reports its repetitions still to come as dropped, once, so planned minus dropped is the children started", async () => {
         const planned: number[] = [];
         const dropped: number[] = [];
 
-        const { started } = await runWithLoopFailingInRoundTwo({
+        const { started } = await runWithLoopFailingInRepetitionTwo({
           onPlanned: (total) => {
             planned.push(total);
           },
@@ -396,13 +412,13 @@ describe("run", () => {
       });
     });
 
-    it("emits each surviving contender's result when the contest's last round ends", async () => {
+    it("emits each surviving contender's result when the contest's last repetition ends", async () => {
       const events: string[] = [];
 
       await runCases(
         [APPLE, JOIN, LOOP, BANANA],
         {
-          rounds: 3,
+          contestRepetitionCount: 3,
           onResult: (result) => {
             events.push(`result ${result.id}`);
           },
@@ -433,7 +449,7 @@ describe("run", () => {
 
         const { report } = await runCases(
           [APPLE, JOIN, LOOP, PLUS],
-          { rounds: 3, signal: controller.signal },
+          { contestRepetitionCount: 3, signal: controller.signal },
           (request) => {
             if (request.id === "concat/loop") return failedOutcome("fn", "kiwi");
             if (request.id === "concat/join") joinCalls += 1;
@@ -452,7 +468,7 @@ describe("run", () => {
   });
 
   describe("when a contest is judged", () => {
-    it("reports the contest judged from the contenders' per-round medians", async () => {
+    it("reports the contest judged from the contenders' per-repetition medians", async () => {
       const join = [800, 810, 812, 815, 820, 805, 812];
       const loop = [1850, 1880, 1904.5, 1920, 1890, 1910, 1904.5];
       const differences = logRatios(join, loop);
@@ -466,10 +482,10 @@ describe("run", () => {
           name: "concat",
           params: {},
           runtime: NODE,
-          rounds: 7,
+          repetitionCount: 7,
           contenders: [
-            { id: "concat/join", median: 812, ratio: 1, rank: 1 },
-            { id: "concat/loop", median: 1904.5, ratio, rank: 2 },
+            { id: "concat/join", time: nsPerCall(812), ratio: 1, rank: 1 },
+            { id: "concat/loop", time: nsPerCall(1904.5), ratio, rank: 2 },
           ],
           pairs: [
             {
@@ -502,7 +518,9 @@ describe("run", () => {
       it("sorts contenders of equal rank by median", async () => {
         const report = await judge(TIED);
 
-        expect(report.contests[0]?.contenders.map(({ id, median }) => [id, median])).toStrictEqual([
+        expect(
+          report.contests[0]?.contenders.map(({ id, time }) => [id, time?.median]),
+        ).toStrictEqual([
           ["concat/plus", 100],
           ["concat/loop", 150],
           ["concat/join", 200],
@@ -543,14 +561,14 @@ describe("run", () => {
           x: x.map((median) => measuredAt(median, callsPerSample)),
           y: y.map((median) => measuredAt(median, callsPerSample)),
         },
-        { rounds: 8 },
+        { contestRepetitionCount: 8 },
       );
 
       expect(
-        report.contests[0]?.contenders.map(({ id, median, rank }) => ({ id, median, rank })),
+        report.contests[0]?.contenders.map(({ id, time, rank }) => ({ id, time, rank })),
       ).toStrictEqual([
-        { id: "concat/y", median: 55, rank: 1 },
-        { id: "concat/x", median: 53, rank: 2 },
+        { id: "concat/y", time: nsPerCall(55), rank: 1 },
+        { id: "concat/x", time: nsPerCall(53), rank: 2 },
       ]);
     });
 
@@ -601,10 +619,10 @@ describe("run", () => {
 
     it.each([
       {
-        why: "whose rounds do not reach the significance bar",
+        why: "whose repetitions do not reach the significance bar",
         loop: [500, 2000, 500, 2000, 500, 2000, 500],
         faster: null,
-        tie: "rounds",
+        tie: "repetitions",
       },
       {
         why: "proven within 1.25 resolutions per call of 1, as a share of the smaller median",
@@ -641,11 +659,11 @@ describe("run", () => {
       },
     );
 
-    describe("when the rounds cannot reach a verdict", () => {
+    describe("when the repetitions cannot reach a verdict", () => {
       it("holds the medians, sorted, with no rank, ratio or pair", async () => {
         const report = await judge(
           { join: repeated(300, 5), loop: repeated(100, 5) },
-          { rounds: 5 },
+          { contestRepetitionCount: 5 },
         );
 
         expect(report.contests).toStrictEqual([
@@ -653,10 +671,10 @@ describe("run", () => {
             name: "concat",
             params: {},
             runtime: NODE,
-            rounds: 5,
+            repetitionCount: 5,
             contenders: [
-              { id: "concat/loop", median: 100, ratio: null, rank: null },
-              { id: "concat/join", median: 300, ratio: null, rank: null },
+              { id: "concat/loop", time: nsPerCall(100), ratio: null, rank: null },
+              { id: "concat/join", time: nsPerCall(300), ratio: null, rank: null },
             ],
             pairs: [],
           },
@@ -664,19 +682,19 @@ describe("run", () => {
       });
 
       it.each([
-        { contenders: 3, rounds: 6, judged: false },
-        { contenders: 3, rounds: 7, judged: true },
+        { contenders: 3, repetitions: 6, judged: false },
+        { contenders: 3, repetitions: 7, judged: true },
       ])(
-        "judges $contenders contenders over $rounds rounds: $judged",
-        async ({ contenders, rounds, judged }) => {
-          const byRound = Object.fromEntries(
+        "judges $contenders contenders over $repetitions repetitions: $judged",
+        async ({ contenders, repetitions, judged }) => {
+          const byRepetition = Object.fromEntries(
             Array.from({ length: contenders }, (_, index) => [
               `c${String(index)}`,
-              repeated(100 * (index + 1), rounds),
+              repeated(100 * (index + 1), repetitions),
             ]),
           );
 
-          const report = await judge(byRound, { rounds });
+          const report = await judge(byRepetition, { contestRepetitionCount: repetitions });
 
           expect(report.contests[0]?.pairs.length).toBe(
             judged ? (contenders * (contenders - 1)) / 2 : 0,
@@ -698,7 +716,7 @@ describe("run", () => {
           faster,
           tie,
         })),
-      ).toStrictEqual(repeated({ clearsTheBar: true, faster: null, tie: "rounds" }, 3));
+      ).toStrictEqual(repeated({ clearsTheBar: true, faster: null, tie: "repetitions" }, 3));
     });
 
     describe("when a contender fails", () => {
@@ -709,18 +727,18 @@ describe("run", () => {
         const ratio = near(Math.exp(hodgesLehmann(differences)));
         const p = signedRankP(differences);
 
-        const report = await judge({ join, loop: [17, null], plus }, { rounds: 6 });
+        const report = await judge({ join, loop: [17, null], plus }, { contestRepetitionCount: 6 });
 
         expect(report.contests).toStrictEqual([
           {
             name: "concat",
             params: {},
             runtime: NODE,
-            rounds: 6,
+            repetitionCount: 6,
             contenders: [
-              { id: "concat/join", median: 100, ratio: 1, rank: 1 },
-              { id: "concat/plus", median: 202.5, ratio, rank: 2 },
-              { id: "concat/loop", median: null, ratio: null, rank: null },
+              { id: "concat/join", time: nsPerCall(100), ratio: 1, rank: 1 },
+              { id: "concat/plus", time: nsPerCall(202.5), ratio, rank: 2 },
+              { id: "concat/loop", time: null, ratio: null, rank: null },
             ],
             pairs: [
               {
@@ -746,11 +764,11 @@ describe("run", () => {
             name: "concat",
             params: {},
             runtime: NODE,
-            rounds: 8,
+            repetitionCount: 8,
             contenders: [
-              { id: "concat/plus", median: 200, ratio: null, rank: null },
-              { id: "concat/loop", median: null, ratio: null, rank: null },
-              { id: "concat/join", median: null, ratio: null, rank: null },
+              { id: "concat/plus", time: nsPerCall(200), ratio: null, rank: null },
+              { id: "concat/loop", time: null, ratio: null, rank: null },
+              { id: "concat/join", time: null, ratio: null, rank: null },
             ],
             pairs: [],
           },
@@ -776,7 +794,11 @@ describe("run", () => {
     });
 
     it("is recorded once per contest and runtime, never for a plain case", async () => {
-      const report = await judge({}, { runtimes: ["node", "bun"], rounds: 2 }, [APPLE, JOIN, LOOP]);
+      const report = await judge({}, { runtimes: ["node", "bun"], contestRepetitionCount: 2 }, [
+        APPLE,
+        JOIN,
+        LOOP,
+      ]);
 
       expect(report.contests.map((entry) => [entry.name, entry.runtime.name])).toStrictEqual([
         ["concat", "node"],
@@ -795,7 +817,7 @@ describe("run", () => {
 
         const { report } = await runCases([JOIN, LOOP], {
           runtimes: ["node", "bun"],
-          rounds: 2,
+          contestRepetitionCount: 2,
           signal: controller.signal,
           startChild: stopsOnBun,
         });

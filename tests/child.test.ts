@@ -196,7 +196,7 @@ describe("measureCase", () => {
     it("measures at the calls per sample it is given", async () => {
       const result = await measureCase(LIFECYCLE, "steady", { ...SHORT_RUN, callsPerSample: 3 });
 
-      expect(result).toMatchObject({ status: "ok", sampling: { callsPerSample: 3 } });
+      expect(result).toMatchObject({ status: "ok", time: { sampling: { callsPerSample: 3 } } });
     });
   });
 

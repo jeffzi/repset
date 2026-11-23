@@ -1,8 +1,8 @@
 /**
  * Starting a run's children: the selection, then one child per case and runtime, and a contest's
- * contenders in rounds of one child each, in a seeded random order per round.
+ * contenders in repetitions of one child each, in a seeded random order per repetition.
  */
-import type { ChildRequest } from "./child.js";
+import type { ChildError, ChildRequest } from "./child.js";
 import {
   type FoundRuntime,
   type Outcome,
@@ -26,30 +26,40 @@ export interface OnceInput extends OptionsInput, ChildFunctionOverrides {
   /**
    * Receives the number of children each phase will start, before that phase's first child starts:
    * the benchmark files to list, then one child per case and runtime to measure or run once, and
-   * one per contender in each round of a contest.
+   * one per contender in each repetition of a contest.
    */
   readonly onPlanned?: ((total: number) => void) | undefined;
+  /**
+   * Receives a case's failure, before the next child starts, when the `debug` option is on: the
+   * error its child gave, stack included, and the tail of the child's output.
+   */
+  readonly onDebugFailure?:
+    | ((failure: { readonly error: ChildError; readonly output: string }) => void)
+    | undefined;
 }
 
 /** How a child asked for `M` ended when the caller did not stop it. */
 type Finished<M extends ChildRequest["mode"]> = Exclude<Outcome<M>, { status: "stopped" }>;
 
-/** One child's outcome, with its case, its group, its runtime, and when it ran within its group. */
+/**
+ * One child's outcome, with its case, its group, its runtime, and when it ran within its group: its
+ * repetition and its order in it, both from 1 in a contest and `null` for a plain case.
+ */
 interface Step<M extends ChildRequest["mode"]> {
   readonly runtime: FoundRuntime;
   readonly selected: SelectedCase;
   readonly group: readonly SelectedCase[];
   readonly outcome: Finished<M>;
-  readonly round: number;
-  readonly orderInRound: number;
+  readonly repetition: number | null;
+  readonly orderInRepetition: number | null;
 }
 
 /** What the children's outcomes are passed to while a run starts them. */
 export interface StartHandlers<M extends ChildRequest["mode"]> {
   /**
    * Called once the selection passed, before the first child of a case starts, with the number of
-   * children the cases will start, rounds included, and the cases of each contest that formed, the
-   * same on every runtime.
+   * children the cases will start, repetitions included, and the cases of each contest that
+   * formed, the same on every runtime.
    */
   readonly passed: (
     options: ResolvedOptions,
@@ -60,7 +70,7 @@ export interface StartHandlers<M extends ChildRequest["mode"]> {
   readonly finished: (step: Step<M>) => void;
   /** Receives the number of planned children a failed case will no longer start, when there are some. */
   readonly dropped?: ((count: number) => void) | undefined;
-  /** Called when the last round of a group ended on a runtime, before the next child starts. */
+  /** Called when a group's last repetition ended on a runtime, before the next child starts. */
   readonly ended?: ((runtime: FoundRuntime, group: readonly SelectedCase[]) => void) | undefined;
 }
 
@@ -71,8 +81,9 @@ interface GroupStart<R extends ChildRequest> {
   readonly handlers: StartHandlers<R["mode"]>;
   readonly startChild: NonNullable<OnceInput["startChild"]>;
   readonly childOptions: StartOptions;
-  /** Draws the numbers that order each round of a contest. */
+  /** Draws the numbers that order each repetition of a contest. */
   readonly random: () => number;
+  readonly onDebugFailure: OnceInput["onDebugFailure"];
 }
 
 /** Mulberry32: numbers uniform in [0, 1), the same sequence for the same 32-bit `seed`. */
@@ -133,17 +144,17 @@ export function isContest(group: readonly SelectedCase[]): boolean {
 }
 
 /**
- * Counts the rounds a group runs.
+ * Counts the repetitions a group runs.
  *
  * @param size - The number of cases in the group.
- * @param rounds - The `rounds` option.
- * @returns 1 for a lone case; otherwise `rounds`, or when unset the smallest `n` with
- *   `4 / 2ⁿ ≤ ALPHA / pairs`, at which a pair can pass Holm's strictest step with one round
- *   dissenting.
+ * @param contestRepetitionCount - The `contestRepetitionCount` option.
+ * @returns 1 for a lone case; otherwise `contestRepetitionCount`, or when unset the smallest `n`
+ *   with `4 / 2ⁿ ≤ ALPHA / pairs`, at which a pair can pass Holm's strictest step with one
+ *   repetition dissenting.
  */
-function roundsOf(size: number, rounds: number | undefined): number {
+function repetitionsOf(size: number, contestRepetitionCount: number | undefined): number {
   if (size < 2) return 1;
-  if (rounds !== undefined) return rounds;
+  if (contestRepetitionCount !== undefined) return contestRepetitionCount;
   const pairs = pairsOf(size);
   for (let count = 1; ; count += 1) {
     const pAtOneDissent = 4 / 2 ** count;
@@ -151,75 +162,79 @@ function roundsOf(size: number, rounds: number | undefined): number {
   }
 }
 
-/** One round of a group: its cases in the order they start. */
-interface Round {
+/** One repetition of a group: its cases in the order they start. */
+interface Repetition {
   /** Every case of the group, in selection order, failed ones included. */
   readonly group: readonly SelectedCase[];
   readonly order: readonly SelectedCase[];
   /** From 1. */
   readonly number: number;
-  /** The rounds still to come after this one. */
+  /** The repetitions still to come after this one. */
   readonly remaining: number;
 }
 
 /**
- * Starts one child per case of a round, back to back, in its order.
+ * Starts one child per case of a repetition, back to back, in its order.
  *
  * @param start - What starting a child takes.
  * @param runtime - The runtime the children run on.
- * @param round - The round to start.
- * @returns The cases whose child failed, or `undefined` when the stop signal ended the round.
- * @throws {@link Error} What `finished` or `dropped` throws, or what starting a child throws.
+ * @param repetition - The repetition to start.
+ * @returns The cases whose child failed, or `undefined` when the stop signal ended the repetition.
+ * @throws {@link Error} What `finished`, `dropped` or `onDebugFailure` throws, or what starting a
+ *   child throws.
  */
-async function startRound<R extends ChildRequest>(
+async function startRepetition<R extends ChildRequest>(
   start: GroupStart<R>,
   runtime: FoundRuntime,
-  round: Round,
+  repetition: Repetition,
 ): Promise<SelectedCase[] | undefined> {
-  const { options, request, handlers, startChild, childOptions } = start;
+  const { options, request, handlers, startChild, childOptions, onDebugFailure } = start;
+  const { group, number, remaining } = repetition;
+  const contest = isContest(group);
   const failed: SelectedCase[] = [];
-  for (const [index, selected] of round.order.entries()) {
+  for (const [index, selected] of repetition.order.entries()) {
     if (childOptions.signal?.aborted === true) return undefined;
     const outcome = await startChild(runtime, request(options, selected), childOptions);
     if (outcome.status === "stopped") return undefined;
-    const { group, number } = round;
     handlers.finished({
       runtime,
       selected,
       group,
       outcome,
-      round: number,
-      orderInRound: index + 1,
+      repetition: contest ? number : null,
+      orderInRepetition: contest ? index + 1 : null,
     });
     if (outcome.status !== "failed") continue;
+    if (options.debug) onDebugFailure?.(outcome);
     failed.push(selected);
-    if (round.remaining > 0) handlers.dropped?.(round.remaining);
+    if (remaining > 0) handlers.dropped?.(remaining);
   }
   return failed;
 }
 
 /**
- * Starts the children of one group on one runtime: each round in a fresh random order for a
+ * Starts the children of one group on one runtime: each repetition in a fresh random order for a
  * contest, one child per case still running, back to back. A case whose child fails runs in no
- * later round.
+ * later repetition.
  *
  * @param start - What starting a child takes.
  * @param runtime - The runtime the children run on.
  * @param group - The group's cases, in selection order.
  * @returns Whether the stop signal ended the group: before a child, or by stopping the running one.
- * @throws {@link Error} What `finished` or `dropped` throws, or what starting a child throws.
+ * @throws {@link Error} What `finished`, `dropped` or `onDebugFailure` throws, or what starting a
+ *   child throws.
  */
 async function startGroup<R extends ChildRequest>(
   start: GroupStart<R>,
   runtime: FoundRuntime,
   group: readonly SelectedCase[],
 ): Promise<boolean> {
-  const rounds = roundsOf(group.length, start.options.rounds);
+  const count = repetitionsOf(group.length, start.options.contestRepetitionCount);
   let running = group;
-  for (let number = 1; number <= rounds; number += 1) {
+  for (let number = 1; number <= count; number += 1) {
     const order = isContest(group) ? shuffled(running, start.random) : running;
-    const round = { group, order, number, remaining: rounds - number };
-    const failed = await startRound(start, runtime, round);
+    const repetition = { group, order, number, remaining: count - number };
+    const failed = await startRepetition(start, runtime, repetition);
     if (failed === undefined) return true;
     running = running.filter((selected) => !failed.includes(selected));
   }
@@ -229,14 +244,14 @@ async function startGroup<R extends ChildRequest>(
 /**
  * Resolves the caller's options, selects the cases, then starts their children one at a time,
  * runtime by runtime in the selection's order, cases in selection order. With a seed, the selected
- * contenders of one benchmark form a contest, which runs all its rounds at the place of its first
- * contender; without one, every case runs once.
+ * contenders of one benchmark form a contest, which runs all its repetitions at the place of its
+ * first contender; without one, every case runs once.
  *
  * @param input - The caller's options, the positional files, the stop signal, the plan callback
  *   and the child functions.
  * @param request - The request of one case's child, from the resolved options.
  * @param handlers - What the selection and each child's outcome are passed to.
- * @param seed - The seed of the round orders, or `undefined` to form no contest.
+ * @param seed - The seed of the repetition orders, or `undefined` to form no contest.
  * @returns The resolved options, and whether the stop signal ended the run before every child ran:
  *   during listing, before the next child, or by stopping the running one.
  * @throws `ConfigError` When the options are invalid or the selection fails, before any child
@@ -265,13 +280,22 @@ export async function startEach<R extends ChildRequest>(
   const groups =
     seed === undefined ? selection.cases.map((selected) => [selected]) : groupsOf(selection.cases);
   const childrenPerRuntime = groups.reduce(
-    (total, group) => total + group.length * roundsOf(group.length, options.rounds),
+    (total, group) =>
+      total + group.length * repetitionsOf(group.length, options.contestRepetitionCount),
     0,
   );
   const contests = groups.filter(isContest);
   handlers.passed(options, selection.runtimes.length * childrenPerRuntime, contests);
   const childOptions = startOptions(options, signal);
-  const start = { options, request, handlers, startChild, childOptions, random: seeded(seed ?? 0) };
+  const start = {
+    options,
+    request,
+    handlers,
+    startChild,
+    childOptions,
+    random: seeded(seed ?? 0),
+    onDebugFailure: input.onDebugFailure,
+  };
   for (const runtime of selection.runtimes) {
     for (const group of groups) {
       if (await startGroup(start, runtime, group)) return { options, interrupted: true };

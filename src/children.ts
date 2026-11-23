@@ -142,8 +142,8 @@ const SAMPLING_NUMBER_KEYS: Readonly<
 > = {
   timerResolutionNs: true,
   callsPerSample: true,
-  warmupSamples: true,
-  timingAttempts: true,
+  warmupSampleCount: true,
+  timingAttemptCount: true,
   timingMs: true,
 };
 
@@ -151,11 +151,11 @@ const SAMPLING_NUMBERS = Object.keys(SAMPLING_NUMBER_KEYS);
 
 /** Every key of {@link GcDuringTiming}: a key missing here fails to compile. */
 const GC_NUMBER_KEYS: Readonly<Record<keyof GcDuringTiming, true>> = {
-  count: true,
-  minor: true,
-  major: true,
-  totalMs: true,
-  maxMs: true,
+  collectionCount: true,
+  durationMs: true,
+  maxDurationMs: true,
+  nodeMinorCollectionCount: true,
+  nodeMajorCollectionCount: true,
 };
 
 const GC_NUMBERS = Object.keys(GC_NUMBER_KEYS);
@@ -579,9 +579,10 @@ function isListed(value: unknown): value is Listed {
 }
 
 function isMeasured(value: unknown): value is Measured {
-  if (!isRecord(value) || value["status"] !== "ok") return false;
-  const { stats, sampling, checks, gc } = value;
+  if (!isRecord(value) || value["status"] !== "ok" || !isRecord(value["time"])) return false;
+  const { stats, sampling, checks, gc, rawSamples } = value["time"];
   return (
+    rawSamples === null &&
     hasNumbers(stats, STATISTICS) &&
     hasNumbers(sampling, SAMPLING_NUMBERS) &&
     typeof sampling["callsPerSampleFixed"] === "boolean" &&

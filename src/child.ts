@@ -84,9 +84,15 @@ export interface Listed {
   readonly cases: ListedCase[];
 }
 
-/** A measuring child's result: the report's per-process fields the child knows. */
-export interface Measured extends Measurement {
+/** A measurement's `time` block: the report's timing fields the child knows. */
+export interface MeasuredTime extends Measurement {
+  readonly rawSamples: null;
+}
+
+/** A measuring child's result: the `time` block of the report's measurement entry. */
+export interface Measured {
   readonly status: "ok";
+  readonly time: MeasuredTime;
 }
 
 /** A once child's result: the case ran, and nothing was timed. */
@@ -246,8 +252,9 @@ export async function listCases(file: string): Promise<Listed | Failed> {
  * @param id - The case to measure.
  * @param sampling - The time in milliseconds and the sample count the body's timing must pass, and
  *   the calls per sample to measure at, calibrated when absent.
- * @returns The report's per-process fields, or a failure: in phase `load` when the file fails to
- *   load or `id` does not select exactly one case, otherwise in the phase `measure` failed in.
+ * @returns The `time` block of the report's measurement entry, or a failure: in phase `load` when
+ *   the file fails to load or `id` does not select exactly one case, otherwise in the phase
+ *   `measure` failed in.
  */
 export async function measureCase(
   file: string,
@@ -256,7 +263,7 @@ export async function measureCase(
 ): Promise<Measured | Failed> {
   return withSelectedCase(file, id, async (selected) => ({
     status: "ok",
-    ...(await measure(selected, sampling)),
+    time: { ...(await measure(selected, sampling)), rawSamples: null },
   }));
 }
 

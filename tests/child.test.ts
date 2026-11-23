@@ -15,12 +15,12 @@ import {
   type MemoryProbe,
 } from "../src/child.js";
 import { MeasureError } from "../src/measure/measure.js";
-import { fixturePath, ROOT } from "./fixture-path.js";
+import { fixturePath, ROOT } from "./helpers/fixture-path.js";
+import { resetRegistry } from "./helpers/registry.js";
+import { repeated } from "./helpers/repeated.js";
+import { KILL_AFTER_MS, SPAWN_TIMEOUT_MS } from "./helpers/spawn-limits.js";
+import { trappedProxy } from "./helpers/thrown-values.js";
 import { enabledGc } from "./measure/fixtures.js";
-import { resetRegistry } from "./registry.js";
-import { repeated } from "./repeated.js";
-import { KILL_AFTER_MS, SPAWN_TIMEOUT_MS } from "./spawn-limits.js";
-import { trappedProxy } from "./thrown-values.js";
 
 /** The slot where the `lifecycle.ts` and `contest.ts` fixtures record each callback they run. */
 const CALLS = Symbol.for("repset.child-calls");

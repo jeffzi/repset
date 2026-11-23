@@ -6,7 +6,7 @@ import {
   sampleSharedState,
   type SamplerResult,
 } from "../../src/measure/sampler.js";
-import { errorOf } from "../error-of.js";
+import { errorOf } from "../helpers/error-of.js";
 import {
   COARSE_RESOLUTION,
   FINE_RESOLUTION,

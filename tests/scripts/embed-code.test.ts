@@ -3,8 +3,8 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { embedCode } from "../scripts/embed-code.js";
-import { temporaryProject } from "./temporary-dir.js";
+import { embedCode } from "../../scripts/embed-code.js";
+import { temporaryProject } from "../helpers/temporary-dir.js";
 
 const FENCE = "```";
 

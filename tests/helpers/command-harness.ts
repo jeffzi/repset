@@ -6,9 +6,9 @@ import { stripVTControlCharacters } from "node:util";
 
 import { expect, vi } from "vitest";
 
-import type { StrictOmit } from "../src/command-line.js";
-import { main } from "../src/command.js";
-import type { Report, Result } from "../src/report.js";
+import type { StrictOmit } from "../../src/command-line.js";
+import { main } from "../../src/command.js";
+import type { Report, Result } from "../../src/report.js";
 import {
   failedOutcome,
   findAny,

@@ -13,9 +13,9 @@ import {
   resolveOptions,
   type OptionsInput,
 } from "../src/options.js";
-import { expectConfigError } from "./config-error.js";
-import { fixturePath, ROOT } from "./fixture-path.js";
-import { SPAWN_TIMEOUT_MS } from "./spawn-limits.js";
+import { expectConfigError } from "./helpers/config-error.js";
+import { fixturePath, ROOT } from "./helpers/fixture-path.js";
+import { SPAWN_TIMEOUT_MS } from "./helpers/spawn-limits.js";
 
 const FIXTURES = fixturePath("config");
 

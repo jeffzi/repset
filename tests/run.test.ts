@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfigError } from "../src/options.js";
 import type { Report, Result } from "../src/report.js";
 import { runOnce } from "../src/run.js";
-import { expectConfigError } from "./config-error.js";
+import { expectConfigError } from "./helpers/config-error.js";
 import {
   answered,
   APPLE,
@@ -25,9 +25,16 @@ import {
   type StartChild,
   startsNoChild,
   stopped,
-} from "./fake-children.js";
-import { fixturePath } from "./fixture-path.js";
-import { cpu, DISCOVERY, measuresAll, type RunInput, runHere, starter } from "./run-here.js";
+} from "./helpers/fake-children.js";
+import { fixturePath } from "./helpers/fixture-path.js";
+import {
+  cpu,
+  DISCOVERY,
+  measuresAll,
+  type RunInput,
+  runHere,
+  starter,
+} from "./helpers/run-here.js";
 
 /** The config fixtures that import a module beside them. */
 const NESTED_CONFIGS = fixturePath("config", "nested");

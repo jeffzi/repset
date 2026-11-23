@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ChildRequest, MeasureRequest } from "../src/child-protocol.js";
 import { readResult } from "../src/child-result.js";
-import { errorOf } from "./error-of.js";
+import { errorOf } from "./helpers/error-of.js";
 
 /** A list request; `readResult` reads only its mode. */
 const LIST: ChildRequest = { mode: "list", file: "fruit.bench.ts" };

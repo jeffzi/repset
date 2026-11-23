@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { runCheck } from "../scripts/check-memory-timing.js";
-import type { Readers } from "../scripts/check-memory-timing.js";
-import type { RepsetReading } from "../scripts/check-timing-accuracy.js";
+import { runCheck } from "../../scripts/check-memory-timing.js";
+import type { Readers } from "../../scripts/check-memory-timing.js";
+import type { RepsetReading } from "../../scripts/check-timing-accuracy.js";
 
 /** A repset reading whose timing lasted its `minTime`. */
 const READING: RepsetReading = {

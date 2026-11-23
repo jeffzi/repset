@@ -1,7 +1,7 @@
 import { stringify } from "smol-toml";
 import { describe, expect, it } from "vitest";
 
-import { checkMiseLock } from "../scripts/check-mise-lock.js";
+import { checkMiseLock } from "../../scripts/check-mise-lock.js";
 
 const PLATFORMS = ["macos-arm64", "linux-x64", "windows-x64"] as const;
 

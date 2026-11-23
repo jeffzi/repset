@@ -12,7 +12,7 @@ import type {
   ResultError,
 } from "../src/report.js";
 import { failureLines, formatTable, paint, visibleWidth } from "../src/table.js";
-import { found, runtimeOf } from "./fake-children.js";
+import { found, runtimeOf } from "./helpers/fake-children.js";
 import {
   cellsOf,
   contender,
@@ -25,7 +25,7 @@ import {
   type Runtime,
   type Stats,
   tableLines,
-} from "./report-results.js";
+} from "./helpers/report-results.js";
 
 /** Statistics whose max and sample count print wider than the rest. */
 const WIDE_STATS: Stats = { ...flatStats(4656), max: 2_340_000, sampleCount: 1200 };

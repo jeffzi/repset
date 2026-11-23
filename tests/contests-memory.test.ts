@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import type { Report, Result } from "../src/report.js";
-import { answered, APPLE, failedOutcome, memoryOf } from "./fake-children.js";
-import { type Answer, JOIN, LOOP, type RunInput, runCases } from "./run-here.js";
+import { answered, APPLE, failedOutcome, memoryOf } from "./helpers/fake-children.js";
+import { type Answer, JOIN, LOOP, type RunInput, runCases } from "./helpers/run-here.js";
 
 /** The result of case `id` in `report`. */
 function resultOf(report: Report, id: string): Result | undefined {

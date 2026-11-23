@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import type { FoundRuntime, LookupOptions } from "../src/children.js";
 import { ConfigError, type ResolvedOptions } from "../src/options.js";
 import { selectCases, type SelectedCase, type Selection } from "../src/select.js";
-import { expectConfigError } from "./config-error.js";
+import { expectConfigError } from "./helpers/config-error.js";
 import {
   failedOutcome,
   findAny,
@@ -16,8 +16,8 @@ import {
   type Runtime,
   type StartChild,
   stopped,
-} from "./fake-children.js";
-import { fixturePath } from "./fixture-path.js";
+} from "./helpers/fake-children.js";
+import { fixturePath } from "./helpers/fixture-path.js";
 
 /** The discovery fixtures the selection tests list. */
 const FIXTURES = fixturePath("discovery");

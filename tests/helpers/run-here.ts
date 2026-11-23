@@ -1,9 +1,9 @@
 import { basename } from "node:path";
 
-import type { MeasureRequest } from "../src/child-protocol.js";
-import type { Outcome } from "../src/children.js";
-import type { Report } from "../src/report.js";
-import { run } from "../src/run.js";
+import type { MeasureRequest } from "../../src/child-protocol.js";
+import type { Outcome } from "../../src/children.js";
+import type { Report } from "../../src/report.js";
+import { run } from "../../src/run.js";
 import {
   answered,
   type CaseToList,

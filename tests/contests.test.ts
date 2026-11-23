@@ -12,9 +12,9 @@ import {
   measuredOutcome,
   runtimeOf,
   stopped,
-} from "./fake-children.js";
-import { repeated } from "./repeated.js";
-import { type Answer, JOIN, LOOP, PLUS, type RunInput, runCases } from "./run-here.js";
+} from "./helpers/fake-children.js";
+import { repeated } from "./helpers/repeated.js";
+import { type Answer, JOIN, LOOP, PLUS, type RunInput, runCases } from "./helpers/run-here.js";
 
 /** Each measurement of `result` as its repetition, its order in the repetition and its median. */
 function measurementsOf(result: Result): (number | null)[][] {

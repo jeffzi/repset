@@ -11,7 +11,7 @@ import {
   rowIndex,
   type Runtime,
   tableLines,
-} from "./report-results.js";
+} from "./helpers/report-results.js";
 
 type Measure = ReportOptions["measure"];
 

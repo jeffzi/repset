@@ -3,8 +3,8 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { checkCoverageFresh } from "../scripts/check-coverage-fresh.js";
-import { temporaryProject } from "./temporary-dir.js";
+import { checkCoverageFresh } from "../../scripts/check-coverage-fresh.js";
+import { temporaryProject } from "../helpers/temporary-dir.js";
 
 const COVERAGE_MTIME = 1_700_000_000;
 const OLDER = COVERAGE_MTIME - 100;

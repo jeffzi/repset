@@ -9,9 +9,9 @@ import type {
   MeasuredResult,
   Result,
 } from "../src/report.js";
-import { errorOf } from "./error-of.js";
-import { measured, memoryOf, runtimeOf } from "./fake-children.js";
-import { repeated } from "./repeated.js";
+import { errorOf } from "./helpers/error-of.js";
+import { measured, memoryOf, runtimeOf } from "./helpers/fake-children.js";
+import { repeated } from "./helpers/repeated.js";
 
 /** What a contender's child gave in one repetition: its median, or its median at a calls per sample. */
 type Timing = number | { readonly median: number; readonly callsPerSample: number };

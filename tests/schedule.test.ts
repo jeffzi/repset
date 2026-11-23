@@ -12,8 +12,8 @@ import {
   findAny,
   listingStarter,
   measuredOutcome,
-} from "./fake-children.js";
-import { DISCOVERY, JOIN, LOOP, PLUS, SEED } from "./run-here.js";
+} from "./helpers/fake-children.js";
+import { DISCOVERY, JOIN, LOOP, PLUS, SEED } from "./helpers/run-here.js";
 
 /** One child `startEach` started: its runtime, case id, repetition and order in it. */
 interface Started {

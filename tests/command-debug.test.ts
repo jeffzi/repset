@@ -9,7 +9,7 @@ import {
   measuresAll,
   starter,
   workspace,
-} from "./command-harness.js";
+} from "./helpers/command-harness.js";
 
 /** The stack of the Error `sort/fast` throws. */
 const STACK = "Error: kiwi\n    at plum (sort.bench.ts:3:9)";

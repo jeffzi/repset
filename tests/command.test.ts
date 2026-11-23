@@ -25,7 +25,7 @@ import {
   terminal,
   unblockWrites,
   workspace,
-} from "./command-harness.js";
+} from "./helpers/command-harness.js";
 import {
   APPLE,
   contender,
@@ -38,9 +38,9 @@ import {
   type StartChild,
   startsNoChild,
   stopped,
-} from "./fake-children.js";
-import { fixturePath } from "./fixture-path.js";
-import { reportAt } from "./report-file.js";
+} from "./helpers/fake-children.js";
+import { fixturePath } from "./helpers/fixture-path.js";
+import { reportAt } from "./helpers/report-file.js";
 
 /** A child starter that ends as stopped once the run is aborted, and measures every case before. */
 const measuresUnlessAborted: StartChild = async (runtime, request, options) =>

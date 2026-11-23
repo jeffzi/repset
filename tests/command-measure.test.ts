@@ -7,8 +7,8 @@ import {
   naming,
   startsNoCase,
   workspace,
-} from "./command-harness.js";
-import { startsNoChild } from "./fake-children.js";
+} from "./helpers/command-harness.js";
+import { startsNoChild } from "./helpers/fake-children.js";
 
 describe("main", () => {
   beforeEach(() => {

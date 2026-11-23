@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { bench, registeredCases } from "../src/bench.js";
-import { errorOf } from "./error-of.js";
-import { REGISTRY, resetRegistry } from "./registry.js";
+import { errorOf } from "./helpers/error-of.js";
+import { REGISTRY, resetRegistry } from "./helpers/registry.js";
 
 /** Returns the ids of the registered cases, in registration order. */
 function registeredIds(): string[] {

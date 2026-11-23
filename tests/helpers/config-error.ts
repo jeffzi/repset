@@ -1,6 +1,6 @@
 import { expect } from "vitest";
 
-import { ConfigError } from "../src/options.js";
+import { ConfigError } from "../../src/options.js";
 
 /** Asserts that `result` rejects with a `ConfigError` whose message holds or matches each of `named`. */
 export async function expectConfigError(

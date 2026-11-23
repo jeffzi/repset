@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { hodgesLehmann, holm, signedRankInterval, signedRankP } from "../src/judge.js";
 import { isRecord } from "../src/utils.js";
-import { fixturePath } from "./fixture-path.js";
+import { fixturePath } from "./helpers/fixture-path.js";
 
 interface FixtureInterval {
   readonly level: number;

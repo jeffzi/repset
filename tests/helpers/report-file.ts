@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 
-import type { Report } from "../src/report.js";
-import { isRecord } from "../src/utils.js";
+import type { Report } from "../../src/report.js";
+import { isRecord } from "../../src/utils.js";
 
 /** Whether `value` is a non-null object. */
 function isObject(value: unknown): value is object {

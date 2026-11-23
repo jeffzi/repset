@@ -1,5 +1,5 @@
-import type { ChildPhase } from "../src/child-protocol.js";
-import type { StrictOmit } from "../src/command-line.js";
+import type { ChildPhase } from "../../src/child-protocol.js";
+import type { StrictOmit } from "../../src/command-line.js";
 import type {
   Contest,
   ContestContender,
@@ -8,8 +8,8 @@ import type {
   MeasuredResult,
   Result,
   ResultError,
-} from "../src/report.js";
-import { formatTable } from "../src/table.js";
+} from "../../src/report.js";
+import { formatTable } from "../../src/table.js";
 import { measured as measuredChild, memoryOf, runtimeOf } from "./fake-children.js";
 
 export type Runtime = Result["runtime"]["name"];

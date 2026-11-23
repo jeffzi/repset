@@ -7,14 +7,14 @@ import type {
   MeasuredTime,
   MeasureRequest,
   OnceRequest,
-} from "../src/child-protocol.js";
+} from "../../src/child-protocol.js";
 import type {
   findRuntime,
   FoundRuntime,
   Outcome,
   StartOptions,
   startChild,
-} from "../src/children.js";
+} from "../../src/children.js";
 
 export type StartChild = typeof startChild;
 export type FindRuntime = typeof findRuntime;

@@ -7,9 +7,9 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 
 import { type Case, measure, MeasureError, summarize } from "../../src/measure/measure.js";
 import { CalibrationError, WARMUP_MIN_SAMPLES } from "../../src/measure/sampler.js";
-import { requiresRealBunHere } from "../real-bun.js";
-import { temporaryDir } from "../temporary-dir.js";
-import { trappedProxy } from "../thrown-values.js";
+import { requiresRealBunHere } from "../helpers/real-bun.js";
+import { temporaryDir } from "../helpers/temporary-dir.js";
+import { trappedProxy } from "../helpers/thrown-values.js";
 import { enabledGc, type Failures, type RecordedWorld, recordedLifecycle } from "./fixtures.js";
 
 // ---------------------------------------------------------------------------

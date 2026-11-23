@@ -12,13 +12,18 @@ import {
   type Outcome,
   type StartOptions,
 } from "../src/children.js";
-import { expectConfigError } from "./config-error.js";
-import { errorOf } from "./error-of.js";
-import { MELON } from "./fake-children.js";
-import { fixturePath } from "./fixture-path.js";
-import { requiresRealBunHere } from "./real-bun.js";
-import { KILL_AFTER_MS, POSIX, RETURN_MARGIN_MS, SPAWN_TIMEOUT_MS } from "./spawn-limits.js";
-import { suiteTemporaryDir, temporaryDir } from "./temporary-dir.js";
+import { expectConfigError } from "./helpers/config-error.js";
+import { errorOf } from "./helpers/error-of.js";
+import { MELON } from "./helpers/fake-children.js";
+import { fixturePath } from "./helpers/fixture-path.js";
+import { requiresRealBunHere } from "./helpers/real-bun.js";
+import {
+  KILL_AFTER_MS,
+  POSIX,
+  RETURN_MARGIN_MS,
+  SPAWN_TIMEOUT_MS,
+} from "./helpers/spawn-limits.js";
+import { suiteTemporaryDir, temporaryDir } from "./helpers/temporary-dir.js";
 
 const FIXTURES = fixturePath("children");
 

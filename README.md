@@ -2,6 +2,15 @@
 
 repset times synchronous JavaScript and TypeScript functions on Node and Bun.
 
+- [What repset is](#what-repset-is)
+- [Install](#install)
+- [Write a benchmark in three steps](#write-a-benchmark-in-three-steps)
+- [Run the benchmarks](#run-the-benchmarks)
+- [Compare functions in a contest](#compare-functions-in-a-contest)
+- [Configure a project](#configure-a-project)
+- [Learn more](#learn-more)
+- [License](#license)
+
 ## What repset is
 
 You write a benchmark file that calls `bench()`, and repset times each case in a fresh process of
@@ -125,7 +134,7 @@ bench("sort/in-place", {
 
 <!-- /docs -->
 
-## Run it
+## Run the benchmarks
 
 `npx repset` runs every benchmark file under the current directory, skipping `node_modules`, on
 Node. A config file changes which files and runtimes it uses (see
@@ -226,18 +235,23 @@ join      │ 8.46 µs │ 3.10× │    2
   interval widens.
 - **Rank** is 1 plus the number of contenders proven faster. Two contenders share a rank when the
   repetitions did not tell them apart. A pair is also tied when its gap is within 1.25 times the
-  timer's resolution per call.
-- **Repetitions** default to the fewest at which one repetition may disagree and the pair can still
-  be judged: 7 for two contenders, 8 for three, 12 for eight. When the repetitions leave pairs tied,
-  a line under the contest's table names those pairs and suggests twice as many repetitions:
+  timer's resolution per call. When the repetitions leave pairs tied, a line under the contest's
+  table names those pairs and suggests twice as many repetitions:
   `npx repset --contest-repetition-count 14`. Pairs whose gap is too small for the timer get no such
-  suggestion, since more repetitions do not help. Each repetition starts one process per contender,
-  and each process takes as long as one plain case. Judging is exact at every count, and its cost
-  grows with the cube of the repetitions: 38 ms per pair at 200 repetitions, about 2 seconds at 800.
+  suggestion, since more repetitions do not help.
+- **Repetitions** default to the fewest at which one repetition may disagree and the pair can still
+  be judged: 7 for two contenders, 8 for three, 12 for eight. `--contest-repetition-count` sets
+  another count.
+
+Each repetition starts one process per contender, and each process takes as long as one plain case.
+Judging is exact at every count, and its cost grows with the cube of the repetitions: 38 ms per pair
+at 200 repetitions, about 2 seconds at 800.
 
 Each process runs `setup` on its own, so `setup` must build the same state every time: random data
-needs a fixed seed. Only a contest is judged. Two plain benchmarks under one prefix, such as
-`sort/copy` and `sort/in-place`, each run once with no verdict between them.
+needs a fixed seed.
+
+Only a contest is judged. Two plain benchmarks under one prefix, such as `sort/copy` and
+`sort/in-place`, each run once with no verdict between them.
 
 ## Configure a project
 

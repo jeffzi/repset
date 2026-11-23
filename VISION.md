@@ -1,17 +1,19 @@
 # repset vision
 
 repset measures the time and allocation of synchronous JavaScript hot paths, each benchmark in its
-own process on each JavaScript runtime, starting with [Node][node] and [Bun][bun]. A benchmark
-declares contenders, the alternatives it compares. repset runs each contender in several fresh
-processes, then says which is faster or that it cannot tell them apart. A run can also write a JSON
-report. It competes with [mitata][mitata], [tinybench][tinybench], [Deno.bench][deno-bench] and
-[`node:bench`][node-bench]: the in-process tools a TypeScript author reaches for first.
+own process on each JavaScript runtime, starting with [Node][node] and [Bun][bun]. A benchmark times
+one function, or declares contenders, the alternatives it compares. repset runs each contender in
+several fresh processes, then says which is faster or that it cannot tell them apart. A run can also
+write a JSON (JavaScript Object Notation) report. It competes with [mitata][mitata],
+[tinybench][tinybench], [Deno.bench][deno-bench] and [`node:bench`][node-bench]: the in-process
+tools a TypeScript author reaches for first.
 
 ## Problem
 
 Most JavaScript benchmark libraries wrap the body, the function a benchmark times, in code that
-changes how the JIT compiles it. One body of about 1 µs, calling a small function per element, reads
-differently depending on what surrounds it (Apple M2 Max, Node 26.8.1, Bun 1.4.0):
+changes how the JIT (just-in-time compiler) compiles it. One body of about 1 µs, calling a small
+function per element, reads differently depending on what surrounds it (Apple M2 Max, Node 26.8.1,
+Bun 1.4.0):
 
 | Runtime | Harness around the body          | Median  |
 | ------- | -------------------------------- | ------- |
@@ -26,20 +28,20 @@ The `try` and sampler rows measure the harness, not the body.
 Deno.bench and `node:bench` let the body start and stop the clock itself with `b.start()` and
 `b.end()`, so its setup stays off the clock. For a body under 10 µs, Deno.bench ignores those calls,
 so setup is timed with the body. Both run every benchmark of a file in the same isolate or process,
-so one benchmark can slow the next (#6). Libraries that keep setup off the clock through hooks
-instead, such as tinybench, keep adding events and options until writing a benchmark means learning
-the library.
+so one benchmark can slow the next (principle 6). Libraries that keep setup off the clock through
+hooks instead, such as tinybench, keep adding events and options until writing a benchmark means
+learning the library.
 
 ## Principles
 
 The numbers rank the principles: when two conflict, the lower number wins. Each principle ends with
 requests it rules out.
 
-1. **Honest numbers over convenience.** The API offers only benchmark forms that repset can time
-   correctly. Bodies are synchronous, and setup and teardown run outside every pair of clock reads.
-   No `try`, `async` or Promise sits between repset's timing loop and the body, and a body never
-   reports its own duration. Rules out: a body that returns `{ overriddenDuration }`; setup inside
-   the timed window to save a callback.
+1. **Honest numbers over convenience.** The API (application programming interface) offers only
+   benchmark forms that repset can time correctly. Bodies are synchronous, and setup and teardown
+   run outside every pair of clock reads. No `try`, `async` or Promise sits between repset's timing
+   loop and the body, and a body never reports its own duration. Rules out: a body that returns
+   `{ overriddenDuration }`; setup inside the timed window to save a callback.
 
 2. **One way to do each thing.** Each need has exactly one mechanism. A benchmark has one setup, one
    teardown and one place for its fields. Rules out: a suite-level `beforeEach` on top of a
@@ -73,9 +75,9 @@ requests it rules out.
 7. **Runtimes are peers.** The same benchmark file runs unchanged on every supported runtime. A
    capability one runtime lacks becomes a report field that is `null` on the runtimes without it,
    never core API. Benchmarks for code that cannot load on some runtime, such as code that needs the
-   DOM, go in a separate config file that lists their runtimes. They still use `bench()`. Rules out:
-   `bun:jsc` or V8's `%` natives in the benchmark API; a Node-only field on a benchmark; a
-   `runtimes` field on `bench()`.
+   DOM (Document Object Model), go in a separate config file that lists their runtimes. They still
+   use `bench()`. Rules out: `bun:jsc` or V8's `%` natives in the benchmark API; a Node-only field
+   on a benchmark; a `runtimes` field on `bench()`.
 
 8. **Diagnose loudly.** A body whose work the engine deleted fails its benchmark, and so does a
    missing garbage collector. No suspect number passes in silence: a comparison between contenders
@@ -91,8 +93,9 @@ requests it rules out.
 - **Judging across revisions.** Baselines, history and whether an edit changed a number all need
   runs from several revisions. A comparison tool such as [gymrat][gymrat] owns them; repset's report
   is its input. repset judges only between the contenders of one benchmark, in one run.
-- **Async and I/O benchmarks.** An awaited call cannot time like a plain loop (#1). Use mitata or
-  tinybench for async code, and [hyperfine][hyperfine] for whole commands.
+- **Async and I/O (input/output) benchmarks.** An awaited call cannot time like a plain loop
+  (principle 1). Use mitata or tinybench for async code, and [hyperfine][hyperfine] for whole
+  commands.
 - **Profiling.** repset says how long a body takes, not why. Use the runtime's profiler, such as
   [`node --cpu-prof`][cpu-prof].
 - **Anything but steady state.** repset times a warmed-up body. First-call cost, frame timing, soak
@@ -111,7 +114,7 @@ calls one faster. repset is the wrong choice for async code and for whole progra
 fits.
 
 Principles 2 to 5 keep the API small. [Luamark][luamark], a Lua benchmark library, covers its ground
-with four measuring functions and two options; tinybench needs six hooks on two levels, ten event
+with four measuring functions and two options. tinybench needs six hooks on two levels, ten event
 types, six result states and about fifteen options.
 
 Borrowed:

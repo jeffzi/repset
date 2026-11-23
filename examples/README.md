@@ -2,8 +2,9 @@
 
 Each `*.bench.ts` file below shows how to benchmark one common scenario with repset. Copy one into
 your project, next to code that matches its scenario, and swap in your own functions. Put
-`repset.config.ts` in the directory you run repset from. New to repset? The
-[main README](../README.md) explains `bench()`, `setup` and `setupPerCall`.
+`repset.config.ts` in the directory you run repset from, and change its `include` to globs that
+match your benchmark files, such as `src/**/*.bench.ts`. The globs are relative to the config file.
+New to repset? The [main README](../README.md) explains `bench()`, `setup` and `setupPerCall`.
 
 | File                   | Scenario                                                      | Shows                                 |
 | ---------------------- | ------------------------------------------------------------- | ------------------------------------- |
@@ -32,7 +33,9 @@ The config runs every case on Node, then on the Bun that mise installs. To run o
 `--runtime node`.
 
 In your own project, after `npm install --save-dev repset`, skip `task build` and write `npx repset`
-wherever this page writes `mise exec -- node ../dist/cli.js` or `node ../dist/cli.js`.
+wherever this page writes `mise exec -- node ../dist/cli.js` or `node ../dist/cli.js`. The example
+config also runs every case on Bun: install Bun so it is on your `PATH`, or remove `"bun"` from
+`runtimes`.
 
 ## Common commands
 

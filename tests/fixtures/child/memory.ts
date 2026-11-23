@@ -9,6 +9,9 @@ let numberSink = 0;
 /** Where a body keeps the object it built, so the engine cannot drop the allocation. */
 export let objectSink: object = {};
 
+/** Where the `array` body keeps the array it built, so the engine cannot drop the allocation. */
+export let arraySink: readonly number[] = [];
+
 /** The sum of `values`, read with an indexed loop that allocates no iterator. */
 function sum(values: readonly number[]): number {
   let total = 0;
@@ -22,6 +25,13 @@ bench("zero", () => sum(VALUES));
 bench("object", () => {
   objectSink = { a: sum(VALUES), b: 1 };
   return objectSink;
+});
+
+// A 1024-element array per call is enough garbage that, while V8 starts with a small young
+// generation, a collection lands inside a sample unless one is forced before it.
+bench("array", () => {
+  arraySink = Array.from({ length: 1024 }, () => 0);
+  return arraySink;
 });
 
 bench("zero-per-call", {

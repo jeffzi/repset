@@ -499,6 +499,20 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
           expect(Math.abs(memoryMedian(outcome) - bytes)).toBeLessThanOrEqual(BAND_BYTES);
         },
       );
+
+      // Without the collection forced before each sample, a collection lands inside the samples
+      // of this body and the pass halves its calls per sample. That holds only while V8 starts
+      // with a small young generation: at `--min-semi-space-size=16` the reading stays at 64
+      // without the forced collection. A Node release that starts larger can leave this test
+      // passing with the collection gone, so a pass here alone does not show the collection holds.
+      it("reads a body allocating a 1024-element array per call at 64 calls per sample", async () => {
+        const outcome = await startBuiltChild(NODE, measuringMemory("array"), BUILT_OPTIONS);
+
+        expect(outcome).toMatchObject({
+          status: "ok",
+          result: { memory: { sampling: { callsPerSample: 64 } } },
+        });
+      });
     });
   });
 

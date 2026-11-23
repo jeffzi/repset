@@ -7,4 +7,5 @@ export default {
   debug: true,
   timeout: 100,
   nodeImport: "tsx",
+  measure: ["memory"],
 };

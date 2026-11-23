@@ -16,6 +16,12 @@ import { DEFAULT_MIN_SAMPLES, DEFAULT_MIN_TIME } from "./measure/measure.js";
 import { RUNTIMES, type Runtime } from "./measure/runtime.js";
 import { describe, property, thrownMessage } from "./utils.js";
 
+/** What a run can measure of each case. */
+export const MEASURES = ["time", "memory"] as const;
+
+/** One thing a run can measure of each case. */
+export type Measure = (typeof MEASURES)[number];
+
 /** The options a config file stores. Each is optional; `undefined` counts as absent. */
 export interface Config {
   /** Globs for benchmark files, relative to the config file. `node_modules` is never searched. */
@@ -36,6 +42,8 @@ export interface Config {
   readonly timeout?: number | undefined;
   /** A module Node children import first, such as a TypeScript loader. Bun children ignore it. */
   readonly nodeImport?: string | undefined;
+  /** What to measure of each case: `time`, `memory` or both, each named once. */
+  readonly measure?: readonly Measure[] | undefined;
 }
 
 /** Returns `config` unchanged: it types a config file, and {@link resolveOptions} checks it. */
@@ -95,6 +103,8 @@ export interface ResolvedOptions {
   readonly timeout: number;
   readonly nodeImport: NodeImport | undefined;
   readonly filter: RegExp | undefined;
+  /** In the order the config file or the caller wrote it. */
+  readonly measure: readonly Measure[];
 }
 
 // ---------------------------------------------------------------------------
@@ -121,6 +131,7 @@ const OPTION_KEYS: Readonly<Record<OptionName, true>> = {
   debug: true,
   timeout: true,
   nodeImport: true,
+  measure: true,
 };
 
 /** The largest delay a Node timer keeps; a larger one fires after 1 ms. */
@@ -132,6 +143,8 @@ export const DEFAULT_INCLUDE: readonly string[] = ["**/*.bench.{ts,mts,js,mjs}"]
 export const DEFAULT_RUNTIMES: readonly Runtime[] = ["node"];
 /** How many milliseconds a child may run when no option sets `timeout`. */
 export const DEFAULT_TIMEOUT = 600_000;
+/** What a run measures when no option sets `measure`. */
+export const DEFAULT_MEASURE: readonly Measure[] = ["time"];
 
 /**
  * Whether `path` names a regular file; a missing path or a directory is not an error.
@@ -221,17 +234,51 @@ export function isRuntime(value: unknown): value is Runtime {
 /** Every runtime repset runs on, each quoted: `"node" and "bun"`. */
 export const QUOTED_RUNTIMES = RUNTIMES.map((runtime) => `"${runtime}"`).join(" and ");
 
-function checkedRuntimes(value: unknown): readonly Runtime[] {
-  if (!Array.isArray(value)) throw invalid("runtimes", "an array of runtimes", value);
+/** An option that lists names of a closed set: its key, what one name is, and the set. */
+interface NameOption<T> {
+  readonly option: string;
+  readonly noun: string;
+  readonly quoted: string;
+  readonly isName: (value: unknown) => value is T;
+}
+
+/** Checks an option that lists at least one name of a closed set, each name once. */
+function checkedNames<T>(
+  { option, noun, quoted, isName }: NameOption<T>,
+  value: unknown,
+): readonly T[] {
+  if (!Array.isArray(value)) throw invalid(option, `an array of ${noun}s`, value);
   const names: readonly unknown[] = value;
-  if (names.length === 0) throw new ConfigError("runtimes must name at least one runtime, got []");
-  const runtimes: Runtime[] = [];
+  if (names.length === 0) throw new ConfigError(`${option} must name at least one ${noun}, got []`);
+  const checked: T[] = [];
   for (const name of names) {
-    if (!isRuntime(name)) throw invalid("runtimes", `an array of ${QUOTED_RUNTIMES}`, name);
-    if (runtimes.includes(name)) throw new ConfigError(`runtimes names ${describe(name)} twice`);
-    runtimes.push(name);
+    if (!isName(name)) throw invalid(option, `an array of ${quoted}`, name);
+    if (checked.includes(name)) throw new ConfigError(`${option} names ${describe(name)} twice`);
+    checked.push(name);
   }
-  return runtimes;
+  return checked;
+}
+
+function checkedRuntimes(value: unknown): readonly Runtime[] {
+  return checkedNames(
+    { option: "runtimes", noun: "runtime", quoted: QUOTED_RUNTIMES, isName: isRuntime },
+    value,
+  );
+}
+
+/** Whether `value` names something a run can measure. */
+export function isMeasure(value: unknown): value is Measure {
+  return MEASURES.some((measure) => measure === value);
+}
+
+/** Everything a run can measure, each quoted: `"time" and "memory"`. */
+export const QUOTED_MEASURES = MEASURES.map((measure) => `"${measure}"`).join(" and ");
+
+function checkedMeasure(value: unknown): readonly Measure[] {
+  return checkedNames(
+    { option: "measure", noun: "measure", quoted: QUOTED_MEASURES, isName: isMeasure },
+    value,
+  );
 }
 
 function checkedMinTime(value: unknown): number {
@@ -292,6 +339,7 @@ function checkedConfig(values: Readonly<Partial<Record<OptionName, unknown>>>): 
     debug: given(values.debug, (value) => checkedBoolean("debug", value)),
     timeout: given(values.timeout, checkedTimeout),
     nodeImport: given(values.nodeImport, (value) => checkedString("nodeImport", value)),
+    measure: given(values.measure, checkedMeasure),
   };
 }
 
@@ -345,5 +393,6 @@ export async function resolveOptions(options: OptionsInput): Promise<ResolvedOpt
     timeout: merged("timeout") ?? DEFAULT_TIMEOUT,
     nodeImport: resolvedNodeImport(caller.nodeImport, fromFile.nodeImport, file),
     filter: given(options.filter, checkedFilter),
+    measure: merged("measure") ?? DEFAULT_MEASURE,
   };
 }

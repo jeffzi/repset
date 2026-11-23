@@ -10,4 +10,5 @@ export default {
   debug: true,
   timeout: MAX_TIMER_DELAY_MS,
   nodeImport: "tsx",
+  measure: ["memory", "time"],
 };

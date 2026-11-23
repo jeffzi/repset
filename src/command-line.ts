@@ -4,15 +4,19 @@ import { Option, Command as Parser } from "commander";
 
 import type { Colors, Output } from "./command.js";
 import { DEFAULT_MIN_SAMPLES, DEFAULT_MIN_TIME } from "./measure/measure.js";
-import { RUNTIMES, type Runtime } from "./measure/runtime.js";
+import { RUNTIMES } from "./measure/runtime.js";
 import {
   CONFIG_NAMES,
   ConfigError,
   DEFAULT_INCLUDE,
+  DEFAULT_MEASURE,
   DEFAULT_RUNTIMES,
   DEFAULT_TIMEOUT,
+  isMeasure,
   isRuntime,
+  MEASURES,
   type OptionsInput,
+  QUOTED_MEASURES,
   QUOTED_RUNTIMES,
 } from "./options.js";
 import { paint } from "./table.js";
@@ -45,6 +49,11 @@ const OPTIONS: readonly (readonly [flags: string, help: string, conflicts?: read
       "--runtime <list>",
       `Runtimes to run on, comma-separated, in this order: ${RUNTIMES.join(", ")} ` +
         `(default: ${DEFAULT_RUNTIMES.join(",")})`,
+    ],
+    [
+      "--measure <list>",
+      `What to measure of each case, comma-separated: ${MEASURES.join(", ")} or both ` +
+        `(default: ${DEFAULT_MEASURE.join(",")})`,
     ],
     [
       "--min-time <ms>",
@@ -84,6 +93,7 @@ const EXAMPLES: readonly (readonly [string, string])[] = [
   ["repset benchmarks/sort.bench.ts", "Run only the cases in that file"],
   ["repset --filter '^sort/'", "Run the cases whose id starts with sort/"],
   ["repset --runtime node,bun", "Run every case on Node, then on Bun"],
+  ["repset --measure time,memory", "Measure each case's time and memory"],
   ["repset -o report.json", "Also write the JSON report to report.json"],
   ["repset --once", "Run every case once, without timing, to check it works"],
   ["repset -d", "Print each failed case's stack and its process's output"],
@@ -144,20 +154,28 @@ function fixedCallsPerSample(text: string | undefined): number | undefined {
 }
 
 /**
- * Reads the runtimes of a `--runtime` list.
+ * Reads the names of a comma-separated flag list.
  *
+ * @param flag - The flag's name, without the leading dashes, which the error names.
+ * @param quoted - Every name the flag accepts, quoted, for the error.
+ * @param isName - Whether an entry is a name the flag accepts.
  * @param text - The comma-separated list, or `undefined` when the flag is absent.
- * @returns The runtimes in the order given, or `undefined` when the flag is absent.
- * @throws {@link ConfigError} When an entry of the list is not a runtime.
+ * @returns The names in the order given, or `undefined` when the flag is absent.
+ * @throws {@link ConfigError} When an entry of the list is not a name the flag accepts.
  */
-function runtimeList(text: string | undefined): Runtime[] | undefined {
+function nameList<T extends string>(
+  flag: string,
+  quoted: string,
+  isName: (value: string) => value is T,
+  text: string | undefined,
+): T[] | undefined {
   if (text === undefined) return undefined;
-  const names = text.split(",");
-  const runtimes = names.filter((name) => isRuntime(name));
-  if (runtimes.length !== names.length) {
-    throw new ConfigError(`--runtime must list ${QUOTED_RUNTIMES}, got ${describe(text)}`);
+  const entries = text.split(",");
+  const names = entries.filter((entry) => isName(entry));
+  if (names.length !== entries.length) {
+    throw new ConfigError(`--${flag} must list ${quoted}, got ${describe(text)}`);
   }
-  return runtimes;
+  return names;
 }
 
 /** The help's closing text: the examples, then where the README lives. */
@@ -237,7 +255,8 @@ export function noColorGiven(args: readonly string[]): boolean {
  *   check.
  * @throws {ConfigError} When a flag is unknown, missing its value or holding a value that is not a
  *   decimal number where one is due, when two flags conflict, when an entry of `--runtime` is not a
- *   runtime, or when `REPSET_CALLS_PER_SAMPLE` holds a bad value.
+ *   runtime, when an entry of `--measure` is not a measure, or when `REPSET_CALLS_PER_SAMPLE` holds
+ *   a bad value.
  */
 export function parseCommand(args: readonly string[], parser: Parser): Command {
   parser.parse(args, { from: "user" });
@@ -254,7 +273,7 @@ export function parseCommand(args: readonly string[], parser: Parser): Command {
     input: {
       files: parser.args.length > 0 ? parser.args : undefined,
       filter: text("filter"),
-      runtimes: runtimeList(text("runtime")),
+      runtimes: nameList("runtime", QUOTED_RUNTIMES, isRuntime, text("runtime")),
       minTime: decimal("min-time", text("minTime")),
       minSampleCount: decimal("min-sample-count", text("minSampleCount")),
       contestRepetitionCount: decimal("contest-repetition-count", text("contestRepetitionCount")),
@@ -262,6 +281,7 @@ export function parseCommand(args: readonly string[], parser: Parser): Command {
       timeout: decimal("timeout", text("timeout")),
       nodeImport: text("nodeImport"),
       config: text("config"),
+      measure: nameList("measure", QUOTED_MEASURES, isMeasure, text("measure")),
     },
     output: text("output"),
     callsPerSample: fixedCallsPerSample(process.env[CALLS_PER_SAMPLE]),

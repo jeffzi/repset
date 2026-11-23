@@ -40,6 +40,7 @@ function optionsWith(overrides: Partial<ResolvedOptions> = {}): ResolvedOptions 
     timeout: 600_000,
     nodeImport: undefined,
     filter: undefined,
+    measure: ["time"],
     ...overrides,
   };
 }

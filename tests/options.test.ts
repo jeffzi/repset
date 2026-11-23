@@ -58,6 +58,7 @@ const DEFAULTS = {
   timeout: DEFAULT_TIMEOUT,
   nodeImport: undefined,
   filter: undefined,
+  measure: ["time"],
 };
 
 describe("resolveOptions", () => {
@@ -150,6 +151,8 @@ describe("resolveOptions", () => {
       { name: "runtime-unknown.ts", option: "runtimes", shown: "deno" },
       { name: "node-import-number.ts", option: "nodeImport", shown: "5" },
       { name: "debug-string.ts", option: "debug", shown: "yes" },
+      { name: "measure-string.ts", option: "measure", shown: "time" },
+      { name: "measure-unknown.ts", option: "measure", shown: "banana" },
     ])("rejects $name, naming $option and the value", async ({ name, option, shown }) => {
       const result = resolveHere({ config: name });
 
@@ -162,6 +165,12 @@ describe("resolveOptions", () => {
       const result = resolveHere({ runtimes: [] });
 
       await expectConfigError(result, []);
+    });
+
+    it("rejects an empty measure list, naming the option", async () => {
+      const result = resolveHere({ measure: [] });
+
+      await expectConfigError(result, ["measure"]);
     });
 
     it.each<{ options: Partial<OptionsInput>; option: string; shown: string }>([
@@ -178,6 +187,7 @@ describe("resolveOptions", () => {
       { options: { timeout: 2.5 }, option: "timeout", shown: "2.5" },
       { options: { timeout: 2_147_483_648 }, option: "timeout", shown: "2147483648" },
       { options: { filter: "(" }, option: "filter", shown: "(" },
+      { options: { measure: ["memory", "memory"] }, option: "measure", shown: "memory" },
     ])(
       "rejects $option $shown, naming the option and the value",
       async ({ options, option, shown }) => {
@@ -211,6 +221,7 @@ describe("resolveOptions", () => {
         timeout: 2_147_483_647,
         nodeImport: { written: "tsx", resolved: "tsx" },
         filter: undefined,
+        measure: ["memory", "time"],
       });
     });
 
@@ -226,6 +237,7 @@ describe("resolveOptions", () => {
         timeout: 200,
         nodeImport: "jiti",
         filter: "^a",
+        measure: ["time", "memory"],
       });
 
       expect(resolved).toStrictEqual({
@@ -239,6 +251,7 @@ describe("resolveOptions", () => {
         timeout: 200,
         nodeImport: { written: "jiti", resolved: "jiti" },
         filter: /^a/u,
+        measure: ["time", "memory"],
       });
     });
   });

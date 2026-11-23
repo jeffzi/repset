@@ -127,9 +127,6 @@ interface Asked {
 
 const TIME_ONLY: Asked = { time: true, memory: false };
 
-/** The bytes per call a known body's reading may stray from its size. */
-const BAND_BYTES = 8;
-
 /** How the built-child tests start a child that loads a TypeScript benchmark file. */
 const BUILT_OPTIONS = { timeout: KILL_AFTER_MS, nodeImport: "tsx" } as const;
 
@@ -487,16 +484,16 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
 
     describe("when the request asks time and memory", () => {
       it.each([
-        { id: "zero", bytes: 0 },
-        { id: "object", bytes: 40 },
-        { id: "zero-per-call", bytes: 0 },
-        { id: "object-per-call", bytes: 40 },
+        { id: "zero", bytes: 0, within: 0 },
+        { id: "object", bytes: 40, within: 1 },
+        { id: "zero-per-call", bytes: 0, within: 0 },
+        { id: "object-per-call", bytes: 40, within: 1 },
       ])(
-        "reads $id at $bytes bytes per call within the band, after timing",
-        async ({ id, bytes }) => {
+        "reads $id at $bytes bytes per call, within $within, after timing",
+        async ({ id, bytes, within }) => {
           const outcome = await startBuiltChild(NODE, measuringMemory(id), BUILT_OPTIONS);
 
-          expect(Math.abs(memoryMedian(outcome) - bytes)).toBeLessThanOrEqual(BAND_BYTES);
+          expect(Math.abs(memoryMedian(outcome) - bytes)).toBeLessThanOrEqual(within);
         },
       );
 

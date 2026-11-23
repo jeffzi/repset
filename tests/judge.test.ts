@@ -9,6 +9,7 @@ import type {
   MeasuredResult,
   Result,
 } from "../src/report.js";
+import { errorOf } from "./error-of.js";
 import { measured, memoryOf, runtimeOf } from "./fake-children.js";
 import { repeated } from "./repeated.js";
 
@@ -68,6 +69,36 @@ function timed(
     memory,
     measurements: [first, ...rest],
   };
+}
+
+/** Contender `key`, timed at `median` in each repetition of `repetitions`. */
+function timedOver(key: string, repetitions: readonly number[], median: number): MeasuredResult {
+  const [first, ...rest] = repetitions.map((repetition) => timedIn(repetition, median));
+  if (first === undefined) throw new RangeError("a timed contender needs one repetition");
+  return {
+    ...base(key),
+    status: "ok",
+    error: null,
+    time: nsPerCall(median),
+    memory: null,
+    measurements: [first, ...rest],
+  };
+}
+
+/** The repetitions from `first` to `last`, both included. */
+function span(first: number, last: number): number[] {
+  return Array.from({ length: last - first + 1 }, (_, index) => first + index);
+}
+
+/** A pattern matching contender `key`'s id followed by each of `repetitions`, in order. */
+function naming(key: string, repetitions: readonly number[]): RegExp {
+  return new RegExp(
+    [
+      `concat/${key}`,
+      ...repetitions.map((repetition) => String.raw`\b${String(repetition)}\b`),
+    ].join("[^/]*"),
+    "u",
+  );
 }
 
 /** Contender `key`, measured in repetition 1 for its memory alone, `bytes` per call. */
@@ -367,6 +398,47 @@ describe("contestOf", () => {
         expect(contest.pairs).toHaveLength(judged ? (contenders * (contenders - 1)) / 2 : 0);
       },
     );
+  });
+
+  describe("when timed contenders ran different repetitions", () => {
+    it.each([
+      { why: "the first ran one the second did not", join: span(1, 8), loop: span(1, 7) },
+      { why: "the second ran one the first did not", join: span(1, 7), loop: span(1, 8) },
+      { why: "they share none", join: span(1, 7), loop: span(8, 14) },
+    ])(
+      "throws a RangeError naming each and the repetitions only it ran when $why",
+      ({ join, loop }) => {
+        const joinOnly = join.filter((repetition) => !loop.includes(repetition));
+        const loopOnly = loop.filter((repetition) => !join.includes(repetition));
+
+        const error = errorOf(() =>
+          contestOf([timedOver("join", join, 100), timedOver("loop", loop, 200)]),
+        );
+
+        expect(error).toBeInstanceOf(RangeError);
+        expect(error).toHaveProperty("message", expect.stringMatching(naming("join", joinOnly)));
+        expect(error).toHaveProperty("message", expect.stringMatching(naming("loop", loopOnly)));
+      },
+    );
+
+    it("returns the contest not judged when too few repetitions ran", () => {
+      const contest = contestOf([
+        timedOver("join", span(1, 5), 300),
+        timedOver("loop", span(1, 4), 100),
+      ]);
+
+      expect(contest).toStrictEqual({
+        name: "concat",
+        params: {},
+        runtime: runtimeOf("node"),
+        repetitionCount: 5,
+        contenders: [
+          { id: "concat/loop", time: nsPerCall(100), memory: null, ratio: null, rank: null },
+          { id: "concat/join", time: nsPerCall(300), memory: null, ratio: null, rank: null },
+        ],
+        pairs: [],
+      });
+    });
   });
 
   describe("when the contenders were not timed", () => {

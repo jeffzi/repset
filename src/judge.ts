@@ -196,15 +196,45 @@ interface Verdict {
   readonly tie: ContestPair["tie"];
 }
 
-/** The per-repetition `ln(median_b / median_a)` over the repetitions both contenders ran. */
+/** `repetitions` joined by commas, or `none` when it is empty. */
+function listed(repetitions: readonly (number | null)[]): string {
+  return repetitions.length === 0 ? "none" : repetitions.map(String).join(", ");
+}
+
+/**
+ * The per-repetition `ln(median_b / median_a)` of two contenders that ran the same repetitions.
+ *
+ * @param a - The contender in the denominator.
+ * @param b - The contender in the numerator.
+ * @returns One log ratio per repetition, in `b`'s order.
+ * @throws RangeError When a broken invariant has one contender run a repetition the other did not;
+ *   the message names both contenders and the repetitions each ran alone.
+ */
 function logRatios(a: TimedResult, b: TimedResult): number[] {
   const medians = new Map(
     a.measurements.map(({ repetition, time }) => [repetition, time.stats.median]),
   );
-  return b.measurements.flatMap(({ repetition, time }) => {
+  const differences: number[] = [];
+  const onlyB: (number | null)[] = [];
+  for (const { repetition, time } of b.measurements) {
     const median = medians.get(repetition);
-    return median === undefined ? [] : [Math.log(time.stats.median / median)];
-  });
+    if (median === undefined) onlyB.push(repetition);
+    else differences.push(Math.log(time.stats.median / median));
+  }
+  const ranByB = new Set(b.measurements.map(({ repetition }) => repetition));
+  const onlyA = [...medians.keys()].filter((repetition) => !ranByB.has(repetition));
+  if (onlyA.length > 0 || onlyB.length > 0) {
+    throw new RangeError(
+      `${a.id} and ${b.id} ran different repetitions: ${a.id} alone ran ${listed(onlyA)}; ` +
+        `${b.id} alone ran ${listed(onlyB)}`,
+    );
+  }
+  return differences;
+}
+
+/** A pair's ratio, the exp of the Hodges–Lehmann estimate of its per-repetition log ratios. */
+function ratioOf(differences: readonly number[]): number {
+  return Math.exp(hodgesLehmann(differences));
 }
 
 /** The largest timer resolution per call among both contenders' measurements, over the smaller median. */
@@ -233,8 +263,8 @@ function tieOf(
  * @param measured - The contenders that never failed.
  * @returns A verdict per pair; a pair is proven when its adjusted p is at most `ALPHA` and its
  *   ratio clears 1 by more than `RESOLUTIONS` timer resolutions per call.
- * @throws RangeError When a broken invariant leaves a pair with no repetition both contenders ran,
- *   or Holm's correction returns fewer p values than it was given.
+ * @throws RangeError When two contenders ran different repetitions, or Holm's correction returns
+ *   fewer p values than it was given.
  */
 function verdictsOf(measured: readonly TimedResult[]): Verdict[] {
   const tested = measured.flatMap((a, index) =>
@@ -259,8 +289,8 @@ function verdictsOf(measured: readonly TimedResult[]): Verdict[] {
  * @param order - The contest's contenders that never failed, sorted.
  * @param level - The interval's confidence level.
  * @returns The pair's ratio, interval and verdict.
- * @throws RangeError When a broken invariant leaves the pair too few repetitions for an interval at
- *   `level`.
+ * @throws RangeError When the pair's contenders ran different repetitions, or a broken invariant
+ *   leaves the pair too few repetitions for an interval at `level`.
  */
 function pairOf(verdict: Verdict, order: readonly TimedResult[], level: number): ContestPair {
   const [a, b] =
@@ -272,7 +302,7 @@ function pairOf(verdict: Verdict, order: readonly TimedResult[], level: number):
   return {
     a: a.id,
     b: b.id,
-    ratio: Math.exp(hodgesLehmann(differences)),
+    ratio: ratioOf(differences),
     interval: [Math.exp(low), Math.exp(high)],
     p: verdict.p,
     pAdjusted: verdict.pAdjusted,
@@ -298,8 +328,9 @@ function contenderOf(
  * @param results - The contest's results on one runtime, in the order they were emitted.
  * @returns The contest's entry; when it is not judged, its contenders hold their times and memory
  *   with a `null` rank and ratio, and its `pairs` is empty.
- * @throws RangeError When a broken invariant leaves a judged pair with no repetition both
- *   contenders ran, or too few for its interval's level.
+ * @throws RangeError When two timed contenders of a judged contest ran different repetitions, the
+ *   message naming both and the repetitions each ran alone, or when a broken invariant leaves a
+ *   judged pair too few repetitions for its interval's level.
  */
 export function contestOf(results: readonly [Result, ...Result[]]): Contest {
   const [{ name, runtime }] = results;
@@ -347,15 +378,9 @@ export function contestOf(results: readonly [Result, ...Result[]]): Contest {
         ? position(left.b) - position(right.b)
         : position(left.a) - position(right.a),
     );
-  const [fastest] = order;
+  const fastest = valueAt(order, 0);
   const contenders = ranked.map(({ result, rank }) =>
-    contenderOf(
-      result,
-      result === fastest
-        ? 1
-        : (pairs.find((pair) => pair.a === fastest?.id && pair.b === result.id)?.ratio ?? null),
-      rank,
-    ),
+    contenderOf(result, result === fastest ? 1 : ratioOf(logRatios(fastest, result)), rank),
   );
   return { ...head, contenders: [...contenders, ...failed], pairs };
 }

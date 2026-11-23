@@ -18,8 +18,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `minSampleCount`, and `--rounds` and `rounds` to `--contest-repetition-count` and
   `contestRepetitionCount`; update your config files and scripts.
 - **Breaking:** Move each result's `median` to `time.median` and its `processes[]` to
-  `measurements[]`, whose entries hold `repetition`, `orderInRepetition` and a `time` block; update
-  any script that reads the JSON report.
+  `measurements[]`, whose entries hold a `time` block and rename `round` and `orderInRound` to
+  `repetition` and `orderInRepetition`; update any script that reads the JSON report.
 - **Breaking:** Rename the report's `machine` to `host`, `cores` to `coreCount`, `warmupSamples` and
   `timingAttempts` to `warmupSampleCount` and `timingAttemptCount`, each contest's `rounds` to
   `repetitionCount`, a contender's `median` to `time.median`, and the `tie` value `"rounds"` to

@@ -86,6 +86,7 @@ const EXAMPLES: readonly (readonly [string, string])[] = [
   ["repset --runtime node,bun", "Run every case on Node, then on Bun"],
   ["repset -o report.json", "Also write the JSON report to report.json"],
   ["repset --once", "Run every case once, without timing, to check it works"],
+  ["repset -d", "Print each failed case's stack and its process's output"],
 ];
 
 /** The project's repository on GitHub, which the help and the crash report link to. */

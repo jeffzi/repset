@@ -1,14 +1,9 @@
-// The timing accuracy check's baseline: one body timed in a bare loop, nothing around the body call but
-// the loop and the clock reads. It runs at the calls per sample and sample count repset's child
+// The timing accuracy check's baseline: one body timed in a bare loop, nothing around the body call
+// but the loop and the clock reads. It runs at the calls per sample and sample count repset's child
 // reported, and prints `{"median": <ns per call>}` on stdout.
 //
 //   <node --import tsx | bun> --expose-gc baseline-child.ts <body> <calls per sample> <samples>
-import {
-  collectGarbage,
-  exposedGc,
-  runtimeNoInline,
-  summarize,
-} from "../../src/measure/measure.js";
+import { exposedGc, summarize } from "../../src/measure/measure.js";
 import { WARMUP_MIN_MS, WARMUP_MIN_SAMPLES } from "../../src/measure/sampler.js";
 import {
   BODIES,
@@ -33,7 +28,13 @@ if (!isPositiveInteger(samples)) throw new Error(`bad sample count '${samplesArg
 const collect = exposedGc();
 
 const body = BODIES[name];
-(await runtimeNoInline())?.(body);
+// The baseline loads Bun's `noInline` itself, never through repset's `runtimeNoInline`: the check
+// compares repset with this loop, so a repset that stops keeping its body out of line must move
+// repset's reading alone.
+if ("Bun" in globalThis) {
+  const { noInline } = await import("bun:jsc");
+  noInline(body);
+}
 
 function isBodyName(value: string): value is BodyName {
   return BODY_NAMES.some((known) => known === value);
@@ -41,6 +42,20 @@ function isBodyName(value: string): value is BodyName {
 
 function isPositiveInteger(value: number): boolean {
   return Number.isSafeInteger(value) && value >= 1;
+}
+
+/**
+ * Runs a minor collection, then a full one, as repset does before its timed samples.
+ *
+ * The baseline runs its own copy of repset's `collectGarbage`, never the import: the check compares
+ * repset with this loop, so a change to how repset collects must move repset's reading alone.
+ *
+ * @param gc - The engine's exposed collector.
+ * @throws Whatever the collector throws, unwrapped.
+ */
+function collectGarbage(gc: NodeJS.GCFunction): void {
+  gc({ type: "minor" });
+  gc();
 }
 
 /**
@@ -54,8 +69,7 @@ function isPositiveInteger(value: number): boolean {
  * @param state - The points the body moves.
  * @param gc - The engine's exposed collector.
  * @returns Each timed batch's span in milliseconds, in the order the batches ran.
- * @throws MeasureError in phase `child` when the exposed collector fails.
- * @throws Whatever the body throws, unwrapped.
+ * @throws Whatever the exposed collector or the body throws, unwrapped.
  */
 // fallow-ignore-next-line complexity -- the baseline's loops stay inline; see the doc comment
 function run(state: State, gc: NodeJS.GCFunction): Float64Array {

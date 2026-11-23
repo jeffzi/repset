@@ -11,6 +11,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Add `-d, --debug` (`debug` in the config), which prints each failed case's stack and its process's
   output to stderr and keeps each measurement's `gc` in the report.
+- Add `--measure` (`measure` in the config), which reads the heap bytes one call allocates on Node
+  with `--measure time,memory`, or bytes alone with `--measure memory`.
+- Add a `memory` column to the terminal table when memory is measured.
+- Add a `memory` block beside `time` on each result, contender and measurement of the JSON report,
+  record `measure` under `options`, and write `time` as `null` when `measure` leaves time out.
 
 ### Changed
 

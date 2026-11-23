@@ -169,10 +169,49 @@ Common options:
 | `npx repset -o report.json`           | Also write the JSON report to `report.json`             |
 | `npx repset --once`                   | Run every case once, without timing, to check it works  |
 | `npx repset -d`                       | Print each failed case's stack and its process's output |
+| `npx repset --measure time,memory`    | Also measure the heap bytes each call allocates         |
 
 Node runs TypeScript files by stripping their types, but it does not map an import of `./foo.js` to
 `foo.ts`. If your benchmarks import TypeScript files that way, give Node a loader such as
 [tsx](https://github.com/privatenumber/tsx): `npx repset --node-import tsx`. Bun needs none.
+
+## Measure memory
+
+`--measure time,memory` adds the heap bytes one call of `fn` allocates to each case, in a `memory`
+column at the end of the table. `--measure memory` reads bytes alone and skips timing, so it runs
+faster. The default is `--measure time`.
+
+```sh
+npx repset --measure time,memory
+```
+
+```text
+node 26.13.1
+──────────────┬─────────┬─────────┬─────────┬────────┬─────────┬────────
+case          │  median │    mean │     min │    max │ samples │  memory
+──────────────┼─────────┼─────────┼─────────┼────────┼─────────┼────────
+sort/copy     │ 75.1 µs │ 76.4 µs │ 72.7 µs │ 151 µs │   13071 │ 26.2 kB
+sort/in-place │ 77.3 µs │ 78.3 µs │ 75.0 µs │ 204 µs │    9451 │ 17.5 kB
+search/binary │ 10.8 ns │ 11.0 ns │ 10.4 ns │ 250 ns │  113348 │  0.00 B
+```
+
+- **What it counts.** On Node, the JavaScript heap (`heapUsed`). An `ArrayBuffer`'s backing store
+  lives outside it: a 1 KiB `Uint8Array` reads only its 200 bytes on the heap. Bun has no heap
+  reading, so its rows show `n/a`, and `--measure memory` on Bun alone exits with an error.
+- **How exact it is.** repset subtracts the bytes of an empty function measured the same way, so a
+  body that allocates nothing reads 0. A reading is held to the larger of 8 bytes per call and 0.2 %
+  of what the body allocates. repset reports the bytes and never judges them against a budget.
+- **When a collection interferes.** A garbage collection inside a sample frees part of what it
+  measures, so repset discards that sample and takes it again with fewer calls. A row reads
+  `no clean pair` when every sample was disturbed.
+- **In a contest.** repset reads each contender's memory once, in its first repetition: bytes per
+  call agree across processes where times do not. Ranks and ratios still come from time. A contest
+  measured for memory alone shows each contender's bytes and ranks nothing.
+
+A number kept across calls allocates once it outgrows a small integer: on Node, every add past 2³¹ −
+1 allocates 16 bytes. If `fn` adds into a module-level sink that is never reset, its bytes per call
+then depend on how many calls ran before. Keep such a sink small, for example
+`sink = (sink + x) & 0x3fffffff`.
 
 ## Compare functions in a contest
 
@@ -278,6 +317,7 @@ export default defineConfig({
 | `contestRepetitionCount` | `--contest-repetition-count` | Repetitions each contest runs                                                                           | by contest size              |
 | `timeout`                | `--timeout`                  | Milliseconds one process may run before its case fails                                                  | `600000`                     |
 | `nodeImport`             | `--node-import`              | Module Node loads first; a `./` or `../` path is relative to the config file. Bun ignores it            | none                         |
+| `measure`                | `--measure`                  | What to measure of each case: `time`, `memory` or both                                                  | `["time"]`                   |
 | `debug`                  | `-d`, `--debug`              | Print each failed case's stack and its process's output, and keep each measurement's `gc` in the report | `false`                      |
 
 A flag on the command line overrides the file: `npx repset --runtime node` runs Node alone.

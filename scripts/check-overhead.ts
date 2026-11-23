@@ -5,14 +5,14 @@
  *
  *   node --import tsx scripts/check-overhead.ts
  *
- * It reads `dist/`, so build first. Nothing in it runs two children at once: the check is a
- * measurement, and a second process would move both readings.
+ * Run it from the repository root, as the Taskfile does: every path it hands a child is relative to
+ * the current directory. It reads `dist/`, so build first. Nothing in it runs two children at once:
+ * the check is a measurement, and a second process would move both readings.
  */
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { childRuntimeFlags, findRuntime, howItEnded } from "../src/children.js";
 import { CALLS_PER_SAMPLE } from "../src/command-line.js";
@@ -72,11 +72,10 @@ interface Round {
   readonly readings: readonly RepsetReading[];
 }
 
-const ROOT = fileURLToPath(new URL("..", import.meta.url));
-const CLI = join(ROOT, "dist", "cli.js");
-const BENCH_FILE = "scripts/check-overhead/overhead.bench.ts";
+const CLI = join("dist", "cli.js");
+const BENCH_FILE = join("scripts", "check-overhead", "overhead.bench.ts");
 const TS_LOADER = "tsx";
-const BASELINE_CHILD = join(ROOT, "scripts", "check-overhead", "baseline-child.ts");
+const BASELINE_CHILD = join("scripts", "check-overhead", "baseline-child.ts");
 
 const PAIRS = 12;
 
@@ -321,7 +320,6 @@ function readRepset(scenario: Scenario): RepsetReading {
       outPath,
     ];
     const run = spawnSync(process.execPath, args, {
-      cwd: ROOT,
       env: scenario.countMode === "one-call" ? { ...env, [CALLS_PER_SAMPLE]: "1" } : env,
       stdio: ["ignore", "ignore", "inherit"],
     });
@@ -374,7 +372,6 @@ function readBaseline(
     String(counts.sampleCount),
   ];
   const run = spawnSync(executables[scenario.runtime], args, {
-    cwd: ROOT,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "inherit"],
   });

@@ -54,6 +54,8 @@ function isPositiveInteger(value: number): boolean {
  * @param state - The points the body moves.
  * @param gc - The engine's exposed collector.
  * @returns Each timed batch's span in milliseconds, in the order the batches ran.
+ * @throws MeasureError in phase `child` when the exposed collector fails.
+ * @throws Whatever the body throws, unwrapped.
  */
 // fallow-ignore-next-line complexity -- the baseline's loops stay inline; see the doc comment
 function run(state: State, gc: NodeJS.GCFunction): Float64Array {

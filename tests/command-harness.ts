@@ -23,7 +23,7 @@ import { temporaryProject } from "./temporary-dir.js";
 type Io = NonNullable<Parameters<typeof main>[1]>;
 
 /** The benchmark files every workspace holds; the fake children never import them. */
-const FILES = ["sort.bench.ts", "parse.bench.ts"];
+export const FILES = ["sort.bench.ts", "parse.bench.ts"];
 
 /** The file `runWithReport` writes the report to, relative to the workspace. */
 const REPORT_FILE = "report.json";

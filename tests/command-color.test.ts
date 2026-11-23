@@ -7,6 +7,7 @@ import {
   command,
   type CommandIo,
   failsParse,
+  FILES,
   linesOf,
   naming,
   runToStdout,
@@ -66,7 +67,7 @@ describe("main", () => {
       });
     });
 
-    it("colors the table on a terminal stderr under --output -, whatever stdout is", async () => {
+    it("colors the table on a terminal stderr under --output -, even when stdout is not a terminal", async () => {
       const { results, stderr } = await runToStdout({
         startChild: failsParse,
         stdout: captured(),
@@ -106,7 +107,7 @@ describe("main", () => {
     });
 
     it("colors a --once failure on a terminal stdout", async () => {
-      const args = ["--once", "sort.bench.ts", "parse.bench.ts"];
+      const args = ["--once", ...FILES];
 
       const colored = await command(workspace(), args, {
         startChild: failsParse,

@@ -15,8 +15,11 @@
  * them (VISION #1), since any of those changes how the engine compiles the loop. Error handling and
  * teardown belong to the caller; a per-call caller finds the state in flight in `inFlight`.
  *
- * The module imports nothing and reads no Node builtin, so it loads in a browser page.
+ * The module imports only the generic helpers and reads no Node builtin, so it loads in a browser
+ * page.
  */
+
+import { valueAt } from "../utils.js";
 
 /** Every sample spans at least this many multiples of the timer resolution once warmup calibrates its count. */
 const MIN_RESOLUTIONS_PER_SAMPLE = 200;
@@ -24,7 +27,7 @@ const MIN_RESOLUTIONS_PER_SAMPLE = 200;
 /** A warmup sample that read no clock change multiplies its count by this: a zero span gives no ratio. */
 const ZERO_STEP_GROWTH = 100;
 
-/** The shortest body, in milliseconds (0.1 ns), whose sample of 200 times the resolution the cap keeps reachable. */
+/** The shortest body, in milliseconds (0.1 ns), whose sample of {@link MIN_RESOLUTIONS_PER_SAMPLE} times the resolution the cap keeps reachable. */
 const SHORTEST_BODY_MS = 1e-7;
 
 /** The least time, on the sampler's clock, the shared-state and empty runs' warmups take. */
@@ -119,10 +122,10 @@ type WarmupResult = Pick<SamplerResult, "callsPerSample" | "warmupSampleCount">;
 // ---------------------------------------------------------------------------
 
 /**
- * The span, in milliseconds, of a sample at the 200 times the resolution a calibrated count reaches.
+ * The span, in milliseconds, of a sample at the {@link MIN_RESOLUTIONS_PER_SAMPLE} times the resolution a calibrated count reaches.
  *
  * @param resolutionMs - The timer resolution, in milliseconds.
- * @returns 200 times the resolution, in milliseconds.
+ * @returns {@link MIN_RESOLUTIONS_PER_SAMPLE} times the resolution, in milliseconds.
  */
 function calibratedSampleMs(resolutionMs: number): number {
   return MIN_RESOLUTIONS_PER_SAMPLE * resolutionMs;
@@ -172,8 +175,8 @@ function shortestReadingStep(shortest: number, spanMs: number, resolutionMs: num
  * @param count - The count that sample ran.
  * @param spanMs - That sample's span, in milliseconds.
  * @param resolutionMs - The timer resolution, in milliseconds.
- * @returns `count` when the span reached 200 times the resolution; otherwise the count scaled up to reach 200
- *   times the resolution, rounded up, or 100 times `count` when the span read no clock change.
+ * @returns `count` when the span reached {@link MIN_RESOLUTIONS_PER_SAMPLE} times the resolution; otherwise the count scaled up to reach {@link MIN_RESOLUTIONS_PER_SAMPLE}
+ *   times the resolution, rounded up, or {@link ZERO_STEP_GROWTH} times `count` when the span read no clock change.
  */
 function calibratedCount(count: number, spanMs: number, resolutionMs: number): number {
   const multiples = resolutionsIn(spanMs, resolutionMs);
@@ -187,7 +190,7 @@ function calibratedCount(count: number, spanMs: number, resolutionMs: number): n
 }
 
 /**
- * Refuses a count that passes `ceil(200 × resolution / 0.1 ns)`.
+ * Refuses a count that passes `ceil(MIN_RESOLUTIONS_PER_SAMPLE × resolution / SHORTEST_BODY_MS)`.
  *
  * @param next - The count asked for.
  * @param resolutionMs - The timer resolution, in milliseconds.
@@ -238,7 +241,7 @@ export function startWarmup(resolutionMs: number, fixed: number | undefined): Wa
  *
  * @param progress - The warmup's bookkeeping, updated in place.
  * @param spanMs - The span of the sample that just ran `progress.count` calls, in milliseconds.
- * @throws CalibrationError when the next count passes `ceil(200 × resolution / 0.1 ns)`, naming the count
+ * @throws CalibrationError when the next count passes `ceil(MIN_RESOLUTIONS_PER_SAMPLE × resolution / SHORTEST_BODY_MS)`, naming the count
  *   asked for and the cap, before any sample runs it.
  */
 export function recordWarmup(progress: WarmupProgress, spanMs: number): void {
@@ -404,13 +407,15 @@ function timingAttempt<State>(
 
 /**
  * Whether a timing attempt keeps its spans: it passed `minTime` and `minSamples` before filling the store,
- * and its median sample (the upper median for an even count) spans at least 200 times the resolution, counted as
+ * and its median sample (the upper median for an even count) spans at least {@link MIN_RESOLUTIONS_PER_SAMPLE} times the resolution, counted as
  * warmup counts them.
  *
  * @param spans - The sample buffer the run filled from its start.
  * @param run - How many entries the run filled, and whether the store filled first.
  * @param resolutionMs - The timer resolution, in milliseconds.
  * @returns `true` when the run is kept, `false` when it is discarded.
+ * @throws {RangeError} When a run that was not cut short stored no sample, which a `minSamples`
+ *   below 1 allows.
  */
 function isKept(spans: Float64Array, run: TimedAttempt, resolutionMs: number): boolean {
   const { stored, cutShort } = run;
@@ -418,20 +423,20 @@ function isKept(spans: Float64Array, run: TimedAttempt, resolutionMs: number): b
     return false;
   }
   const sorted = spans.subarray(0, stored).toSorted();
-  const median = sorted[stored >> 1] ?? 0;
+  const median = valueAt(sorted, stored >> 1);
   return resolutionsIn(median, resolutionMs) >= MIN_RESOLUTIONS_PER_SAMPLE;
 }
 
 /**
  * The count the timing attempt after a discarded one runs: the smallest at which the discarded run's
- * shortest sample would have spanned 200 times the resolution, and at least one call more than it ran. Samples that
+ * shortest sample would have spanned {@link MIN_RESOLUTIONS_PER_SAMPLE} times the resolution, and at least one call more than it ran. Samples that
  * read no clock change are left out of the shortest.
  *
  * @param count - The count the discarded run ran.
  * @param spans - The discarded run's spans, in milliseconds.
  * @param resolutionMs - The timer resolution, in milliseconds.
- * @returns The next count, or 100 times `count` when no sample read a clock change.
- * @throws CalibrationError when the next count passes `ceil(200 × resolution / 0.1 ns)`, naming the count asked
+ * @returns The next count, or {@link ZERO_STEP_GROWTH} times `count` when no sample read a clock change.
+ * @throws CalibrationError when the next count passes `ceil(MIN_RESOLUTIONS_PER_SAMPLE × resolution / SHORTEST_BODY_MS)`, naming the count asked
  *   for and the cap.
  */
 function grownCount(count: number, spans: Float64Array, resolutionMs: number): number {
@@ -450,12 +455,12 @@ function grownCount(count: number, spans: Float64Array, resolutionMs: number): n
  * before each.
  *
  * A run takes samples until both `minTime`, on the sampler's clock, and `minSamples` have passed, or
- * the sample buffer is full. Unless the count was fixed, a run whose median sample spans under 200 times the resolution,
+ * the sample buffer is full. Unless the count was fixed, a run whose median sample spans under {@link MIN_RESOLUTIONS_PER_SAMPLE} times the resolution,
  * or that filled the store first, is discarded: the count grows from its shortest sample and the
  * sampler times again, at most three runs in all. The check runs after `timeSharedStateSamples` returns, never
  * inside the timing loop. A fixed-count run that fills the store is returned as it is.
  *
- * The sample buffer holds `minTime` filled with samples of 200 times the resolution for a calibrated count, or of
+ * The sample buffer holds `minTime` filled with samples of {@link MIN_RESOLUTIONS_PER_SAMPLE} times the resolution for a calibrated count, or of
  * warmup's shortest sample that read a clock change for a fixed one (one resolution when none did), rounded up,
  * plus `minSamples`. It is allocated before the first collection, so its allocation never lands in a
  * timed sample. Every run refills it from the start.
@@ -465,7 +470,7 @@ function grownCount(count: number, spans: Float64Array, resolutionMs: number): n
  * @returns The kept run's spans and calls per sample, the timing attempts taken, warmup's samples plus
  *   every discarded run's, and the kept run's length on the sampler's clock.
  * @throws Whatever `fn`, `collect` or `afterTiming` throws; CalibrationError when warmup's or a grown
- *   count would pass `ceil(200 × resolution / 0.1 ns)`, naming the count asked for and the cap; and
+ *   count would pass `ceil(MIN_RESOLUTIONS_PER_SAMPLE × resolution / SHORTEST_BODY_MS)`, naming the count asked for and the cap; and
  *   CalibrationError when the third run is discarded too, naming the count a fourth would need and the
  *   runs taken.
  */
@@ -589,7 +594,7 @@ function perCallSample<State>(perCall: PerCall<State>, count: number): number {
  * @param fixed - The fixed calls per sample, or `undefined` to calibrate one.
  * @returns The count warmup ended on, and the samples it ran.
  * @throws Whatever `setup`, `fn` or `teardown` throws, and CalibrationError when the calibrated count
- *   would pass `ceil(200 × resolution / 0.1 ns)`, naming the count asked for and the cap, before any
+ *   would pass `ceil(MIN_RESOLUTIONS_PER_SAMPLE × resolution / SHORTEST_BODY_MS)`, naming the count asked for and the cap, before any
  *   sample runs it.
  */
 function perCallWarmup<State>(
@@ -650,7 +655,7 @@ function timePerCallSamples<State>(
  * The forced GC builds one state, runs the body on it outside any clock read, calls `collect`
  * while it is alive, then tears it down. Timing takes samples until both `minTime`, in wall time
  * with every setup and teardown, and `minSamples` have passed, or the sample buffer is full; a run
- * that fills the store is returned as it is. The store holds `minTime` filled with samples of 200
+ * that fills the store is returned as it is. The store holds `minTime` filled with samples of {@link MIN_RESOLUTIONS_PER_SAMPLE}
  * times the resolution, rounded up, plus `minSamples`, whether or not the count was fixed, and is
  * allocated before the forced GC, so its allocation never lands in a timed sample. No two states
  * are ever alive at once.
@@ -662,7 +667,7 @@ function timePerCallSamples<State>(
  *   the timed run's wall time, every setup and teardown in it included.
  * @throws Whatever `setup`, `fn`, `teardown` or `collect` throws, leaving the state built and not
  *   torn down, if any, in `options.inFlight`; and CalibrationError when warmup's calibrated count
- *   would pass `ceil(200 × resolution / 0.1 ns)`, naming the count asked for and the cap, before any
+ *   would pass `ceil(MIN_RESOLUTIONS_PER_SAMPLE × resolution / SHORTEST_BODY_MS)`, naming the count asked for and the cap, before any
  *   sample runs it.
  */
 export function samplePerCall<State>(options: PerCallOptions<State>): SamplerResult {
@@ -670,11 +675,11 @@ export function samplePerCall<State>(options: PerCallOptions<State>): SamplerRes
   const perCall: PerCall<State> = { now, setup, fn, teardown, inFlight };
   const warmed = perCallWarmup(perCall, resolutionMs, callsPerSample);
   const spans = sampleBuffer(options, calibratedSampleMs(resolutionMs));
-  const held = setup();
-  holdInFlight(inFlight, held);
-  fn(held);
+  const state = setup();
+  holdInFlight(inFlight, state);
+  fn(state);
   collect();
-  teardown(held);
+  teardown(state);
   releaseInFlight(inFlight);
   const { sampleCount, timingMs } = timePerCallSamples(
     perCall,

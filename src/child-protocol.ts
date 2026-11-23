@@ -182,22 +182,20 @@ export function parseRequest(argument: string): ChildRequest {
       return { mode, file };
     case "once":
       return { mode, file, id: stringField(request, "id") };
-    case "measure": {
-      const fixedCount =
-        Reflect.get(request, "callsPerSample") === undefined
-          ? {}
-          : { callsPerSample: numberField(request, "callsPerSample") };
+    case "measure":
       return {
         mode,
         file,
         id: stringField(request, "id"),
         minTime: numberField(request, "minTime"),
         minSamples: numberField(request, "minSamples"),
-        ...fixedCount,
+        callsPerSample:
+          Reflect.get(request, "callsPerSample") === undefined
+            ? undefined
+            : numberField(request, "callsPerSample"),
         time: booleanField(request, "time"),
         memory: booleanField(request, "memory"),
       };
-    }
     default:
       throw new TypeError(
         `the request's mode must be list, measure or once, got ${describe(mode)}`,

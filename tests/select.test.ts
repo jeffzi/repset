@@ -19,8 +19,10 @@ import {
 } from "./fake-children.js";
 import { fixturePath } from "./fixture-path.js";
 
+/** The discovery fixtures the selection tests list. */
 const FIXTURES = fixturePath("discovery");
 
+/** The working directory the include-base tests run from, outside the discovery fixtures. */
 const TESTS = fileURLToPath(new URL(".", import.meta.url));
 
 /** The absolute path of the discovery fixture `name`. */

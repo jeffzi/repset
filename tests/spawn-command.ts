@@ -49,16 +49,10 @@ interface Ended {
  *
  * @param cwd - The directory the command starts in.
  * @param args - The command's arguments.
- * @param onStderr - Receives the command's stderr so far each time it grows, and a function that
- *   sends the command a signal the first time it is called.
  * @returns How the command ended.
  * @throws When the child emits `error`, as when its process cannot be started.
  */
-export async function spawnCommand(
-  cwd: string,
-  args: readonly string[],
-  onStderr: (stderr: string, stop: (signal: NodeJS.Signals) => void) => void = () => {},
-): Promise<Ended> {
+export async function spawnCommand(cwd: string, args: readonly string[]): Promise<Ended> {
   const child = spawn(process.execPath, ["--import", TSX, CLI, ...args], {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
@@ -73,15 +67,10 @@ export async function spawnCommand(
     await closed;
   });
   let stderr = "";
-  let stopSent = false;
   // Drained so a command that prints much never blocks on a full pipe.
   child.stdout.resume();
   child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
     stderr += chunk;
-    onStderr(stderr, (signal) => {
-      if (!stopSent) child.kill(signal);
-      stopSent = true;
-    });
   });
   const [code]: unknown[] = await closed;
   return { code: typeof code === "number" ? code : null, stderr };

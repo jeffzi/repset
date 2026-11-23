@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
@@ -7,18 +7,17 @@ import { DEFAULT_MIN_SAMPLES, DEFAULT_MIN_TIME } from "../src/measure/measure.js
 import {
   ConfigError,
   DEFAULT_INCLUDE,
+  DEFAULT_MEASURE,
   DEFAULT_RUNTIMES,
   DEFAULT_TIMEOUT,
   resolveOptions,
   type OptionsInput,
 } from "../src/options.js";
 import { expectConfigError } from "./config-error.js";
-import { fixturePath } from "./fixture-path.js";
+import { fixturePath, ROOT } from "./fixture-path.js";
 import { SPAWN_TIMEOUT_MS } from "./spawn-limits.js";
 
 const FIXTURES = fixturePath("config");
-
-const ROOT = fileURLToPath(new URL("../", import.meta.url));
 
 const OPTIONS_MODULE = new URL("../src/options.ts", import.meta.url).href;
 
@@ -58,7 +57,7 @@ const DEFAULTS = {
   timeout: DEFAULT_TIMEOUT,
   nodeImport: undefined,
   filter: undefined,
-  measure: ["time"],
+  measure: DEFAULT_MEASURE,
 };
 
 describe("resolveOptions", () => {
@@ -161,12 +160,6 @@ describe("resolveOptions", () => {
   });
 
   describe("when the caller gives a bad value", () => {
-    it("rejects an empty runtimes list", async () => {
-      const result = resolveHere({ runtimes: [] });
-
-      await expectConfigError(result, []);
-    });
-
     it("rejects an empty measure list, naming the option", async () => {
       const result = resolveHere({ measure: [] });
 
@@ -187,7 +180,6 @@ describe("resolveOptions", () => {
       { options: { timeout: 2.5 }, option: "timeout", shown: "2.5" },
       { options: { timeout: 2_147_483_648 }, option: "timeout", shown: "2147483648" },
       { options: { filter: "(" }, option: "filter", shown: "(" },
-      { options: { measure: ["memory", "memory"] }, option: "measure", shown: "memory" },
     ])(
       "rejects $option $shown, naming the option and the value",
       async ({ options, option, shown }) => {

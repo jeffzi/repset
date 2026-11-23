@@ -108,4 +108,20 @@ describe("observeCollections", () => {
       });
     });
   });
+
+  describe("when the runtime delivers no gc entries", () => {
+    it.each([
+      {
+        runtime: "an observer without the gc entry type",
+        observer: { supportedEntryTypes: [] },
+      },
+      { runtime: "no PerformanceObserver", observer: undefined },
+    ])("starts no observer on $runtime", ({ observer }) => {
+      vi.stubGlobal("PerformanceObserver", observer);
+
+      const started = observeCollections();
+
+      expect(started).toBeUndefined();
+    });
+  });
 });

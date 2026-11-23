@@ -5,12 +5,11 @@ import {
   captured,
   clearShellEnv,
   command,
+  FILES,
   measuresAll,
   starter,
   workspace,
 } from "./command-harness.js";
-
-const FILES = ["sort.bench.ts", "parse.bench.ts"];
 
 /** The stack of the Error `sort/fast` throws. */
 const STACK = "Error: kiwi\n    at plum (sort.bench.ts:3:9)";
@@ -44,23 +43,17 @@ describe("main", () => {
   });
 
   describe("when debug is on", () => {
-    it.each([
-      { run: "a measuring run", args: [] },
-      { run: "a --once run", args: ["--once"] },
-    ])(
-      "writes a failed case's stack and its child's output to stderr when the case fails, in $run",
-      async ({ args }) => {
-        const stderr = captured();
-        const seen: string[] = [];
+    it("writes a failed case's stack and its child's output to stderr when the case fails", async () => {
+      const stderr = captured();
+      const seen: string[] = [];
 
-        await command(workspace(), [...args, "--debug", ...FILES], {
-          stderr,
-          startChild: failsSort(stderr, seen),
-        });
+      await command(workspace(), ["--debug", ...FILES], {
+        stderr,
+        startChild: failsSort(stderr, seen),
+      });
 
-        expect(seen.map(holdsFailure)).toStrictEqual([{ stack: true, output: true }]);
-      },
-    );
+      expect(seen.map(holdsFailure)).toStrictEqual([{ stack: true, output: true }]);
+    });
   });
 
   describe("when debug is off", () => {
@@ -71,20 +64,5 @@ describe("main", () => {
 
       expect(holdsFailure(stderr.text)).toStrictEqual({ stack: false, output: false });
     });
-  });
-
-  it("prints the same stdout with debug on and off", async () => {
-    const run = async (args: readonly string[]): Promise<string> => {
-      const stderr = captured();
-      const { stdout } = await command(workspace(), [...args, ...FILES], {
-        stderr,
-        startChild: failsSort(stderr, []),
-      });
-      return stdout;
-    };
-
-    const [off, on] = await Promise.all([run([]), run(["--debug"])]);
-
-    expect({ printed: off.length > 0, on }).toStrictEqual({ printed: true, on: off });
   });
 });

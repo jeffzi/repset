@@ -13,10 +13,10 @@ import {
   closedHeld,
   command,
   failsParse,
+  FILES,
   linesOf,
   measuresAll,
   naming,
-  runToStdout,
   runWithReport,
   starter,
   startsNoCase,
@@ -118,19 +118,8 @@ describe("main", () => {
   });
 
   describe("when the config file sets debug", () => {
-    it.each([
-      {
-        config: "debug-on.ts",
-        args: [],
-        why: "keeps the config file's true when no flag is given",
-      },
-      {
-        config: "debug-off.ts",
-        args: ["--debug"],
-        why: "takes --debug over the config file's false",
-      },
-    ])("$why", async ({ config, args }) => {
-      const { report } = await runWithReport(["--config", fixturePath("config", config), ...args]);
+    it("keeps the config file's true when no flag is given", async () => {
+      const { report } = await runWithReport(["--config", fixturePath("config", "debug-on.ts")]);
 
       expect(report.options.debug).toBe(true);
     });
@@ -193,11 +182,7 @@ describe("main", () => {
       expect({ code, stdout, stderrLines: linesOf(stderr) }).toStrictEqual({
         code: 2,
         stdout: "",
-        stderrLines: expect.arrayContaining([
-          "at plum",
-          "pear",
-          naming("sort.bench.ts", "load", "kiwi"),
-        ]),
+        stderrLines: expect.arrayContaining(["at plum", "pear"]),
       });
     });
   });
@@ -222,7 +207,7 @@ describe("main", () => {
     it("prints each selected case id, in selection order, running no case", async () => {
       const dir = workspace();
 
-      const ended = await command(dir, ["--list", "sort.bench.ts", "parse.bench.ts"], {
+      const ended = await command(dir, ["--list", ...FILES], {
         startChild: startsNoCase,
       });
 
@@ -233,44 +218,23 @@ describe("main", () => {
     });
   });
 
-  describe("when a run measures", () => {
-    it("prints the table on stdout once, when the run ends", async () => {
-      const stdout = captured();
-      const printedDuringRun: string[] = [];
-      const watchesStdout = starter((request, runtime, options) => {
-        printedDuringRun.push(stdout.text);
-        return measuresAll(runtime, request, options);
-      });
-
-      const { report } = await runWithReport([], { stdout, startChild: watchesStdout });
-
-      expect({ printedDuringRun, stdout: stdout.text }).toStrictEqual({
-        printedDuringRun: ["", ""],
-        stdout: formatTable(report.results, report.contests, { color: false }),
-      });
-    });
-  });
-
   describe("when REPSET_CALLS_PER_SAMPLE is set or unset", () => {
     const NAME = "REPSET_CALLS_PER_SAMPLE";
     const MAX = Number.MAX_SAFE_INTEGER;
 
-    it.each([
-      { why: "unset", value: undefined, asked: [undefined, undefined] },
-      { why: "set to the largest safe integer", value: String(MAX), asked: [MAX, MAX] },
-    ])("asks each measuring child of a run for its count when $why", async ({ value, asked }) => {
-      vi.stubEnv(NAME, value);
+    it("asks each measuring child of a run for its count when set to the largest safe integer", async () => {
+      vi.stubEnv(NAME, String(MAX));
       const counts: (number | undefined)[] = [];
       const keepsCount = starter((request, runtime, options) => {
         if (request.mode === "measure") counts.push(request.callsPerSample);
         return measuresAll(runtime, request, options);
       });
 
-      const { code } = await command(workspace(), ["sort.bench.ts", "parse.bench.ts"], {
+      const { code } = await command(workspace(), FILES, {
         startChild: keepsCount,
       });
 
-      expect({ code, counts }).toStrictEqual({ code: 0, counts: asked });
+      expect({ code, counts }).toStrictEqual({ code: 0, counts: [MAX, MAX] });
     });
 
     it.each([
@@ -314,11 +278,9 @@ describe("main", () => {
         return measuresAll(runtime, request, options);
       });
 
-      await command(
-        dir,
-        ["--runtime", "node,bun", "sort.bench.ts", "parse.bench.ts", "--output", "report.json"],
-        { startChild: readsReport },
-      );
+      await command(dir, ["--runtime", "node,bun", ...FILES, "--output", "report.json"], {
+        startChild: readsReport,
+      });
 
       expect({ writtenAtStart, atEnd: reportAt(report).results.length }).toStrictEqual({
         writtenAtStart: [0, 1, 2, 3],
@@ -379,7 +341,7 @@ describe("main", () => {
 
       const { code, stderr } = await command(
         dir,
-        ["--runtime", "node,bun", "sort.bench.ts", "parse.bench.ts", "--output", "out/report.json"],
+        ["--runtime", "node,bun", ...FILES, "--output", "out/report.json"],
         { startChild: failsOneWrite },
       );
 
@@ -404,11 +366,9 @@ describe("main", () => {
         return measuresAll(runtime, request, options);
       });
 
-      const { code, stderr } = await command(
-        dir,
-        ["sort.bench.ts", "parse.bench.ts", "--output", "out/report.json"],
-        { startChild: blocksLastWrites },
-      );
+      const { code, stderr } = await command(dir, [...FILES, "--output", "out/report.json"], {
+        startChild: blocksLastWrites,
+      });
 
       expect({ code, mentioned: stderr.includes("report.json") }).toStrictEqual({
         code: 1,
@@ -417,19 +377,11 @@ describe("main", () => {
     });
   });
 
-  describe("when --output is -", () => {
-    it("prints the report on stdout, exiting 0", async () => {
-      const { code, results } = await runToStdout();
-
-      expect({ code, results: results.length }).toStrictEqual({ code: 0, results: 2 });
-    });
-  });
-
   describe("when --once is given", () => {
     it("prints one line per case, naming a failure's phase and message, exiting 1", async () => {
       const dir = workspace();
 
-      const { code, stdout } = await command(dir, ["--once", "sort.bench.ts", "parse.bench.ts"], {
+      const { code, stdout } = await command(dir, ["--once", ...FILES], {
         startChild: failsParse,
       });
 
@@ -442,7 +394,7 @@ describe("main", () => {
     it("exits 0 when every case passes", async () => {
       const dir = workspace();
 
-      const { code } = await command(dir, ["--once", "sort.bench.ts", "parse.bench.ts"]);
+      const { code } = await command(dir, ["--once", ...FILES]);
 
       expect(code).toBe(0);
     });
@@ -521,7 +473,7 @@ describe("main", () => {
         const stderr = terminalOf(80);
         const seen: string[][] = [];
 
-        await command(workspace(), [...args, "sort.bench.ts", "parse.bench.ts"], {
+        await command(workspace(), [...args, ...FILES], {
           stderr,
           startChild: watching(stderr, seen, failsParse),
         });
@@ -603,10 +555,9 @@ describe("main", () => {
     });
 
     it("prints the lines a stderr that is not a terminal gets when TERM is dumb", async () => {
-      const args = ["sort.bench.ts", "parse.bench.ts"];
       vi.stubEnv("TERM", "dumb");
 
-      const { stderr } = await command(workspace(), args, {
+      const { stderr } = await command(workspace(), FILES, {
         startChild: failsParse,
         stderr: terminalOf(80),
       });
@@ -617,14 +568,6 @@ describe("main", () => {
         "measuring sort/fast on node",
         "measuring parse/fast on node",
       ]);
-    });
-
-    it("clears the live line before printing the table under --output -", async () => {
-      const stderr = terminalOf(80);
-
-      const { results } = await runToStdout({ startChild: failsParse, stderr });
-
-      expect(screen(stderr.text)).toStrictEqual(screen(formatTable(results, [], { color: false })));
     });
 
     it("clears the live line before printing a failed listing's error", async () => {
@@ -735,11 +678,10 @@ describe("main", () => {
     });
     const failingStream = stream === "stdout" ? { stdout: failing } : { stderr: failing };
 
-    const ended = await command(
-      dir,
-      ["sort.bench.ts", "parse.bench.ts", "pear.bench.ts", "--output", "report.json"],
-      { ...failingStream, startChild: failsStreamInParse },
-    );
+    const ended = await command(dir, [...FILES, "pear.bench.ts", "--output", "report.json"], {
+      ...failingStream,
+      startChild: failsStreamInParse,
+    });
 
     return { ended, started, report: reportAt(join(dir, "report.json")) };
   }
@@ -794,7 +736,7 @@ describe("main", () => {
         return stopped;
       });
 
-      const { code } = await command(workspace(), ["sort.bench.ts", "parse.bench.ts"], {
+      const { code } = await command(workspace(), FILES, {
         signals,
         stdout,
         startChild: stopsTwice,

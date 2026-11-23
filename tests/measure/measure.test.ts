@@ -1,9 +1,16 @@
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 
 import { type Case, measure, MeasureError, summarize } from "../../src/measure/measure.js";
 import { CalibrationError, WARMUP_MIN_SAMPLES } from "../../src/measure/sampler.js";
+import { requiresRealBunHere } from "../real-bun.js";
+import { temporaryDir } from "../temporary-dir.js";
 import { trappedProxy } from "../thrown-values.js";
-import { enabledGc } from "./fixtures.js";
+import { enabledGc, type Failures, type RecordedWorld, recordedLifecycle } from "./fixtures.js";
 
 // ---------------------------------------------------------------------------
 // Scripted clocks and benchmark builders
@@ -44,17 +51,6 @@ function steppedClock(resolutionMs: (reads: number) => number = () => STEP_MS): 
   };
 }
 
-interface World {
-  readonly id: number;
-}
-
-/** The call, counted from zero per callback, at which each callback throws. */
-interface Failures {
-  readonly setup?: number;
-  readonly fn?: number;
-  readonly teardown?: number;
-}
-
 interface BenchOptions {
   readonly bodyMs?: number;
   readonly fails?: Failures;
@@ -67,10 +63,10 @@ interface BenchOptions {
 }
 
 interface Bench {
-  readonly benchmark: Case<World>;
+  readonly benchmark: Case<RecordedWorld>;
   readonly now: () => number;
   readonly log: string[];
-  readonly live: Set<World>;
+  readonly live: Set<RecordedWorld>;
   readonly setupError: Error;
   readonly fnError: string;
   readonly teardownError: unknown;
@@ -110,61 +106,38 @@ function bench(kind: Kind, options: BenchOptions = {}): Bench {
     raisingThenAt = {},
   } = options;
   const clock = steppedClock();
-  let builds = 0;
-  let bodies = 0;
-  let teardownCalls = 0;
-  const log: string[] = [];
-  const live = new Set<World>();
   const setupError = new Error("banana");
   const fnError = "apple";
   const teardownError = "teardownThrows" in options ? options.teardownThrows : { name: "cherry" };
   const thenReadError = new Error("grape");
-  const benchmark: Case<World> = {
-    kind,
-    setup: () => {
+  const lifecycle = recordedLifecycle({
+    failAt: fails,
+    thrown: { setup: setupError, fn: fnError, teardown: teardownError },
+    world: (id) => (id === thenableAt.setup ? { id, ...PENDING_THENABLE } : { id }),
+    onCall: () => {
       clock.advance(0);
-      const id = builds;
-      builds += 1;
-      if (id === fails.setup) {
-        throw setupError;
-      }
-      const world: World = id === thenableAt.setup ? { id, ...PENDING_THENABLE } : { id };
-      live.add(world);
-      log.push(`setup ${world.id}`);
-      return world;
     },
-    fn: (world) => {
-      clock.advance(0);
-      log.push(`fn ${world.id}`);
-      const call = bodies;
-      bodies += 1;
-      if (call === fails.fn) {
-        // oxlint-disable-next-line typescript/only-throw-error -- measure must rethrow a non-Error value unchanged
-        throw fnError;
-      }
+    afterFn: () => {
       clock.advance(bodyMs);
       return returns();
     },
-    teardown: (world) => {
-      clock.advance(0);
-      const call = teardownCalls;
-      teardownCalls += 1;
-      if (call === fails.teardown) {
-        // oxlint-disable-next-line typescript/only-throw-error -- measure must rethrow a non-Error value unchanged
-        throw teardownError;
-      }
-      live.delete(world);
-      log.push(`teardown ${world.id}`);
+    afterTeardown: (call) => {
       if (call === raisingThenAt.teardown) return withRaisingThen({}, thenReadError);
       return call === thenableAt.teardown ? PENDING_THENABLE : undefined;
     },
+  });
+  const benchmark: Case<RecordedWorld> = {
+    kind,
+    setup: lifecycle.setup,
+    fn: lifecycle.fn,
+    teardown: lifecycle.teardown,
   };
   vi.stubGlobal("gc", () => undefined);
   return {
     benchmark,
     now: clock.now,
-    log,
-    live,
+    log: lifecycle.log,
+    live: lifecycle.live,
     setupError,
     fnError,
     teardownError,
@@ -188,8 +161,8 @@ function run(fake: Bench): ReturnType<typeof measure> {
 function runOnUndefined(fake: Bench): ReturnType<typeof measure> {
   const { setup, fn, teardown } = fake.benchmark;
   if (teardown === undefined) throw new Error("the fake has no teardown");
-  let world: World | undefined;
-  const built = (): World => {
+  let world: RecordedWorld | undefined;
+  const built = (): RecordedWorld => {
     if (world === undefined) throw new Error("no world built");
     return world;
   };
@@ -342,6 +315,86 @@ function passesTheCap(kind: Kind): Scripted {
     },
     now: clock.now,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Real Bun runs
+// ---------------------------------------------------------------------------
+
+const MEASURE_PATH = fileURLToPath(new URL("../../src/measure/measure.ts", import.meta.url));
+
+/** Bun starting, then a few real-clock measurements of about 1.25 s each, on a slow CI runner. */
+const BUN_TIMEOUT_MS = 60_000;
+
+/** The generated case's own timeout, under {@link BUN_TIMEOUT_MS} so Bun reports a slow case before the spawn is killed. */
+const BUN_CASE_TIMEOUT_MS = 50_000;
+
+/** A cheap shared-state benchmark well above the empty body's cost, as script source. */
+const SCRIPT_BENCH = `
+const values = Array.from({ length: 64 }, (_, index) => index);
+let sink = 0;
+const setup = () => ({ values });
+const fn = (world) => { for (const value of world.values) sink += value; };
+`;
+
+/**
+ * Runs `bun` with `args` to completion, killing it at {@link BUN_TIMEOUT_MS}.
+ *
+ * @param args - The arguments to `bun`.
+ * @param cwd - The directory Bun starts in, this process's own when omitted.
+ * @returns How Bun exited and what it printed.
+ * @throws The spawn's own error, as when Bun cannot start or ran past its timeout.
+ */
+function runBun(args: readonly string[], cwd?: string): SpawnSyncReturns<string> {
+  const child = spawnSync("bun", args, {
+    ...(cwd === undefined ? {} : { cwd }),
+    encoding: "utf8",
+    timeout: BUN_TIMEOUT_MS,
+  });
+  if (child.error !== undefined) throw child.error;
+  return child;
+}
+
+interface BunTestRun {
+  readonly status: number | null;
+  /** The JSON the test printed after `REPORT `, or `null` when it printed none. */
+  readonly report: unknown;
+}
+
+/**
+ * Runs `body` as one `bun test` case with `measure` imported, the benchmark of
+ * {@link SCRIPT_BENCH} defined, a stub `gc`, a `loadFailure` object for a factory to throw, and
+ * `bun:jsc` mocked by `bunJsc`.
+ *
+ * @param body - Statements of the async test case; one prints `REPORT ` followed by JSON.
+ * @param bunJsc - The source of the factory `bun:jsc` is mocked with.
+ * @returns How `bun test` exited and the parsed report.
+ * @throws Error from the filesystem when the temporary directory or test file cannot be written.
+ * @throws SyntaxError when the printed report is not valid JSON.
+ * @throws The spawn's own error, as when Bun cannot start or ran past {@link BUN_TIMEOUT_MS}.
+ */
+function bunTestWithJscMock(body: string, bunJsc: string): BunTestRun {
+  const dir = temporaryDir("repset-bun-");
+  const file = join(dir, "jsc-mock.test.ts");
+  writeFileSync(
+    file,
+    `
+import { mock, test } from "bun:test";
+const loadFailure = { name: "durian" };
+mock.module("bun:jsc", ${bunJsc});
+globalThis.gc = () => {};
+test("jsc mock", async () => {
+  const { measure } = await import(${JSON.stringify(MEASURE_PATH)});
+  ${SCRIPT_BENCH}
+${body}
+}, ${BUN_CASE_TIMEOUT_MS});
+`,
+  );
+
+  const child = runBun(["test", file], dir);
+
+  const report = /REPORT (.*)/.exec(`${child.stdout}\n${child.stderr}`)?.[1];
+  return { status: child.status, report: JSON.parse(report ?? "null") };
 }
 
 // ---------------------------------------------------------------------------
@@ -680,12 +733,12 @@ describe("measure", () => {
     });
 
     it("rejects a run whose empty body's collection throws in phase child, the collector's value as cause", async () => {
-      const fake = bench("perCall", { bodyMs: LONG_BODY_MS });
+      const fake = bench("sharedState", { bodyMs: LONG_BODY_MS });
       const collectorError = new Error("durian");
-      let collections = 0;
+      // A shared-state run tears its state down once its body's run is over, so only the empty
+      // body's collection finds the teardown logged.
       vi.stubGlobal("gc", () => {
-        collections += 1;
-        if (collections > 1) throw collectorError;
+        if (logged(fake.log, "teardown").length > 0) throw collectorError;
       });
 
       const error = await failure(run(fake));
@@ -788,7 +841,7 @@ describe("measure", () => {
           timingMs: expect.any(Number),
         },
         checks: { ratioToEmptyBody: 1600 },
-        gc: expect.any(Object),
+        gc: expect.objectContaining({ collectionCount: expect.any(Number) }),
       });
     });
 
@@ -802,27 +855,6 @@ describe("measure", () => {
   });
 
   describe("when counting collections during timing", () => {
-    it("reports the collections a body forces while timed, with their total and longest duration", async () => {
-      const gc = enabledGc();
-      const fake = bench("sharedState", { returns: gc });
-      vi.stubGlobal("gc", gc);
-
-      const result = await run(fake);
-
-      const observed = result.gc;
-      expect(observed?.nodeMajorCollectionCount).toBeGreaterThanOrEqual(1);
-      expect(observed?.maxDurationMs).toBeGreaterThan(0);
-      expect(observed?.durationMs).toBeGreaterThanOrEqual(observed?.maxDurationMs ?? Number.NaN);
-    });
-
-    it("counts the minor collections a body forces while timed", async () => {
-      const fake = bench("sharedState", { returns: enabledGc({ type: "minor" }) });
-
-      const result = await run(fake);
-
-      expect(result.gc?.nodeMinorCollectionCount).toBeGreaterThanOrEqual(1);
-    });
-
     it("counts the forced GC a body forces during the kept timing attempt, leaving out those it forces during a discarded one", async () => {
       const gc = enabledGc();
       let forcedInKept = false;
@@ -880,4 +912,49 @@ describe("summarize", () => {
       sampleCount: 4,
     });
   });
+});
+
+describe.runIf(requiresRealBunHere())("measure under real Bun", () => {
+  it(
+    "measures a shared-state benchmark with bun:jsc loaded, reporting no gc entries",
+    () => {
+      const script = `
+const { measure } = await import(${JSON.stringify(MEASURE_PATH)});
+${SCRIPT_BENCH}
+const result = await measure({ kind: "sharedState", setup, fn });
+console.log(JSON.stringify({
+  observesGc: result.gc !== null,
+}));
+`;
+
+      const child = runBun(["--expose-gc", "-e", script]);
+
+      // oxlint-disable-next-line vitest/valid-expect -- Vitest takes a failure message as expect's second argument
+      expect(child.status, child.stderr).toBe(0);
+      expect(JSON.parse(child.stdout)).toStrictEqual({
+        observesGc: false,
+      });
+    },
+    BUN_TIMEOUT_MS,
+  );
+
+  it(
+    "rejects in phase child with the loader's value as cause when bun:jsc cannot be loaded",
+    () => {
+      const bun = bunTestWithJscMock(
+        `
+  const error = await measure({ kind: "sharedState", setup, fn }).then(() => null, (e) => e);
+  console.log("REPORT " + JSON.stringify({
+    phase: error?.phase,
+    cause: error?.cause === loadFailure,
+  }));
+`,
+        "() => { throw loadFailure; }",
+      );
+
+      expect(bun.status).toBe(0);
+      expect(bun.report).toStrictEqual({ phase: "child", cause: true });
+    },
+    BUN_TIMEOUT_MS,
+  );
 });

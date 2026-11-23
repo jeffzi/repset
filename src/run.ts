@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import type { ChildError, MeasureRequest } from "./child-protocol.js";
 import type { FoundRuntime } from "./children.js";
 import { contestOf } from "./judge.js";
-import type { Runtime } from "./measure/runtime.js";
+import { HEAP_READING_RUNTIMES, hasHeapReading, type Runtime } from "./measure/runtime.js";
 import { ConfigError, type ResolvedOptions } from "./options.js";
 import type {
   CaseMeasurement,
@@ -293,9 +293,6 @@ function reportOptions(
   };
 }
 
-/** The runtimes whose measuring child reads the heap; any other returns `memory: null`. */
-const HEAP_READING: ReadonlySet<Runtime> = new Set(["node"]);
-
 /**
  * Refuses a run that would read nothing: `measure` holds only `memory` while no runtime has a heap
  * reading.
@@ -305,9 +302,9 @@ const HEAP_READING: ReadonlySet<Runtime> = new Set(["node"]);
  */
 function requireReading(options: ResolvedOptions): void {
   if (options.measure.includes("time")) return;
-  if (options.runtimes.some((runtime) => HEAP_READING.has(runtime))) return;
+  if (options.runtimes.some(hasHeapReading)) return;
   throw new ConfigError(
-    `measure holds only "memory", and no runtime in runtimes (${options.runtimes.join(", ")}) has a heap reading: add "node" to runtimes or "time" to measure`,
+    `measure holds only "memory", and no runtime in runtimes (${options.runtimes.join(", ")}) has a heap reading: add ${HEAP_READING_RUNTIMES.map((runtime) => `"${runtime}"`).join(" or ")} to runtimes or "time" to measure`,
   );
 }
 

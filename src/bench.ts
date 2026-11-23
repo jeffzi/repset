@@ -254,7 +254,7 @@ function casesOf(name: string, benchmark: unknown): ContenderCase[] {
   const kind = setupPerCall === true ? "perCall" : "sharedState";
   return contenders.map(({ contender, fn }) => ({
     contender,
-    case: { kind, setup, fn, ...(teardown === undefined ? {} : { teardown }) },
+    case: { kind, setup, fn, teardown },
   }));
 }
 

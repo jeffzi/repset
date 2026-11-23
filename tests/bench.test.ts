@@ -29,16 +29,28 @@ function expectTypeErrorHolding(error: unknown, fragments: string[]): void {
   }
 }
 
+/** A plain synchronous benchmark function. */
 const sync = (): number => 1;
 
+/** An async benchmark function, which `bench` rejects. */
 async function asyncFunction(): Promise<number> {
   return 1;
 }
 
+/**
+ * An async generator function, which `bench` rejects.
+ *
+ * @yields 1, once.
+ */
 async function* asyncGenerator(): AsyncGenerator<number> {
   yield 1;
 }
 
+/**
+ * A generator function, which `bench` accepts as a plain function.
+ *
+ * @yields 1, once.
+ */
 function* generator(): Generator<number> {
   yield 1;
 }

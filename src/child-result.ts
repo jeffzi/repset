@@ -84,15 +84,14 @@ const GC_NUMBERS = Object.keys(GC_NUMBER_KEYS);
  * Reads the result line a child wrote on file descriptor {@link RESULT_FD}.
  *
  * @param written - Everything the child wrote on file descriptor {@link RESULT_FD}.
- * @param mode - The mode of the child's request, whose result shape the line must have.
- * @param request - The child's request, whose `time` and `memory` a measurement must answer.
+ * @param request - The child's request: its mode sets the shape the line must have, and a
+ *   measurement must answer its `time` and `memory`.
  * @returns The result, or what was wrong with what the child wrote.
  */
-export function readResult<M extends Mode>(
+export function readResult<R extends ChildRequest>(
   written: string,
-  mode: M,
-  request: ChildRequest,
-): ResultByMode[M] | Failed | string {
+  request: R,
+): ResultByMode[R["mode"]] | Failed | string {
   if (written === "") return "it wrote no result";
   if (!written.endsWith("\n")) return "its result line has no newline";
   const line = written.slice(0, -1);
@@ -112,6 +111,7 @@ export function readResult<M extends Mode>(
       request.mode === "measure" && isMeasured(candidate, request),
     once: isRan,
   };
+  const mode: R["mode"] = request.mode;
   const answer = answers[mode];
   if (answer(value)) return value;
   return `its result line does not answer a ${mode} request: ${line.slice(0, QUOTED_LINE_CHARS)}`;
@@ -183,8 +183,11 @@ function isMeasured(
 }
 
 /**
- * Whether `time` holds what a timing child writes: numeric statistics and sampling, its checks, and
- * a `gc` block or `null`, and no raw samples.
+ * Whether `time` holds what a timing child writes.
+ *
+ * @param time - The parsed result's `time` field.
+ * @returns Whether it holds numeric statistics and sampling, its checks, a `gc` block or `null`,
+ *   and no raw samples.
  */
 function isMeasuredTime(time: unknown): boolean {
   if (!isRecord(time)) return false;

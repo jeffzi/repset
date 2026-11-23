@@ -58,7 +58,7 @@ export interface Case<State> {
   readonly setup: () => State;
   readonly fn: (state: State) => unknown;
   /** Releases a state; absent means nothing to release. What it returns is read for a thenable. */
-  readonly teardown?: (state: State) => unknown;
+  readonly teardown?: ((state: State) => unknown) | undefined;
 }
 
 export interface MeasureOptions {
@@ -665,8 +665,10 @@ interface EmptyOptions extends Sampling {
   readonly kind: Lifecycle;
 }
 
-// The empty body is reached through `fn`, as the samplers reach theirs, so these loops compile
-// as theirs do.
+/**
+ * The empty body is reached through `fn`, as the samplers reach theirs, so these loops compile as
+ * theirs do.
+ */
 interface Timed {
   readonly now: () => number;
   readonly fn: () => unknown;
@@ -726,7 +728,7 @@ function summed(timed: Timed, count: number): number {
  *   fixed count if one was given.
  * @returns The {@link TIMED_SAMPLES} timed spans and the calls per sample they ran.
  * @throws Whatever `collect` throws, and CalibrationError when warmup's count would pass
- *   `ceil(200 × resolution / 0.1 ns)`, naming the count asked for and the cap.
+ *   the sampler's cap on a calibrated count, naming the count asked for and the cap.
  */
 function sampleEmpty(options: EmptyOptions): EmptyResult {
   const { kind, now, resolutionMs, collect, callsPerSample } = options;

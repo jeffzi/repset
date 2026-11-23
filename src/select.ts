@@ -58,7 +58,7 @@ export interface SelectInput extends ChildFunctionOverrides {
 export class ListingError extends ConfigError {
   override readonly name = "ListingError";
   readonly failureStack: string | null;
-  /** The last 16 KiB of the listing child's stdout and stderr. */
+  /** The output tail of the listing child's stdout and stderr, as `startChild` keeps it. */
   readonly output: string;
 
   /**

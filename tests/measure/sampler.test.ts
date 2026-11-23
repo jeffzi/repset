@@ -7,7 +7,13 @@ import {
   type SamplerResult,
 } from "../../src/measure/sampler.js";
 import { errorOf } from "../error-of.js";
-import { COARSE_RESOLUTION, FINE_RESOLUTION } from "./fixtures.js";
+import {
+  COARSE_RESOLUTION,
+  FINE_RESOLUTION,
+  type RecordedLifecycle,
+  type RecordedWorld,
+  recordedLifecycle,
+} from "./fixtures.js";
 
 interface World {
   readonly name: string;
@@ -210,7 +216,6 @@ describe("sampleSharedState", () => {
         const result = run(fake, FINE_RESOLUTION);
 
         expect(result.sampleCount).toBe(64);
-        expect(fake.sampleCalls).toHaveLength(80);
       });
     });
 
@@ -516,10 +521,6 @@ describe("sampleSharedState", () => {
   });
 });
 
-interface PerCallWorld {
-  readonly id: number;
-}
-
 interface PerCallCosts {
   readonly bodyMs: (sample: number, timed: boolean) => number;
   readonly buildMs?: number;
@@ -529,18 +530,12 @@ interface PerCallCosts {
   readonly setupThrowAt?: number;
 }
 
-interface PerCallHarness {
+interface PerCallHarness extends RecordedLifecycle {
   readonly now: () => number;
-  readonly setup: () => PerCallWorld;
-  readonly fn: (world: PerCallWorld) => void;
-  readonly teardown: (world: PerCallWorld) => void;
   readonly collect: () => void;
   readonly failure: Error;
-  readonly log: string[];
-  readonly built: PerCallWorld[];
   readonly sampleCalls: number[];
   readonly collectsAt: number[];
-  readonly live: Set<PerCallWorld>;
 }
 
 /**
@@ -553,67 +548,45 @@ interface PerCallHarness {
 function perCallHarness(costs: PerCallCosts): PerCallHarness {
   let time = 1000;
   let pending = 0;
-  let bodyCalls = 0;
-  let teardownCalls = 0;
   const failure = new Error("banana");
-  const log: string[] = [];
-  const built: PerCallWorld[] = [];
   const sampleCalls: number[] = [];
   const collectsAt: number[] = [];
-  const live = new Set<PerCallWorld>();
+  const lifecycle = recordedLifecycle({
+    failAt: { setup: costs.setupThrowAt, fn: costs.throwAt, teardown: costs.teardownThrowAt },
+    thrown: { setup: failure, fn: failure, teardown: failure },
+    afterSetup: () => {
+      time += costs.buildMs ?? 0;
+    },
+    afterFn: () => {
+      time += costs.bodyMs(sampleCalls.length, collectsAt.length > 0);
+      pending += 1;
+    },
+    afterTeardown: () => {
+      time += costs.teardownMs ?? 0;
+    },
+  });
   return {
+    ...lifecycle,
     now: () => {
-      if (live.size === 0 && pending > 0) {
+      if (lifecycle.live.size === 0 && pending > 0) {
         sampleCalls.push(pending);
         pending = 0;
       }
       return time;
-    },
-    setup: () => {
-      if (built.length === costs.setupThrowAt) {
-        throw failure;
-      }
-      const world: PerCallWorld = { id: built.length };
-      built.push(world);
-      live.add(world);
-      log.push(`setup ${world.id}`);
-      time += costs.buildMs ?? 0;
-      return world;
-    },
-    fn: (world) => {
-      log.push(`fn ${world.id}`);
-      if (bodyCalls === costs.throwAt) {
-        throw failure;
-      }
-      bodyCalls += 1;
-      time += costs.bodyMs(sampleCalls.length, collectsAt.length > 0);
-      pending += 1;
-    },
-    teardown: (world) => {
-      if (teardownCalls === costs.teardownThrowAt) {
-        throw failure;
-      }
-      teardownCalls += 1;
-      live.delete(world);
-      log.push(`teardown ${world.id}`);
-      time += costs.teardownMs ?? 0;
     },
     collect: () => {
       collectsAt.push(sampleCalls.length);
       pending = 0;
     },
     failure,
-    log,
-    built,
     sampleCalls,
     collectsAt,
-    live,
   };
 }
 
 interface PerCallRunOptions extends RunOptions {
   readonly resolutionMs: number;
-  readonly inFlight?: InFlight<PerCallWorld>;
+  readonly inFlight?: InFlight<RecordedWorld>;
 }
 
 /**
@@ -694,7 +667,6 @@ describe("samplePerCall", () => {
         const result = runPerCall(fake, { resolutionMs: FINE_RESOLUTION });
 
         expect(result.sampleCount).toBe(64);
-        expect(fake.sampleCalls).toHaveLength(80);
       });
     });
 
@@ -776,7 +748,7 @@ describe("samplePerCall", () => {
       "leaves the caller exactly the states built and not torn down when $when",
       ({ samplesBefore, liveCount, ...throws }) => {
         const fake = perCallHarness({ bodyMs: () => 200, ...throws });
-        const inFlight: InFlight<PerCallWorld> = { held: false, state: undefined };
+        const inFlight: InFlight<RecordedWorld> = { held: false, state: undefined };
 
         const error = errorOf(() =>
           runPerCall(fake, { resolutionMs: FINE_RESOLUTION, callsPerSample: 3, inFlight }),

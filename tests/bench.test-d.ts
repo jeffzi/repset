@@ -9,12 +9,19 @@ function assertCompiles(register: () => void): void {
 
 describe("bench", () => {
   describe("when the benchmark object has a setup", () => {
-    it("types fn and teardown to receive what setup returns", () => {
+    it("types fn to receive what setup returns", () => {
       bench("sort", {
         setup: () => [3, 1, 2],
         fn: (values) => {
           expectTypeOf(values).toEqualTypeOf<number[]>();
         },
+      });
+    });
+
+    it("types teardown to receive what setup returns", () => {
+      bench("sort", {
+        setup: () => [3, 1, 2],
+        fn: () => {},
         teardown: (values) => {
           expectTypeOf(values).toEqualTypeOf<number[]>();
         },

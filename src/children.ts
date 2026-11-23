@@ -48,7 +48,7 @@ export interface StartOptions {
 
 /** What every outcome carries beside its status. */
 interface Captured {
-  /** The last 16 KiB of the child's stdout and stderr, merged in the order their chunks arrived. */
+  /** The last {@link OUTPUT_TAIL_BYTES} bytes of the child's stdout and stderr, merged in the order their chunks arrived. */
   readonly output: string;
 }
 
@@ -244,7 +244,7 @@ class OutputTail {
  *   signal, and the file to start in place of the child entry.
  * @returns The child's result, the child's own failure, a failure in phase `child` when it left no
  *   result that answers `request`, could not start or ran past `timeout`, or a stop when `signal`
- *   fired while it ran. Each carries the last 16 KiB the child printed. A result line the child
+ *   fired while it ran. Each carries the last {@link OUTPUT_TAIL_BYTES} bytes the child printed. A result line the child
  *   wrote stands however the child then ended, unless the caller's signal stopped it.
  * @throws Error What starting the process throws, such as an argument `spawn` rejects.
  */
@@ -258,7 +258,7 @@ export async function startChild<R extends ChildRequest>(
   if (ended.kind === "error") {
     return noResult(`could not start the child: ${ended.error.message}`, tail.text());
   }
-  return outcomeOf(ended, readResult<R["mode"]>(written(), request.mode, request), tail.text());
+  return outcomeOf(ended, readResult(written(), request), tail.text());
 }
 
 /**

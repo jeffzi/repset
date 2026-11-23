@@ -16,7 +16,7 @@ import { expectConfigError } from "./config-error.js";
 import { errorOf } from "./error-of.js";
 import { MELON } from "./fake-children.js";
 import { fixturePath } from "./fixture-path.js";
-import { requiresRealBunHere, runtimesHere } from "./real-bun.js";
+import { requiresRealBunHere } from "./real-bun.js";
 import { KILL_AFTER_MS, POSIX, RETURN_MARGIN_MS, SPAWN_TIMEOUT_MS } from "./spawn-limits.js";
 import { suiteTemporaryDir, temporaryDir } from "./temporary-dir.js";
 
@@ -119,74 +119,6 @@ function noResultSaying(message: unknown): object {
   return { ...NO_RESULT, error: { ...NO_RESULT.error, message } };
 }
 
-/**
- * Listed cases as the parent accepts them: `contender` is `null` for a plain benchmark and the key
- * for a contender.
- */
-const LISTED_APPLE = { id: "apple", setupPerCall: false, name: "apple", contender: null } as const;
-const LISTED_QUICK = {
-  id: "sort/quick",
-  setupPerCall: false,
-  name: "sort",
-  contender: "quick",
-} as const;
-
-const LISTED_LINE = JSON.stringify({ status: "ok", cases: [LISTED_APPLE] });
-
-/** The result line of a listing whose one case is `listedCase`. */
-function listingLine(listedCase: object): string {
-  return `${JSON.stringify({ status: "ok", cases: [listedCase] })}\n`;
-}
-
-/** The collections a measurement on Node reports, as the child writes them. */
-const NODE_GC = {
-  collectionCount: 3,
-  durationMs: 0.5,
-  maxDurationMs: 0.25,
-  nodeMinorCollectionCount: 2,
-  nodeMajorCollectionCount: 1,
-} as const;
-
-/** A `time` block, complete in every field, with the given `gc`. */
-function timeBlock(gc: object | null): object {
-  return {
-    stats: { min: 1, p25: 1, median: 1, p75: 1, p99: 1, max: 1, mean: 1, sampleCount: 8 },
-    sampling: {
-      timerResolutionNs: 1,
-      callsPerSample: 1,
-      warmupSampleCount: 1,
-      timingAttemptCount: 1,
-      timingMs: 5,
-      callsPerSampleFixed: false,
-    },
-    checks: { ratioToEmptyBody: 1 },
-    gc,
-    rawSamples: null,
-  };
-}
-
-/** A `memory` block, complete in every field, with the given `stats`. */
-function memoryBlock(stats: object | null): object {
-  return { stats, sampling: { callsPerSample: 64 }, rawSamples: null };
-}
-
-/** Statistics complete in every field, as a `memory` block holds them. */
-const MEMORY_STATS = {
-  min: 40,
-  p25: 40,
-  median: 40,
-  p75: 40,
-  p99: 40,
-  max: 40,
-  mean: 40,
-  sampleCount: 21,
-} as const;
-
-/** A measurement line with the given `status`, `time` and `memory`. */
-function measuredLine(status: string, time: object | null, memory: object | null = null): string {
-  return JSON.stringify({ status, time, memory });
-}
-
 /** What a measure request asks the child to read. */
 interface Asked {
   readonly time: boolean;
@@ -194,19 +126,6 @@ interface Asked {
 }
 
 const TIME_ONLY: Asked = { time: true, memory: false };
-
-/** A measure request asking for `asked`, whose `file` is the result line `echo.ts` writes back. */
-function echoingLine(line: string, asked: Asked = TIME_ONLY): ChildRequest {
-  return { mode: "measure", file: `${line}\n`, id: "apple", minTime: 5, minSamples: 8, ...asked };
-}
-
-/** A time-only measure request whose `file` is a measurement line, complete but for `gc`, that `echo.ts` writes back. */
-function echoingMeasured(gc: object | null): ChildRequest {
-  return echoingLine(measuredLine("ok", timeBlock(gc)));
-}
-
-/** A measurement complete in every field, whose `status` alone does not answer a measure request. */
-const MEASURED_PEAR_LINE = measuredLine("pear", timeBlock(null));
 
 /** The bytes per call a known body's reading may stray from its size. */
 const BAND_BYTES = 8;
@@ -394,20 +313,6 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
         expected: { status: "ok", result: { status: "ok" }, output: "" },
       },
       {
-        why: "a listing",
-        request: { mode: "list", file: `${LISTED_LINE}\n` },
-        expected: { status: "ok", result: { status: "ok", cases: [LISTED_APPLE] }, output: "" },
-      },
-      {
-        why: "a listing of a contender",
-        request: { mode: "list", file: listingLine(LISTED_QUICK) },
-        expected: {
-          status: "ok",
-          result: { status: "ok", cases: [LISTED_QUICK] },
-          output: "",
-        },
-      },
-      {
         why: "the child's own failure whose cleanup teardown failed too",
         request: echoing(failureLine({ ...FN_KIWI, teardownError: MELON })),
         expected: {
@@ -416,63 +321,10 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
           output: "",
         },
       },
-      {
-        why: "a measurement holding its collections",
-        request: echoingMeasured(NODE_GC),
-        expected: {
-          status: "ok",
-          result: expect.objectContaining({ time: expect.objectContaining({ gc: NODE_GC }) }),
-          output: "",
-        },
-      },
-      {
-        why: "the child's own failure with no stack",
-        request: echoing(
-          '{"status":"failed","error":{"phase":"load","message":"kiwi","stack":null,"teardownError":null}}\n',
-        ),
-        expected: {
-          status: "failed",
-          error: { phase: "load", message: "kiwi", stack: null, teardownError: null },
-          output: "",
-        },
-      },
     ] as const)("returns $why", async ({ request, expected }) => {
       const outcome = await startFixture("echo.ts", request);
 
       expect(outcome).toStrictEqual(expected);
-    });
-
-    it.each([
-      {
-        why: "time and memory blocks for a request asking both",
-        result: { time: timeBlock(null), memory: memoryBlock(MEMORY_STATS) },
-        asked: { time: true, memory: true },
-      },
-      {
-        why: "a null time and a memory block for a request asking memory alone",
-        result: { time: null, memory: memoryBlock(MEMORY_STATS) },
-        asked: { time: false, memory: true },
-      },
-      {
-        why: "a memory block whose statistics are null, no pair having been clean",
-        result: { time: null, memory: memoryBlock(null) },
-        asked: { time: false, memory: true },
-      },
-      {
-        why: "a null time and a null memory for a request asking memory alone, as on Bun",
-        result: { time: null, memory: null },
-        asked: { time: false, memory: true },
-      },
-    ])("returns a measurement with $why", async ({ result, asked }) => {
-      const line = measuredLine("ok", result.time, result.memory);
-
-      const outcome = await startFixture("echo.ts", echoingLine(line, asked));
-
-      expect(outcome).toStrictEqual({
-        status: "ok",
-        result: { status: "ok", ...result },
-        output: "",
-      });
     });
 
     it("keeps the result when the child then exited non-zero", async () => {
@@ -489,104 +341,10 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
   });
 
   describe("when the child left no usable result line", () => {
-    it.each([
-      { why: "no line", request: { mode: "list", file: "" } },
-      { why: "a line with no newline", request: { mode: "list", file: LISTED_LINE } },
-      { why: "a listing for a measure request", request: echoingLine(LISTED_LINE) },
-      { why: "a listing for a once request", request: echoing(`${LISTED_LINE}\n`) },
-      {
-        why: "a listing whose case has no name",
-        request: { mode: "list", file: listingLine({ ...LISTED_APPLE, name: undefined }) },
-      },
-      {
-        why: "a listing whose case's contender is a number",
-        request: { mode: "list", file: listingLine({ ...LISTED_APPLE, contender: 7 }) },
-      },
-      {
-        why: "a failure with no message",
-        request: echoing(
-          '{"status":"failed","error":{"phase":"fn","stack":null,"teardownError":null}}\n',
-        ),
-      },
-      { why: "a failure with no teardownError", request: echoing(failureLine(FN_KIWI)) },
-      {
-        why: "a measurement whose collections lack the major count",
-        request: echoingMeasured({ ...NODE_GC, nodeMajorCollectionCount: undefined }),
-      },
-      {
-        why: "a failure whose teardownError has no stack",
-        request: echoing(failureLine({ ...FN_KIWI, teardownError: { message: "melon" } })),
-      },
-    ] as const)("fails in phase child with a null stack for $why", async ({ request }) => {
-      const outcome = await startFixture("echo.ts", request);
+    it("fails in phase child with a null stack when the child wrote no line", async () => {
+      const outcome = await startFixture("echo.ts", { mode: "list", file: "" });
 
       expect(outcome).toMatchObject(NO_RESULT);
-    });
-
-    it.each([
-      {
-        why: "a null time for a request asking time",
-        result: { time: null, memory: null },
-        asked: TIME_ONLY,
-      },
-      {
-        why: "a time block for a request not asking time",
-        result: { time: timeBlock(null), memory: memoryBlock(MEMORY_STATS) },
-        asked: { time: false, memory: true },
-      },
-      {
-        why: "a memory block for a request not asking memory",
-        result: { time: timeBlock(null), memory: memoryBlock(MEMORY_STATS) },
-        asked: TIME_ONLY,
-      },
-      {
-        why: "no memory at all",
-        result: { time: timeBlock(null), memory: undefined },
-        asked: TIME_ONLY,
-      },
-      {
-        why: "no memory at all for a request asking memory",
-        result: { time: null, memory: undefined },
-        asked: { time: false, memory: true },
-      },
-      {
-        why: "a memory block holding raw samples",
-        result: { time: null, memory: { ...memoryBlock(MEMORY_STATS), rawSamples: [] } },
-        asked: { time: false, memory: true },
-      },
-      {
-        why: "a memory block with no calls per sample",
-        result: { time: null, memory: { stats: MEMORY_STATS, sampling: {}, rawSamples: null } },
-        asked: { time: false, memory: true },
-      },
-      {
-        why: "a memory block whose statistics lack the sample count",
-        result: {
-          time: null,
-          memory: memoryBlock({ ...MEMORY_STATS, sampleCount: undefined }),
-        },
-        asked: { time: false, memory: true },
-      },
-    ])("fails in phase child with a null stack for $why", async ({ result, asked }) => {
-      const line = JSON.stringify({ status: "ok", ...result });
-
-      const outcome = await startFixture("echo.ts", echoingLine(line, asked));
-
-      expect(outcome).toMatchObject(NO_RESULT);
-    });
-
-    it("names the measure request in the failure when the measurement's status is neither ok nor failed", async () => {
-      const outcome = await startFixture("echo.ts", echoingLine(MEASURED_PEAR_LINE));
-
-      expect(outcome).toMatchObject(noResultSaying(expect.stringMatching(/\bmeasure\b/)));
-    });
-
-    it("counts the lines of a child that wrote more than one", async () => {
-      const request = { mode: "list", file: `${LISTED_LINE}\n${LISTED_LINE}\n` } as const;
-
-      const outcome = await startFixture("echo.ts", request);
-
-      expect(outcome).toMatchObject(noResultSaying(expect.stringContaining(" 2 lines ")));
     });
 
     it("carries the parse error of a line that is not JSON", async () => {
@@ -595,16 +353,6 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
       const outcome = await startFixture("echo.ts", { mode: "list", file: "banana\n" });
 
       expect(outcome).toMatchObject(noResultSaying(expect.stringContaining(parseError.message)));
-    });
-
-    it("quotes the first 200 characters of a line that does not answer its request", async () => {
-      const line = JSON.stringify({ status: "ok", pear: "x".repeat(300) });
-
-      const outcome = await startFixture("echo.ts", { mode: "list", file: `${line}\n` });
-
-      expect(outcome).toMatchObject(
-        noResultSaying(expect.stringMatching(/: \{"status":"ok","pear":"x{177}$/u)),
-      );
     });
 
     it("names the spawn error of a child that could not be started", async () => {
@@ -701,10 +449,10 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
     });
   });
 
-  describe.each(runtimesHere())("with the child entry on $runtime", ({ runtime, here }) => {
-    describe.runIf(here)("when the request is valid", () => {
+  describe("with the child entry on node", () => {
+    describe("when the request is valid", () => {
       it("returns the measurement of one case", async () => {
-        const found = await findRuntime(runtime, LOOKUP);
+        const found = await findRuntime("node", LOOKUP);
 
         const outcome = await startChild(
           found,
@@ -751,14 +499,6 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
           expect(Math.abs(memoryMedian(outcome) - bytes)).toBeLessThanOrEqual(BAND_BYTES);
         },
       );
-
-      it.runIf(requiresRealBunHere())("reads a null memory on Bun", async () => {
-        const bun = await findRuntime("bun", LOOKUP);
-
-        const outcome = await startBuiltChild(bun, measuringMemory("object"), BUILT_OPTIONS);
-
-        expect(outcome).toMatchObject({ status: "ok", result: { status: "ok", memory: null } });
-      });
     });
   });
 

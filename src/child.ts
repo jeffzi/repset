@@ -37,7 +37,7 @@ import {
   tearDownCatching,
   withCaseState,
 } from "./measure/measure.js";
-import { runningRuntime } from "./measure/runtime.js";
+import { hasHeapReading, runningRuntime } from "./measure/runtime.js";
 import { RESULT_FD } from "./result-fd.js";
 import { valueAt } from "./utils.js";
 
@@ -94,7 +94,9 @@ export async function measureCase(
   return withSelectedCase(file, id, async (selected): Promise<Measured> => {
     const time = request.time ? { ...(await measure(selected, request)), rawSamples: null } : null;
     const memory =
-      request.memory && runningRuntime() === "node" ? await measureMemory(selected, probe) : null;
+      request.memory && hasHeapReading(runningRuntime())
+        ? await measureMemory(selected, probe)
+        : null;
     return { status: "ok", time, memory };
   });
 }
@@ -282,8 +284,9 @@ async function measureMemory<State>(
 }
 
 /**
- * Takes pairs of a body sample and an empty sample until 21 are clean. A flagged pair halves the
- * calls per sample and starts the 21 again; at one call, it is taken again, up to 21 extra pairs.
+ * Takes pairs of a body sample and an empty sample until {@link PASS_PAIRS} are clean. A flagged
+ * pair halves the calls per sample and starts the count again; at one call, it is taken again, up
+ * to {@link PASS_PAIRS} extra pairs.
  *
  * @param sampler - Takes the case's samples.
  * @param window - Holds each sample's readings.

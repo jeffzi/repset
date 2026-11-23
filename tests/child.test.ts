@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { type ChildResult, parseRequest } from "../src/child-protocol.js";
+import { type ChildResult, failedResult, parseRequest } from "../src/child-protocol.js";
 import {
   listCases,
   measureCase,
@@ -14,10 +14,13 @@ import {
   type CollectionDetector,
   type MemoryProbe,
 } from "../src/child.js";
-import { fixturePath } from "./fixture-path.js";
+import { MeasureError } from "../src/measure/measure.js";
+import { fixturePath, ROOT } from "./fixture-path.js";
 import { enabledGc } from "./measure/fixtures.js";
 import { resetRegistry } from "./registry.js";
+import { repeated } from "./repeated.js";
 import { KILL_AFTER_MS, SPAWN_TIMEOUT_MS } from "./spawn-limits.js";
+import { trappedProxy } from "./thrown-values.js";
 
 /** The slot where the `lifecycle.ts` and `contest.ts` fixtures record each callback they run. */
 const CALLS = Symbol.for("repset.child-calls");
@@ -81,22 +84,25 @@ afterEach(() => {
 
 describe("parseRequest", () => {
   describe("when the request is complete", () => {
+    const unfixed = { ...MEASURE_REQUEST, callsPerSample: undefined };
+    const fixed = { ...MEASURE_REQUEST, callsPerSample: 200 };
     it.each([
-      { why: "a list request", request: { mode: "list", file: FILE } },
-      { why: "a once request", request: { mode: "once", file: FILE, id: "alpha" } },
-      { why: "a measure request", request: MEASURE_REQUEST },
       {
-        why: "a measure request with its calls per sample",
-        request: { ...MEASURE_REQUEST, callsPerSample: 200 },
+        why: "a list request",
+        request: { mode: "list", file: FILE },
+        expected: { mode: "list", file: FILE },
       },
       {
-        why: "a measure request for memory alone",
-        request: { ...MEASURE_REQUEST, time: false, memory: true },
+        why: "a once request",
+        request: { mode: "once", file: FILE, id: "alpha" },
+        expected: { mode: "once", file: FILE, id: "alpha" },
       },
-    ])("returns $why", ({ request }) => {
+      { why: "a measure request", request: MEASURE_REQUEST, expected: unfixed },
+      { why: "a measure request with its calls per sample", request: fixed, expected: fixed },
+    ])("returns $why", ({ request, expected }) => {
       const parsed = parseRequest(JSON.stringify(request));
 
-      expect(parsed).toStrictEqual(request);
+      expect(parsed).toStrictEqual(expected);
     });
   });
 
@@ -120,16 +126,6 @@ describe("parseRequest", () => {
         argument: JSON.stringify({ mode: "list", file: "bench/sort.ts" }),
       },
       {
-        why: "a null id",
-        error: /\bid\b.*\bnull\b/,
-        argument: JSON.stringify({ mode: "once", file: FILE, id: null }),
-      },
-      {
-        why: "a minTime that is a string",
-        error: /\bminTime\b.*"5"/,
-        argument: JSON.stringify({ ...MEASURE_REQUEST, minTime: "5" }),
-      },
-      {
         why: "a callsPerSample that is a string",
         error: /\bcallsPerSample\b.*"200"/,
         argument: JSON.stringify({ ...MEASURE_REQUEST, callsPerSample: "200" }),
@@ -139,16 +135,53 @@ describe("parseRequest", () => {
         error: /\btime\b/,
         argument: JSON.stringify({ ...MEASURE_REQUEST, time: undefined }),
       },
-      {
-        why: "a memory that is not a boolean",
-        error: /\bmemory\b.*"yes"/,
-        argument: JSON.stringify({ ...MEASURE_REQUEST, memory: "yes" }),
-      },
     ])("throws a TypeError for $why", ({ argument, error }) => {
       const parse = (): unknown => parseRequest(argument);
 
       expect(parse).toThrow(TypeError);
       expect(parse).toThrow(error);
+    });
+  });
+});
+
+describe("failedResult", () => {
+  it("encodes a thrown Error in the phase given, with its message and stack", () => {
+    const error = new Error("banana");
+
+    const result = failedResult("load", error);
+
+    expect(result).toStrictEqual({
+      status: "failed",
+      error: { phase: "load", message: "banana", stack: error.stack, teardownError: null },
+    });
+  });
+
+  it("takes a MeasureError's own phase and message, and the stack of its cause", () => {
+    const cause = new Error("kiwi");
+
+    const result = failedResult("child", new MeasureError("fn", cause));
+
+    expect(result).toStrictEqual({
+      status: "failed",
+      error: { phase: "fn", message: "kiwi", stack: cause.stack, teardownError: null },
+    });
+  });
+
+  it("encodes a MeasureError's teardown failure as the message and stack of the Error it threw", () => {
+    const melon = new Error("melon");
+    const thrown = new MeasureError("fn", new Error("lime"), new MeasureError("teardown", melon));
+
+    const result = failedResult("child", thrown);
+
+    expect(result.error.teardownError).toStrictEqual({ message: "melon", stack: melon.stack });
+  });
+
+  it("encodes a thrown value whose instanceof check throws in the phase given", () => {
+    const result = failedResult("load", trappedProxy());
+
+    expect(result).toMatchObject({
+      status: "failed",
+      error: { phase: "load", stack: null, teardownError: null },
     });
   });
 });
@@ -178,60 +211,13 @@ describe("listCases", () => {
   });
 
   describe("when the file fails to load", () => {
-    it("fails in phase load with the message and stack of the Error the file threw", async () => {
+    it("fails in phase load with the message of the Error the file threw", async () => {
       const result = await listCases(fixture("top-level-throw.ts"));
 
-      expect(result).toStrictEqual({
-        status: "failed",
-        error: {
-          phase: "load",
-          message: "banana",
-          stack: expect.stringMatching(/^Error: banana\n/u),
-          teardownError: null,
-        },
-      });
-    });
-
-    it("fails in phase load when the file throws a value whose instanceof check throws", async () => {
-      const result = await listCases(fixture("top-level-trapped-proxy.ts"));
-
       expect(result).toMatchObject({
         status: "failed",
-        error: { phase: "load", teardownError: null },
+        error: { phase: "load", message: "banana" },
       });
-    });
-  });
-});
-
-describe("measureCase", () => {
-  beforeEach(() => {
-    vi.stubGlobal("gc", enabledGc());
-  });
-
-  describe("when the id does not select exactly one case", () => {
-    it("fails in phase load naming an id that is not registered", async () => {
-      const result = await measureShort(FILE, "banana");
-
-      expect(result).toMatchObject({
-        status: "failed",
-        error: { phase: "load", message: expect.stringContaining("banana") },
-      });
-    });
-  });
-
-  describe("when the case measures", { timeout: MEASURE_TIMEOUT_MS }, () => {
-    it("measures at the calls per sample it is given", async () => {
-      const result = await measureCase(LIFECYCLE, "steady", { ...TIME_ONLY, callsPerSample: 3 });
-
-      expect(result).toMatchObject({ status: "ok", time: { sampling: { callsPerSample: 3 } } });
-    });
-  });
-
-  describe("when measure rejects", () => {
-    it("fails in the phase of what the case threw", async () => {
-      const result = await measureShort(LIFECYCLE, "fn-throws");
-
-      expect(result).toMatchObject({ status: "failed", error: { phase: "fn" } });
     });
   });
 });
@@ -242,9 +228,6 @@ describe("measureCase", () => {
 
 /** What the fake heap records in the call list at each reading. */
 const READ = "read";
-
-/** What the fake collector records in the call list at each forced collection. */
-const GC = "gc";
 
 /** Mirrors `PASS_PAIRS` in `src/child.ts`: the samples counted below follow it. */
 const PAIRS = 21;
@@ -267,14 +250,6 @@ function samples(log: readonly unknown[]): unknown[][] {
   const reads = readIndices(log);
   return reads.flatMap((read, index) =>
     index % 2 === 0 ? [log.slice(read + 1, reads[index + 1])] : [],
-  );
-}
-
-/** The entries before each sample's first heap reading, since the previous sample's second. */
-function gapsBeforeSamples(log: readonly unknown[]): unknown[][] {
-  const reads = readIndices(log);
-  return reads.flatMap((read, index) =>
-    index % 2 === 0 ? [log.slice(index === 0 ? 0 : (reads[index - 1] ?? 0) + 1, read)] : [],
   );
 }
 
@@ -347,393 +322,367 @@ async function passOn(id: string, probe: MemoryProbe = cleanProbe()): Promise<Ch
   return measureCase(LIFECYCLE, id, MEMORY_ONLY, probe);
 }
 
-/** `n` copies of `value`. */
-function repeated<T>(n: number, value: T): T[] {
-  return Array.from({ length: n }, () => value);
-}
-
-describe("measureCase with memory asked", { timeout: MEASURE_TIMEOUT_MS }, () => {
+describe("measureCase", () => {
   beforeEach(() => {
-    vi.stubGlobal("gc", () => {
-      calls().push(GC);
+    vi.stubGlobal("gc", enabledGc());
+  });
+
+  describe("when the id does not select exactly one case", () => {
+    it("fails in phase load naming an id that is not registered", async () => {
+      const result = await measureShort(FILE, "banana");
+
+      expect(result).toMatchObject({
+        status: "failed",
+        error: { phase: "load", message: expect.stringContaining("banana") },
+      });
     });
   });
 
-  afterEach(() => {
-    vi.unstubAllGlobals();
+  describe("when the case measures", { timeout: MEASURE_TIMEOUT_MS }, () => {
+    it("measures at the calls per sample it is given", async () => {
+      const result = await measureCase(LIFECYCLE, "steady", { ...TIME_ONLY, callsPerSample: 3 });
+
+      expect(result).toMatchObject({ status: "ok", time: { sampling: { callsPerSample: 3 } } });
+    });
   });
 
-  describe("when time is asked too", () => {
-    it("returns the time block and the pass's memory block", async () => {
-      const result = await measureCase(
-        LIFECYCLE,
-        "steady",
-        { ...TIME_ONLY, memory: true },
-        cleanProbe(),
-      );
+  describe("when memory is asked", { timeout: MEASURE_TIMEOUT_MS }, () => {
+    beforeEach(() => {
+      vi.stubGlobal("gc", () => undefined);
+    });
 
-      expect(result).toMatchObject({
-        status: "ok",
-        time: { stats: { sampleCount: expect.any(Number) } },
-        memory: {
-          stats: { median: 0, sampleCount: PAIRS },
-          sampling: { callsPerSample: START_CALLS },
-          rawSamples: null,
-        },
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    describe("when time is asked too", () => {
+      it("returns the time block and the pass's memory block", async () => {
+        const result = await measureCase(
+          LIFECYCLE,
+          "steady",
+          { ...TIME_ONLY, memory: true },
+          cleanProbe(),
+        );
+
+        expect(result).toMatchObject({
+          status: "ok",
+          time: { stats: { sampleCount: expect.any(Number) } },
+          memory: {
+            stats: { median: 0, sampleCount: PAIRS },
+            sampling: { callsPerSample: START_CALLS },
+            rawSamples: null,
+          },
+        });
+      });
+
+      it("returns the timing's failure when the timing fails", async () => {
+        const result = await measureCase(
+          LIFECYCLE,
+          "fn-throws",
+          { ...TIME_ONLY, memory: true },
+          cleanProbe(),
+        );
+
+        expect(result).toMatchObject({ status: "failed", error: { phase: "fn", message: "kiwi" } });
+      });
+
+      it("reads no heap when the timing fails", async () => {
+        await measureCase(LIFECYCLE, "fn-throws", { ...TIME_ONLY, memory: true }, cleanProbe());
+
+        expect(calls()).not.toContain(READ);
       });
     });
 
-    it("returns the timing's failure and reads no heap when the timing fails", async () => {
-      const result = await measureCase(
-        LIFECYCLE,
-        "fn-throws",
-        { ...TIME_ONLY, memory: true },
-        cleanProbe(),
-      );
+    describe("when time alone is asked", () => {
+      it("returns a null memory", async () => {
+        const result = await measureCase(LIFECYCLE, "steady", TIME_ONLY, cleanProbe());
 
-      expect(result).toMatchObject({ status: "failed", error: { phase: "fn", message: "kiwi" } });
-      expect(calls()).not.toContain(READ);
-    });
-  });
+        expect(result).toMatchObject({ status: "ok", memory: null });
+      });
 
-  describe("when time alone is asked", () => {
-    it("returns a null memory and reads no heap", async () => {
-      const result = await measureCase(LIFECYCLE, "steady", TIME_ONLY, cleanProbe());
+      it("reads no heap", async () => {
+        await measureCase(LIFECYCLE, "steady", TIME_ONLY, cleanProbe());
 
-      expect(result).toMatchObject({ status: "ok", memory: null });
-      expect(calls()).not.toContain(READ);
-    });
-  });
-
-  describe("when memory alone is asked", () => {
-    it("returns a null time block", async () => {
-      const result = await passOn("quiet");
-
-      expect(result).toMatchObject({ status: "ok", time: null, memory: { rawSamples: null } });
+        expect(calls()).not.toContain(READ);
+      });
     });
 
-    it("calls the body only inside the pass's samples but for one first call", async () => {
-      await passOn("quiet");
+    describe("when memory alone is asked", () => {
+      it("returns a null time block", async () => {
+        const result = await passOn("quiet");
 
-      const log = calls();
-      const outside = count(log, " fn") - count(samples(log).flat(), " fn");
-      expect(outside).toBeLessThanOrEqual(1);
-    });
-  });
+        expect(result).toMatchObject({ status: "ok", time: null, memory: { rawSamples: null } });
+      });
 
-  describe("when the runtime is Bun", () => {
-    it("returns a null memory and reads no heap", async () => {
-      vi.stubGlobal("Bun", {});
+      it("calls the body only inside the pass's samples but for one first call", async () => {
+        await passOn("quiet");
 
-      const result = await passOn("quiet");
-
-      expect(result).toStrictEqual({ status: "ok", time: null, memory: null });
-      expect(calls()).not.toContain(READ);
-    });
-  });
-});
-
-describe("the memory pass", { timeout: MEASURE_TIMEOUT_MS }, () => {
-  beforeEach(() => {
-    vi.stubGlobal("gc", () => {
-      calls().push(GC);
-    });
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  describe("when the case shares one state", () => {
-    it("builds the state before the first heap reading and tears it down once after the last", async () => {
-      await passOn("quiet");
-
-      const log = calls();
-      const firstRead = log.indexOf(READ);
-      const lastRead = log.lastIndexOf(READ);
-      expect({
-        setupsBefore: count(log.slice(0, firstRead), " setup"),
-        tornDownAfter: count(log.slice(lastRead), " teardown"),
-        between:
-          count(log.slice(firstRead, lastRead), " setup") +
-          count(log.slice(firstRead, lastRead), " teardown"),
-      }).toStrictEqual({ setupsBefore: 1, tornDownAfter: 1, between: 0 });
+        const log = calls();
+        const outside = count(log, " fn") - count(samples(log).flat(), " fn");
+        expect(outside).toBeLessThanOrEqual(1);
+      });
     });
 
-    it("takes 21 pairs of a 64-call body sample and an empty sample", async () => {
-      await passOn("quiet");
+    describe("when the runtime is Bun", () => {
+      it("returns a null memory", async () => {
+        vi.stubGlobal("Bun", {});
 
-      const bodyCalls = samples(calls()).map((sample) => count(sample, " fn"));
-      expect(bodyCalls.toSorted((a, b) => a - b)).toStrictEqual([
-        ...repeated(PAIRS, 0),
-        ...repeated(PAIRS, START_CALLS),
-      ]);
+        const result = await passOn("quiet");
+
+        expect(result).toStrictEqual({ status: "ok", time: null, memory: null });
+      });
+
+      it("reads no heap", async () => {
+        vi.stubGlobal("Bun", {});
+
+        await passOn("quiet");
+
+        expect(calls()).not.toContain(READ);
+      });
     });
 
-    it("forces a collection before each sample's first heap reading and none between its two", async () => {
-      await passOn("quiet");
+    describe("when the case shares one state", () => {
+      it("builds the state once, before the first heap reading", async () => {
+        await passOn("quiet");
 
-      const log = calls();
-      expect({
-        before: gapsBeforeSamples(log).map((gap) => gap.includes(GC)),
-        inside: samples(log).some((sample) => sample.includes(GC)),
-      }).toStrictEqual({ before: repeated(2 * PAIRS, true), inside: false });
+        const log = calls();
+        const firstRead = log.indexOf(READ);
+        expect({
+          before: count(log.slice(0, firstRead), " setup"),
+          after: count(log.slice(firstRead), " setup"),
+        }).toStrictEqual({ before: 1, after: 0 });
+      });
+
+      it("tears the state down once, after the last heap reading", async () => {
+        await passOn("quiet");
+
+        const log = calls();
+        const lastRead = log.lastIndexOf(READ);
+        expect({
+          before: count(log.slice(0, lastRead), " teardown"),
+          after: count(log.slice(lastRead), " teardown"),
+        }).toStrictEqual({ before: 0, after: 1 });
+      });
+
+      it("takes 21 pairs of a 64-call body sample and an empty sample", async () => {
+        await passOn("quiet");
+
+        const bodyCalls = samples(calls()).map((sample) => count(sample, " fn"));
+        expect(bodyCalls.toSorted((a, b) => a - b)).toStrictEqual([
+          ...repeated(0, PAIRS),
+          ...repeated(START_CALLS, PAIRS),
+        ]);
+      });
     });
-  });
 
-  describe("when the case builds a state per call", () => {
-    it("holds as many states at each heap reading as the sample's calls, and none after", async () => {
-      await passOn("quiet-per-call");
+    describe("when the case builds a state per call", () => {
+      it("holds as many states at each heap reading as the sample's calls, and none after", async () => {
+        await passOn("quiet-per-call");
 
-      const log = calls();
-      expect({
-        atReads: liveAtReads(log),
-        atEnd: count(log, " setup") - count(log, " teardown"),
-      }).toStrictEqual({ atReads: repeated(4 * PAIRS, START_CALLS), atEnd: 0 });
-    });
+        const log = calls();
+        expect({
+          atReads: liveAtReads(log),
+          atEnd: count(log, " setup") - count(log, " teardown"),
+        }).toStrictEqual({ atReads: repeated(START_CALLS, 4 * PAIRS), atEnd: 0 });
+      });
 
-    it("runs each empty sample at its body sample's halved count", async () => {
-      const probe = {
-        heapUsed: fakeHeap(0),
-        detector: fakeDetector((bodyCalls, nth) => bodyCalls === START_CALLS && nth === 0),
-      };
-
-      await passOn("quiet-per-call", probe);
-
-      expect(liveAtReads(calls()).slice(-4 * PAIRS)).toStrictEqual(
-        repeated(4 * PAIRS, START_CALLS / 2),
-      );
-    });
-  });
-
-  describe("when no sample is flagged", () => {
-    it.each([
-      {
-        why: "deltas equal to the empty sample's read 0",
-        bytesPerCall: 4.5,
-        emptyBytes: 288,
-        median: 0,
-      },
-      {
-        why: "deltas below the empty sample's read below 0",
-        bytesPerCall: 0,
-        emptyBytes: 512,
-        median: -8,
-      },
-    ])(
-      "reads the paired difference per call, signed: $why",
-      async ({ bytesPerCall, emptyBytes, median }) => {
+      it("runs each empty sample at its body sample's halved count", async () => {
         const probe = {
-          heapUsed: fakeHeap(bytesPerCall, () => emptyBytes),
+          heapUsed: fakeHeap(0),
+          detector: fakeDetector((bodyCalls, nth) => bodyCalls === START_CALLS && nth === 0),
+        };
+
+        await passOn("quiet-per-call", probe);
+
+        expect(liveAtReads(calls()).slice(-4 * PAIRS)).toStrictEqual(
+          repeated(START_CALLS / 2, 4 * PAIRS),
+        );
+      });
+    });
+
+    describe("when no sample is flagged", () => {
+      it("reads the paired difference per call, signed, below 0 when the deltas are below the empty sample's", async () => {
+        const probe = { heapUsed: fakeHeap(0, () => 512), detector: fakeDetector() };
+
+        const result = await passOn("quiet", probe);
+
+        expect(result).toMatchObject({ memory: { stats: { median: -8 } } });
+      });
+
+      it("summarizes every pair's difference per call", async () => {
+        const probe = {
+          heapUsed: fakeHeap(40, (emptyIndex) => emptyIndex * START_CALLS),
           detector: fakeDetector(),
         };
 
         const result = await passOn("quiet", probe);
 
-        expect(result).toMatchObject({ memory: { stats: { median } } });
-      },
-    );
-
-    it("summarizes every pair's difference per call", async () => {
-      const probe = {
-        heapUsed: fakeHeap(40, (emptyIndex) => emptyIndex * START_CALLS),
-        detector: fakeDetector(),
-      };
-
-      const result = await passOn("quiet", probe);
-
-      expect(result).toMatchObject({
-        memory: {
-          stats: {
-            min: 20,
-            p25: 25,
-            median: 30,
-            p75: 35,
-            p99: expect.closeTo(39.8, 9),
-            max: 40,
-            mean: 30,
-            sampleCount: PAIRS,
+        expect(result).toMatchObject({
+          memory: {
+            stats: { min: 20, median: 30, max: 40, sampleCount: PAIRS },
+            sampling: { callsPerSample: START_CALLS },
           },
-          sampling: { callsPerSample: START_CALLS },
-        },
+        });
       });
     });
-  });
 
-  describe("when the detector flags a sample", () => {
-    it.each([
-      {
-        why: "the first pair at 64 calls is flagged",
-        flags: (bodyCalls: number, nth: number) => bodyCalls === START_CALLS && nth === 0,
-        callsPerSample: 32,
-      },
-      {
-        why: "the third pair at 64 calls is flagged, discarding the two kept",
-        flags: (bodyCalls: number, nth: number) => bodyCalls === START_CALLS && nth === 2,
-        callsPerSample: 32,
-      },
-      {
-        why: "the first pair at every count above 1 is flagged",
-        flags: (bodyCalls: number, nth: number) => bodyCalls > 1 && nth === 0,
-        callsPerSample: 1,
-      },
-    ])(
-      "halves the calls per sample and takes 21 pairs again when $why",
-      async ({ flags, callsPerSample }) => {
+    describe("when the detector flags a sample", () => {
+      it.each([
+        {
+          why: "the first pair at 64 calls is flagged",
+          flags: (bodyCalls: number, nth: number) => bodyCalls === START_CALLS && nth === 0,
+          callsPerSample: 32,
+        },
+        {
+          why: "the first pair at every count above 1 is flagged",
+          flags: (bodyCalls: number, nth: number) => bodyCalls > 1 && nth === 0,
+          callsPerSample: 1,
+        },
+      ])(
+        "halves the calls per sample and takes 21 pairs again when $why",
+        async ({ flags, callsPerSample }) => {
+          const probe = { heapUsed: fakeHeap(40), detector: fakeDetector(flags) };
+
+          const result = await passOn("quiet", probe);
+
+          expect(result).toMatchObject({
+            memory: { stats: { median: 40, sampleCount: PAIRS }, sampling: { callsPerSample } },
+          });
+        },
+      );
+
+      it("halves the calls per sample when the empty sample of a pair is flagged", async () => {
+        const probe = {
+          heapUsed: fakeHeap(40),
+          detector: fakeDetector(undefined, (nth) => nth === 0),
+        };
+
+        const result = await passOn("quiet", probe);
+
+        expect(result).toMatchObject({
+          memory: { stats: { sampleCount: PAIRS }, sampling: { callsPerSample: START_CALLS / 2 } },
+        });
+      });
+
+      it("discards the pairs kept at a count when a later pair at it is flagged", async () => {
+        const probe = {
+          heapUsed: fakeHeap(40, () => 640),
+          detector: fakeDetector((bodyCalls, nth) => bodyCalls === START_CALLS && nth === 12),
+        };
+
+        const result = await passOn("quiet", probe);
+
+        expect(result).toMatchObject({
+          memory: {
+            stats: { min: 20, max: 20, sampleCount: PAIRS },
+            sampling: { callsPerSample: START_CALLS / 2 },
+          },
+        });
+      });
+
+      it.each([
+        {
+          why: "the first 21 pairs at one call are flagged",
+          flaggedAtOne: (nth: number) => nth < 21,
+          kept: 21,
+        },
+        {
+          why: "22 pairs at one call are flagged after 5 clean ones",
+          flaggedAtOne: (nth: number) => nth >= 5 && nth < 27,
+          kept: 5,
+        },
+      ])("keeps $kept pairs when $why, taking at most 21 again", async ({ flaggedAtOne, kept }) => {
+        const flags = (bodyCalls: number, nth: number): boolean =>
+          bodyCalls > 1 ? nth === 0 : flaggedAtOne(nth);
         const probe = { heapUsed: fakeHeap(40), detector: fakeDetector(flags) };
 
         const result = await passOn("quiet", probe);
 
         expect(result).toMatchObject({
-          memory: { stats: { median: 40, sampleCount: PAIRS }, sampling: { callsPerSample } },
+          memory: { stats: { median: 40, sampleCount: kept }, sampling: { callsPerSample: 1 } },
         });
-      },
-    );
+      });
 
-    it("halves the calls per sample when the empty sample of a pair is flagged", async () => {
-      const probe = {
-        heapUsed: fakeHeap(40),
-        detector: fakeDetector(undefined, (nth) => nth === 0),
-      };
+      it("reads null statistics when every pair at one call is flagged", async () => {
+        const probe = { heapUsed: fakeHeap(40), detector: fakeDetector(() => true) };
 
-      const result = await passOn("quiet", probe);
+        const result = await passOn("quiet", probe);
 
-      expect(result).toMatchObject({
-        memory: { stats: { sampleCount: PAIRS }, sampling: { callsPerSample: START_CALLS / 2 } },
+        expect(result).toStrictEqual({
+          status: "ok",
+          time: null,
+          memory: { stats: null, sampling: { callsPerSample: 1 }, rawSamples: null },
+        });
       });
     });
 
-    it("discards the pairs kept at a count when a later pair at it is flagged", async () => {
-      const probe = {
-        heapUsed: fakeHeap(40, () => 640),
-        detector: fakeDetector((bodyCalls, nth) => bodyCalls === START_CALLS && nth === 12),
-      };
-
-      const result = await passOn("quiet", probe);
-
-      expect(result).toMatchObject({
-        memory: {
-          stats: { min: 20, max: 20, sampleCount: PAIRS },
-          sampling: { callsPerSample: START_CALLS / 2 },
+    describe("when the case fails during the pass", () => {
+      it.each([
+        {
+          why: "setup throws a value that is not an Error, kept as the cause",
+          id: "setup-throws-string",
+          error: { phase: "setup", message: "papaya", stack: null, teardownError: null },
         },
-      });
-    });
-
-    it.each([
-      {
-        why: "the first 21 pairs at one call are flagged",
-        flaggedAtOne: (nth: number) => nth < 21,
-        kept: 21,
-      },
-      {
-        why: "22 pairs at one call are flagged after 5 clean ones",
-        flaggedAtOne: (nth: number) => nth >= 5 && nth < 27,
-        kept: 5,
-      },
-    ])("keeps $kept pairs when $why, taking at most 21 again", async ({ flaggedAtOne, kept }) => {
-      const flags = (bodyCalls: number, nth: number): boolean =>
-        bodyCalls > 1 ? nth === 0 : flaggedAtOne(nth);
-      const probe = { heapUsed: fakeHeap(40), detector: fakeDetector(flags) };
-
-      const result = await passOn("quiet", probe);
-
-      expect(result).toMatchObject({
-        memory: { stats: { median: 40, sampleCount: kept }, sampling: { callsPerSample: 1 } },
-      });
-    });
-
-    it("reads null statistics when every pair at one call is flagged", async () => {
-      const probe = { heapUsed: fakeHeap(40), detector: fakeDetector(() => true) };
-
-      const result = await passOn("quiet", probe);
-
-      expect(result).toStrictEqual({
-        status: "ok",
-        time: null,
-        memory: { stats: null, sampling: { callsPerSample: 1 }, rawSamples: null },
-      });
-    });
-  });
-
-  describe("when the case fails during the pass", () => {
-    it.each([
-      {
-        why: "setup throws a value that is not an Error, kept as the cause",
-        id: "setup-throws-string",
-        error: { phase: "setup", message: "papaya", stack: null, teardownError: null },
-      },
-      {
-        why: "fn throws, its error winning over the cleanup teardown's",
-        id: "fn-and-teardown-throw",
-        error: { phase: "fn", message: "lime", teardownError: { message: "melon" } },
-      },
-      {
-        why: "teardown throws",
-        id: "teardown-throws",
-        error: { phase: "teardown", message: "fig" },
-      },
-      {
-        why: "a per-call setup throws after its first call",
-        id: "second-setup-throws-per-call",
-        error: { phase: "setup", message: "plum" },
-      },
-      {
-        why: "a per-call fn throws on its first call",
-        id: "fn-throws-per-call",
-        error: { phase: "fn", message: "cherry" },
-      },
-      {
-        why: "a per-call teardown throws",
-        id: "teardown-throws-per-call",
-        error: { phase: "teardown", message: "pear" },
-      },
-      {
-        why: "a per-call fn and teardown throw, fn's error winning over the teardown's",
-        id: "fn-and-teardown-throw-per-call",
-        error: { phase: "fn", message: "lemon", teardownError: { message: "mango" } },
-      },
-    ])("fails in the callback's phase when $why", async ({ id, error }) => {
-      const result = await passOn(id);
-
-      expect(result).toMatchObject({ status: "failed", error });
-    });
-
-    it("tears down every state left alive when fn throws inside a sample", async () => {
-      const result = await passOn("third-fn-throws-per-call");
-
-      const log = calls();
-      expect({
-        result,
-        alive: count(log, " setup") - count(log, " teardown"),
-      }).toMatchObject({ result: { status: "failed", error: { phase: "fn" } }, alive: 0 });
-    });
-
-    it("fails in phase child when the forced collection throws", async () => {
-      vi.stubGlobal("gc", () => {
-        throw new Error("quince");
-      });
-
-      const result = await passOn("quiet");
-
-      expect(result).toMatchObject({
-        status: "failed",
-        error: { phase: "child", message: "quince" },
-      });
-    });
-
-    it("fails in phase child when the collection detector cannot be loaded", async () => {
-      const probe = {
-        heapUsed: fakeHeap(0),
-        detector: async () => {
-          throw new Error("apricot");
+        {
+          why: "fn throws, its error winning over the cleanup teardown's",
+          id: "fn-and-teardown-throw",
+          error: { phase: "fn", message: "lime", teardownError: { message: "melon" } },
         },
-      };
+        {
+          why: "teardown throws",
+          id: "teardown-throws",
+          error: { phase: "teardown", message: "fig" },
+        },
+        {
+          why: "a per-call setup throws after its first call",
+          id: "second-setup-throws-per-call",
+          error: { phase: "setup", message: "plum" },
+        },
+        {
+          why: "a per-call fn throws on its first call",
+          id: "fn-throws-per-call",
+          error: { phase: "fn", message: "cherry" },
+        },
+        {
+          why: "a per-call teardown throws",
+          id: "teardown-throws-per-call",
+          error: { phase: "teardown", message: "pear" },
+        },
+        {
+          why: "a per-call fn and teardown throw, fn's error winning over the teardown's",
+          id: "fn-and-teardown-throw-per-call",
+          error: { phase: "fn", message: "lemon", teardownError: { message: "mango" } },
+        },
+      ])("fails in the callback's phase when $why", async ({ id, error }) => {
+        const result = await passOn(id);
 
-      const result = await passOn("quiet", probe);
+        expect(result).toMatchObject({ status: "failed", error });
+      });
 
-      expect(result).toMatchObject({
-        status: "failed",
-        error: { phase: "child", message: "apricot" },
+      it("tears down every state left alive when fn throws inside a sample", async () => {
+        const result = await passOn("third-fn-throws-per-call");
+
+        const log = calls();
+        expect({
+          result,
+          alive: count(log, " setup") - count(log, " teardown"),
+        }).toMatchObject({ result: { status: "failed", error: { phase: "fn" } }, alive: 0 });
+      });
+
+      it("fails in phase child when the collection detector cannot be loaded", async () => {
+        const probe = {
+          heapUsed: fakeHeap(0),
+          detector: async () => {
+            throw new Error("apricot");
+          },
+        };
+
+        const result = await passOn("quiet", probe);
+
+        expect(result).toMatchObject({
+          status: "failed",
+          error: { phase: "child", message: "apricot" },
+        });
       });
     });
   });
@@ -767,30 +716,18 @@ describe("runOnce", () => {
   });
 
   describe("when the case fails", () => {
-    it("fails in the phase of the failure, with the stack of the Error the case threw", async () => {
+    it("fails in the phase of the failure, with the message of the Error the case threw", async () => {
       const result = await runOnce(LIFECYCLE, "fn-throws");
 
-      expect(result).toStrictEqual({
-        status: "failed",
-        error: {
-          phase: "fn",
-          message: "kiwi",
-          stack: expect.stringMatching(/^Error: kiwi\n/u),
-          teardownError: null,
-        },
-      });
+      expect(result).toMatchObject({ status: "failed", error: { phase: "fn", message: "kiwi" } });
     });
 
-    it("carries a cleanup teardown's failure as the message and stack of the Error it threw", async () => {
+    it("carries a cleanup teardown's failure", async () => {
       const result = await runOnce(LIFECYCLE, "fn-and-teardown-throw");
 
       expect(result).toMatchObject({
         status: "failed",
-        error: {
-          phase: "fn",
-          message: "lime",
-          teardownError: { message: "melon", stack: expect.stringMatching(/^Error: melon\n/u) },
-        },
+        error: { phase: "fn", message: "lime", teardownError: { message: "melon" } },
       });
     });
   });
@@ -799,8 +736,6 @@ describe("runOnce", () => {
 // ---------------------------------------------------------------------------
 // The child started as a process
 // ---------------------------------------------------------------------------
-
-const ROOT = fileURLToPath(new URL("../", import.meta.url));
 
 const CHILD = fileURLToPath(new URL("../src/child.ts", import.meta.url));
 

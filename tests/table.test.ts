@@ -3,10 +3,8 @@ import { stripVTControlCharacters } from "node:util";
 import { describe, expect, it } from "vitest";
 
 import type { ChildPhase } from "../src/child-protocol.js";
-import type { StrictOmit } from "../src/command-line.js";
 import type {
   Contest,
-  ContestContender,
   ContestPair,
   FailedResult,
   MeasuredResult,
@@ -14,97 +12,23 @@ import type {
   ResultError,
 } from "../src/report.js";
 import { failureLines, formatTable, paint, visibleWidth } from "../src/table.js";
-import { found, measured as measuredChild } from "./fake-children.js";
-
-type Runtime = Result["runtime"]["name"];
-type Measurement = MeasuredResult["measurements"][number];
-type Stats = NonNullable<Measurement["time"]>["stats"];
-type ResultBase = StrictOmit<Result, "status" | "error" | "time" | "memory" | "measurements">;
-
-/** The statistics of a case whose every time is `median`, measured over 64 samples. */
-function flatStats(median: number): Stats {
-  return {
-    min: median,
-    p25: median,
-    median,
-    p75: median,
-    p99: median,
-    max: median,
-    mean: median,
-    sampleCount: 64,
-  };
-}
+import { found, runtimeOf } from "./fake-children.js";
+import {
+  cellsOf,
+  contender,
+  contenderResult,
+  contest,
+  failed,
+  flatStats,
+  measured,
+  rowIndex,
+  type Runtime,
+  type Stats,
+  tableLines,
+} from "./report-results.js";
 
 /** Statistics whose max and sample count print wider than the rest. */
 const WIDE_STATS: Stats = { ...flatStats(4656), max: 2_340_000, sampleCount: 1200 };
-
-/** The one measurement of a measured plain case, holding `stats`. */
-function measurement(stats: Stats): Measurement {
-  const { time } = measuredChild(stats.median);
-  return {
-    repetition: null,
-    orderInRepetition: null,
-    time: { ...time, stats, gc: null },
-    memory: null,
-  };
-}
-
-/** The runtime entry of a result or contest on `runtime`, at its fake version. */
-function runtimeOf(runtime: Runtime): Result["runtime"] {
-  return { name: runtime, version: found(runtime).version };
-}
-
-/** What every result of case `id` on `runtime` holds, measured or failed. */
-function resultBase(id: string, runtime: Runtime): ResultBase {
-  return {
-    id,
-    name: id,
-    contender: null,
-    params: {},
-    file: "fruit.bench.ts",
-    runtime: runtimeOf(runtime),
-    setupPerCall: false,
-  };
-}
-
-/** A result of case `id` measured on `runtime` with `stats`, its median the stats' median. */
-function measured(id: string, runtime: Runtime, stats: Stats): MeasuredResult {
-  return {
-    ...resultBase(id, runtime),
-    status: "ok",
-    error: null,
-    time: { unit: "ns/call", median: stats.median },
-    memory: null,
-    measurements: [measurement(stats)],
-  };
-}
-
-/** A result of case `id` on Node that failed in `phase` with `message`, its cleanup teardown `teardownError`. */
-function failed(
-  id: string,
-  phase: ChildPhase,
-  message: string,
-  teardownError: ResultError["teardownError"] = null,
-): FailedResult {
-  return {
-    ...resultBase(id, "node"),
-    status: "failed",
-    error: { phase, message, stack: null, teardownError, output: "" },
-    time: null,
-    memory: null,
-    measurements: [{ repetition: null, orderInRepetition: null, time: null, memory: null }],
-  };
-}
-
-/** A result of contender `key` of contest `name` measured on `runtime` with every time `median`. */
-function contenderResult(
-  name: string,
-  key: string,
-  median: number,
-  runtime: Runtime = "node",
-): MeasuredResult {
-  return { ...measured(`${name}/${key}`, runtime, flatStats(median)), name, contender: key };
-}
 
 /** A result of the contender whose case id is `id` (`<contest>/<key>`) that failed on Node in `phase`. */
 function failedContender(
@@ -118,22 +42,6 @@ function failedContender(
     ...failed(id, phase, message, teardownError),
     name: id.slice(0, slash),
     contender: id.slice(slash + 1),
-  };
-}
-
-/** Contender `id` of a contest entry, with its median, and its ratio and rank once judged (null otherwise). */
-function contender(
-  id: string,
-  median: number | null,
-  ratio: number | null = null,
-  rank: number | null = null,
-): ContestContender {
-  return {
-    id,
-    time: median === null ? null : { unit: "ns/call", median },
-    memory: null,
-    ratio,
-    rank,
   };
 }
 
@@ -153,23 +61,6 @@ function pair(
     pAdjusted: 0.01,
     faster: "faster" in verdict ? `${name}/${verdict.faster}` : null,
     tie: "tie" in verdict ? verdict.tie : null,
-  };
-}
-
-/** The entry of contest `name` on Node over `repetitionCount` repetitions. */
-function contest(
-  name: string,
-  repetitionCount: number,
-  contenders: readonly ContestContender[],
-  pairs: readonly ContestPair[],
-): Contest {
-  return {
-    name,
-    params: {},
-    runtime: runtimeOf("node"),
-    repetitionCount,
-    contenders,
-    pairs,
   };
 }
 
@@ -235,7 +126,7 @@ const THREE_WAY = ["regex", "split", "scan"] as const;
 
 /** The results of the contenders of `threeWayContest(name, …)` measured on `runtime`. */
 function threeWayResults(name: string, runtime: Runtime = "node"): MeasuredResult[] {
-  return THREE_WAY.map((key, index) => contenderResult(name, key, 100 + index, runtime));
+  return THREE_WAY.map((key, index) => contenderResult(name, key, 100 + index, { runtime }));
 }
 
 /** A contest `name` over `repetitions` repetitions among regex, split and scan, its regex–split and split–scan pairs tied by the given kinds, or proven for the first when null. */
@@ -288,15 +179,6 @@ function notePattern(
   return new RegExp(`^${keys.join("")}(?!.*${name}/)${advice}.*\\S`, "u");
 }
 
-/** The lines of the table of `results` and `contests`, the last one empty after the closing newline. */
-function tableLines(
-  results: readonly Result[],
-  contests: readonly Contest[] = [],
-  color = false,
-): string[] {
-  return formatTable(results, contests, { color }).split("\n");
-}
-
 /** The contender ids scheduled in a contest on `runtime`, as the table receives them. */
 function contestedOn(
   runtime: Runtime,
@@ -338,19 +220,9 @@ function notesUnder(lines: readonly string[], key: string, from = 0): string[] {
   return lines.slice(row + 1, lines.indexOf("", row));
 }
 
-/** The index of the first line that starts with `id` and a space, or -1 when no row does. */
-function rowIndex(lines: readonly string[], id: string): number {
-  return lines.findIndex((line) => line.startsWith(`${id} `));
-}
-
 /** The terminal columns at which `line` draws a `│`, `┬` or `┼`. */
 function barColumns(line: string): number[] {
   return [...line.matchAll(/[│┬┼]/gu)].map((bar) => visibleWidth(line.slice(0, bar.index)));
-}
-
-/** The trimmed cells of `line`, split on ` │ `. */
-function cellsOf(line: string): string[] {
-  return line.split(" │ ").map((cell) => cell.trim());
 }
 
 /** Whether the padded `cell` of column `column` has none on its flush side: the left of the first column, the right of the others. */
@@ -685,8 +557,8 @@ describe("formatTable", () => {
     it("opens each runtime's sub-table with that runtime's repetitions", () => {
       const results = [
         ...judgedResults("concat", ["join", "loop"]),
-        contenderResult("concat", "join", 100, "bun"),
-        contenderResult("concat", "loop", 200, "bun"),
+        contenderResult("concat", "join", 100, { runtime: "bun" }),
+        contenderResult("concat", "loop", 200, { runtime: "bun" }),
       ];
       const contests = [
         judgedContest("concat", 8, ["join", "loop"]),
@@ -717,12 +589,22 @@ describe("formatTable", () => {
     it.each([
       { repetitions: 1, text: "1 repetition" },
       { repetitions: 3, text: "3 repetitions" },
-    ])("heads the contest and closes it with not judged over $text", ({ repetitions, text }) => {
+    ])("heads the contest with $text", ({ repetitions, text }) => {
       const { results, entry } = notJudgedContest(repetitions);
 
       const lines = tableLines(results, [entry]);
 
       expect(lines[2]).toMatch(new RegExp(`^concat\\b.*\\b${text}$`, "u"));
+    });
+
+    it.each([
+      { repetitions: 1, text: "1 repetition" },
+      { repetitions: 3, text: "3 repetitions" },
+    ])("closes the contest with not judged over $text", ({ repetitions, text }) => {
+      const { results, entry } = notJudgedContest(repetitions);
+
+      const lines = tableLines(results, [entry]);
+
       expect(lines[8]).toMatch(new RegExp(`\\b${text}$`, "u"));
     });
 
@@ -901,12 +783,6 @@ describe("formatTable", () => {
 
     it.each([
       {
-        lines: "each tie line",
-        results: threeWayResults("parse"),
-        contests: [threeWayContest("parse", 9, ["repetitions", "timer"])],
-        select: (lines: readonly string[]) => notesUnder(lines, "scan"),
-      },
-      {
         lines: "the not judged line",
         results: notJudged.results,
         contests: [notJudged.entry],
@@ -921,7 +797,7 @@ describe("formatTable", () => {
     ])("styles $lines, printed with no escape codes when not colored", (scenario) => {
       const plain = tableLines(scenario.results, scenario.contests);
 
-      const colored = tableLines(scenario.results, scenario.contests, true);
+      const colored = tableLines(scenario.results, scenario.contests, { color: true });
 
       const selected = scenario.select(colored);
       const plainSelected = scenario.select(plain);

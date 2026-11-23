@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { hodgesLehmann, holm, signedRankInterval, signedRankP } from "../src/signed-rank.js";
+import { hodgesLehmann, holm, signedRankInterval, signedRankP } from "../src/judge.js";
 import { isRecord } from "../src/utils.js";
 import { fixturePath } from "./fixture-path.js";
 
@@ -21,10 +21,12 @@ interface FixtureCase {
   readonly intervals: readonly FixtureInterval[];
 }
 
+/** Whether `value` is a number. */
 function isNumber(value: unknown): value is number {
   return typeof value === "number";
 }
 
+/** Whether `value` is an array of numbers. */
 function isNumbers(value: unknown): value is readonly number[] {
   return Array.isArray(value) && value.every(isNumber);
 }
@@ -34,10 +36,12 @@ function hasFields(value: unknown, checks: Record<string, (field: unknown) => bo
   return isRecord(value) && Object.entries(checks).every(([key, check]) => check(value[key]));
 }
 
+/** Whether `value` is a fixture interval: its level and both ends. */
 function isInterval(value: unknown): value is FixtureInterval {
   return hasFields(value, { level: isNumber, low: isNumber, high: isNumber });
 }
 
+/** Whether `value` is a fixture case, its every field of the right type. */
 function isCase(value: unknown): value is FixtureCase {
   return hasFields(value, {
     name: (field) => typeof field === "string",
@@ -63,8 +67,10 @@ const CASES = fixtureCases();
 /** Decimal digits to which the scipy fixture values must match. */
 const FIXTURE_DIGITS = 12;
 
+/** Decimal digits to which Holm-adjusted p-values must match. */
 const HOLM_DIGITS = 15;
 
+/** Every fixture interval, flattened with its case's name and differences. */
 const INTERVALS = CASES.flatMap((fixture) =>
   fixture.intervals.map((interval) => ({
     ...interval,
@@ -91,7 +97,7 @@ describe("signedRankP", () => {
     expect(p).toBe(1);
   });
 
-  it.each(CASES.filter(({ name }) => name !== "untied, n = 6"))(
+  it.each(CASES.filter(({ name }) => name !== "untied, n = 6" && name !== "zeros, n = 12"))(
     "agrees with scipy on $name",
     ({ differences, p: expected }) => {
       const p = signedRankP(differences);

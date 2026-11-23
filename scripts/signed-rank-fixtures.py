@@ -70,7 +70,18 @@ def untied_cdf(n: int, c: int) -> Fraction:
 
 
 def scipy_untied_p(n: int, c: int) -> float:
-    """scipy's exact two-sided p for ranks 1..n whose negative rank sum is c."""
+    """Returns scipy's exact two-sided p for ranks 1..n whose negative rank sum is c.
+
+    Args:
+        n: The number of ranks.
+        c: The negative rank sum.
+
+    Returns:
+        scipy's exact two-sided `wilcoxon` p value for those signed ranks.
+
+    Raises:
+        AssertionError: When no subset of ranks 1..n sums to c.
+    """
     values = list(range(1, n + 1))
     remaining = c
     for r in range(n, 0, -1):
@@ -116,15 +127,14 @@ def critical(n: int, level: float) -> int:
 def p_value(d: list[float]) -> float:
     """Returns the two-sided exact signed-rank p value with zeros dropped.
 
-    All-zero input gives 1.0. Distinct magnitudes use scipy's exact `wilcoxon`; tied magnitudes use
-    an exact `permutation_test`. With distinct magnitudes and more than `SCIPY_EXACT_MAX_N`
-    differences, an assertion keeps p above `MIN_P_PAST_EXACT_MAX_N`.
+    Distinct magnitudes use scipy's exact `wilcoxon`; tied magnitudes use an exact
+    `permutation_test`.
 
     Args:
         d: The differences.
 
     Returns:
-        The two-sided exact p value.
+        The two-sided exact p value, or 1.0 when every difference is zero.
 
     Raises:
         AssertionError: When n is past `SCIPY_EXACT_MAX_N` and scipy's p is not above
@@ -155,7 +165,20 @@ def p_value(d: list[float]) -> float:
 
 
 def case(name: str, d: list[float]) -> Case:
-    """Builds one fixture case: its p value, Hodges-Lehmann estimate and exact intervals."""
+    """Builds one fixture case: its p value, Hodges-Lehmann estimate and exact intervals.
+
+    Args:
+        name: The case's name.
+        d: The case's differences.
+
+    Returns:
+        The case, with an interval for each level in `LEVELS` that has an exact one at this n.
+
+    Raises:
+        AssertionError: When scipy's exact p value disagrees with the untied tail at a critical
+            value, or when n is past `SCIPY_EXACT_MAX_N` and scipy's p is not above
+            `MIN_P_PAST_EXACT_MAX_N`.
+    """
     w = walsh(d)
     m = len(w)
     intervals: list[Interval] = []

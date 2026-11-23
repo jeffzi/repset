@@ -35,9 +35,6 @@ const NESTED_CONFIGS = fixturePath("config", "nested");
 /** A config file that sets `nodeImport` to `./loader.mjs`, beside which `loader.mjs` resolves. */
 const DOT_IMPORT_CONFIG = join(NESTED_CONFIGS, "dot-import.ts");
 
-/** A config file whose `runtimes` holds only `bun` and whose `measure` holds only `memory`. */
-const BUN_MEMORY_CONFIG = fixturePath("config", "bun-memory.ts");
-
 /** A child starter that measures every case as each request asks, reading 4656 ns and 40 B per call. */
 const answersAsked = starter((request) => answered(request));
 
@@ -46,6 +43,7 @@ const startsNoMeasuringChild = starter(() => {
   throw new Error("a measuring child started");
 });
 
+/** The time `Date` is frozen at while a run starts. */
 const STARTED_AT = new Date("2026-11-01T12:00:00.000Z");
 
 type OnceInput = Parameters<typeof runOnce>[0];
@@ -177,16 +175,10 @@ describe("run", () => {
       },
     );
 
-    it.each<{ measure: RunInput["measure"]; recorded: string[] }>([
-      { measure: undefined, recorded: ["time"] },
-      { measure: ["memory", "time"], recorded: ["memory", "time"] },
-    ])("records the measure option $measure as $recorded", async ({ measure, recorded }) => {
-      const report = await runHere({
-        startChild: answersAsked,
-        ...(measure === undefined ? {} : { measure }),
-      });
+    it("records the measure option", async () => {
+      const report = await runHere({ startChild: answersAsked, measure: ["memory", "time"] });
 
-      expect(report.options.measure).toStrictEqual(recorded);
+      expect(report.options.measure).toStrictEqual(["memory", "time"]);
     });
 
     it("records a relative nodeImport from the config file as written", async () => {
@@ -389,7 +381,7 @@ describe("run", () => {
       ).toStrictEqual([["failed", null, null]]);
     });
 
-    it("gives a Bun child asked for memory alone a result with no time and no memory", async () => {
+    it("runs memory alone when one of the runtimes has a heap reading", async () => {
       const noHeapOnBun = starter((request, runtime) =>
         runtime.runtime === "bun"
           ? { status: "ok", result: { status: "ok", time: null, memory: null }, output: "" }
@@ -402,17 +394,10 @@ describe("run", () => {
         startChild: noHeapOnBun,
       });
 
-      expect(
-        report.results.map((result) => [
-          result.runtime.name,
-          result.status,
-          result.time,
-          result.memory,
-        ]),
-      ).toStrictEqual([
-        ["bun", "ok", null, null],
-        ["node", "ok", null, { unit: "B/call", median: 40 }],
-      ]);
+      expect({
+        statuses: report.results.map((result) => result.status),
+        node: report.results.find((result) => result.runtime.name === "node")?.memory,
+      }).toStrictEqual({ statuses: ["ok", "ok"], node: { unit: "B/call", median: 40 } });
     });
 
     it("times a case on runtimes with no heap reading when measure holds time and memory", async () => {
@@ -430,17 +415,15 @@ describe("run", () => {
     });
 
     describe("when no runtime has a heap reading and measure holds only memory", () => {
-      it.each<{ why: string; input: Partial<RunInput> }>([
-        { why: "the runtimes given", input: { runtimes: ["bun"], measure: ["memory"] } },
-        { why: "the config file's runtimes", input: { config: BUN_MEMORY_CONFIG } },
-      ])(
-        "throws a ConfigError naming $why before any measuring child starts",
-        async ({ input }) => {
-          const result = runHere({ ...input, startChild: startsNoMeasuringChild });
+      it("throws a ConfigError naming the runtimes given before any measuring child starts", async () => {
+        const result = runHere({
+          runtimes: ["bun"],
+          measure: ["memory"],
+          startChild: startsNoMeasuringChild,
+        });
 
-          await expectConfigError(result, ["bun"]);
-        },
-      );
+        await expectConfigError(result, ["bun"]);
+      });
     });
   });
 

@@ -30,6 +30,11 @@ export function found(runtime: Runtime): FoundRuntime {
   };
 }
 
+/** The runtime entry a report records for `runtime`, as the fake lookup finds it. */
+export function runtimeOf(runtime: Runtime): { name: Runtime; version: string } {
+  return { name: runtime, version: found(runtime).version };
+}
+
 /** A runtime lookup that finds every runtime, as {@link found} describes it. */
 export const findAny: FindRuntime = async (runtime) => found(runtime);
 

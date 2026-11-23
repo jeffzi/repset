@@ -6,6 +6,8 @@
 import { stripVTControlCharacters, styleText } from "node:util";
 
 import type { ChildError } from "./child-protocol.js";
+import { contestOf } from "./judge.js";
+import type { Runtime } from "./measure/runtime.js";
 import type { Measure } from "./options.js";
 import type { Contest, ContestPair, FailedResult, MeasuredResult, Result } from "./report.js";
 import { GRAPHEMES, valueAt } from "./utils.js";
@@ -95,14 +97,14 @@ function padTo(text: string, width: number, align: Align): string {
   return align === "left" ? `${text}${fill}` : `${fill}${text}`;
 }
 
-/** Prints `value` with three significant digits, never in exponent form. */
+/** Formats `value` with three significant digits, never in exponent form. */
 function significant(value: number): string {
   const text = value.toPrecision(SIGNIFICANT_DIGITS);
   return text.includes("e") ? String(Number(text)) : text;
 }
 
 /**
- * Prints `amount` in the first of `units` that keeps three significant digits, up to the last.
+ * Formats `amount` in the first of `units` that keeps three significant digits, up to the last.
  *
  * @param amount - The amount, in the first of `units`; negative keeps its sign.
  * @param units - The units from the smallest up, each {@link UNIT_STEP} of the one before.
@@ -119,7 +121,7 @@ function formatIn(amount: number, units: readonly string[]): string {
   return `${significant(value)} ${units[unit] ?? ""}`;
 }
 
-/** Prints a time in nanoseconds in the unit that keeps three significant digits, up to seconds. */
+/** Formats a time in nanoseconds in the unit that keeps three significant digits, up to seconds. */
 function formatTime(ns: number): string {
   return formatIn(ns, TIME_UNITS);
 }
@@ -481,14 +483,14 @@ function contestLines(
  * opened where the first of them ran, and the plain cases between them in blocks of their own.
  *
  * @param results - The runtime's results, in run order.
- * @param contestOf - The contest entry of each contender's case id on this runtime.
+ * @param contestById - The contest entry of each contender's case id on this runtime.
  * @returns The blocks, in run order.
  */
-function blocksOf(results: readonly Result[], contestOf: ReadonlyMap<string, Contest>): Block[] {
+function blocksOf(results: readonly Result[], contestById: ReadonlyMap<string, Contest>): Block[] {
   const blocks: Block[] = [];
   const contestBlocks = new Map<Contest, Block>();
   for (const result of results) {
-    const contest = contestOf.get(result.id);
+    const contest = contestById.get(result.id);
     if (contest === undefined) {
       const last = blocks.at(-1);
       if (last?.contest === null) last.results.push(result);
@@ -546,8 +548,6 @@ function contestFooter(contests: readonly Contest[]): string[] {
   return [contests.some(twoFinished) ? NONE_JUDGED_FOOTER : NONE_FINISHED_FOOTER];
 }
 
-type Runtime = Result["runtime"]["name"];
-
 /** Per runtime, the case ids of the contenders scheduled in a contest there. */
 export type ScheduledContests = ReadonlyMap<Runtime, ReadonlySet<string>>;
 
@@ -569,27 +569,9 @@ function stoppedContests(
   const entered = new Set(finished.flatMap(({ contenders }) => contenders.map(({ id }) => id)));
   const stopped = results.filter(({ id }) => scheduled.has(id) && !entered.has(id));
   const byBenchmark = Map.groupBy(stopped, ({ file, name }) => JSON.stringify([file, name]));
-  return [...byBenchmark.values()].map((contenders) => {
-    const { name, runtime } = valueAt(contenders, 0);
-    return {
-      name,
-      params: {},
-      runtime,
-      repetitionCount: Math.max(
-        ...contenders.flatMap(({ measurements }) =>
-          measurements.flatMap(({ repetition }) => (repetition === null ? [] : [repetition])),
-        ),
-      ),
-      contenders: contenders.map(({ id }) => ({
-        id,
-        time: null,
-        memory: null,
-        ratio: null,
-        rank: null,
-      })),
-      pairs: [],
-    };
-  });
+  return [...byBenchmark.values()].map((contenders) =>
+    contestOf([valueAt(contenders, 0), ...contenders.slice(1)]),
+  );
 }
 
 /**
@@ -625,12 +607,12 @@ export function formatTable(
       finished,
       contested?.get(runtime) ?? new Set<string>(),
     );
-    const contestOf = new Map(
+    const contestById = new Map(
       [...finished, ...stopped].flatMap((contest) =>
         contest.contenders.map(({ id }) => [id, contest] as const),
       ),
     );
-    return { blocks: blocksOf(section, contestOf), stopped };
+    return { blocks: blocksOf(section, contestById), stopped };
   });
   const sections = ran.map(({ blocks }) => blocks);
   const shown = [...contests, ...ran.flatMap(({ stopped }) => stopped)];

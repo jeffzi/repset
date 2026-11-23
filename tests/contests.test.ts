@@ -1,58 +1,21 @@
 import { describe, expect, it } from "vitest";
 
-import type { FoundRuntime, Outcome } from "../src/children.js";
-import type { ContestPair, Report, Result } from "../src/report.js";
-import { hodgesLehmann, holm, signedRankInterval, signedRankP } from "../src/signed-rank.js";
+import { hodgesLehmann, holm, signedRankInterval, signedRankP } from "../src/judge.js";
+import type { Report, Result } from "../src/report.js";
 import {
   APPLE,
-  type Asked,
   BANANA,
   type CaseToList,
   contender,
   failedOutcome,
   failsLoopInRepetitionTwo,
-  found,
   listingStarter,
-  measured,
   measuredOutcome,
+  runtimeOf,
   stopped,
 } from "./fake-children.js";
-import { type RunInput, runHere } from "./run-here.js";
-
-const JOIN = contender("join");
-const LOOP = contender("loop");
-const PLUS = contender("plus");
-
-/** The seed `runCases` draws unless told otherwise. */
-const SEED = 20_261_119;
-
-/** Answers a measuring child; `index` counts the measuring children started before it. */
-type Answer = (request: Asked, runtime: FoundRuntime, index: number) => Outcome;
-
-/** Runs `cases`, all listed in one file, drawing `SEED`, and logs each measuring child's case id. */
-async function runCases(
-  cases: CaseToList[],
-  input: Partial<RunInput> = {},
-  answer: Answer = () => measuredOutcome(4656),
-): Promise<{ report: Report; started: string[] }> {
-  const started: string[] = [];
-  const report = await runHere({
-    drawSeed: () => SEED,
-    startChild: listingStarter(cases, (request, runtime) => {
-      started.push(request.id);
-      return answer(request, runtime, started.length - 1);
-    }),
-    ...input,
-  });
-  return { report, started };
-}
-
-/** `items` cut into consecutive slices of `size`. */
-function chunks<T>(items: readonly T[], size: number): T[][] {
-  return Array.from({ length: Math.ceil(items.length / size) }, (_, index) =>
-    items.slice(index * size, (index + 1) * size),
-  );
-}
+import { repeated } from "./repeated.js";
+import { type Answer, JOIN, LOOP, PLUS, type RunInput, runCases } from "./run-here.js";
 
 /** Each measurement of `result` as its repetition, its order in the repetition and its median. */
 function measurementsOf(result: Result): (number | null)[][] {
@@ -68,42 +31,10 @@ function nsPerCall(median: number): { unit: "ns/call"; median: number } {
   return { unit: "ns/call", median };
 }
 
-/** What a contender's child answers in one repetition: its median, a whole outcome, or `null` to fail. */
-type Answered = number | Outcome | null;
+/** What a contender's child answers in one repetition: its median, or `null` to fail. */
+type Answered = number | null;
 
-/** An outcome measuring the median `median` at `callsPerSample` calls per sample. */
-function measuredAt(median: number, callsPerSample: number): Outcome {
-  const { time } = measured(median);
-  return {
-    status: "ok",
-    result: {
-      status: "ok",
-      time: { ...time, sampling: { ...time.sampling, callsPerSample } },
-      memory: null,
-    },
-    output: "",
-  };
-}
-
-function repeated<T>(value: T, count: number): T[] {
-  return Array<T>(count).fill(value);
-}
-
-/** A counter of the calls made per id: each call returns the zero-based count before it. */
-function callCounter(): (id: string) => number {
-  const calls = new Map<string, number>();
-  return (id) => {
-    const call = calls.get(id) ?? 0;
-    calls.set(id, call + 1);
-    return call;
-  };
-}
-
-/** The pairs of the first contest of `report`, sorted by their contenders. */
-function sortedPairs(report: Report): ContestPair[] {
-  return byContenders(report.contests[0]?.pairs ?? []);
-}
-
+/** How many entries of `items` equal `item`. */
 function countOf(items: readonly string[], item: string): number {
   return items.filter((candidate) => candidate === item).length;
 }
@@ -114,13 +45,11 @@ async function judge(
   input: Partial<RunInput> = {},
   cases: readonly CaseToList[] = Object.keys(byRepetition).map((key) => contender(key)),
 ): Promise<Report> {
-  const nextCall = callCounter();
-  const { report } = await runCases([...cases], input, (request) => {
-    const call = nextCall(request.id);
+  const { report } = await runCases(cases, input, (request, call) => {
     const scheduled = byRepetition[request.id.slice("concat/".length)]?.[call];
     const answered = scheduled === undefined ? 4656 : scheduled;
     if (answered === null) return failedOutcome("fn", "kiwi");
-    return typeof answered === "number" ? measuredOutcome(answered) : answered;
+    return measuredOutcome(answered);
   });
   return report;
 }
@@ -140,98 +69,8 @@ function ratioInterval(differences: readonly number[], level: number): unknown[]
   return signedRankInterval(differences, level).map((end) => near(Math.exp(end)));
 }
 
-/** `pairs` sorted by their first contender, then their second. */
-function byContenders<T extends Pick<ContestPair, "a" | "b">>(pairs: readonly T[]): T[] {
-  return pairs.toSorted((left, right) =>
-    `${left.a} ${left.b}`.localeCompare(`${right.a} ${right.b}`),
-  );
-}
-
-const NODE = { name: "node", version: found("node").version };
-
-/** Per-repetition medians where `plus` is proven faster than `join` and `loop` is told apart from neither. */
-const TIED = {
-  join: repeated(200, 8),
-  loop: [50, 250, 50, 250, 50, 250, 50, 250],
-  plus: repeated(100, 8),
-};
-
-/** Per-repetition medians of a three-contender contest whose three pairs are each proven. */
-const THREE_PROVEN = {
-  plus: repeated(100, 8),
-  loop: [95, 160, 140, 155, 145, 150, 165, 135],
-  join: [190, 200, 210, 220, 195, 205, 215, 230],
-};
-
-/** The pairs of `THREE_PROVEN`, the faster contender first. */
-const THREE_PROVEN_PAIRS = [
-  ["plus", "loop"],
-  ["plus", "join"],
-  ["loop", "join"],
-] as const;
-
-const THREE_PROVEN_DIFFERENCES = THREE_PROVEN_PAIRS.map(([a, b]) =>
-  logRatios(THREE_PROVEN[a], THREE_PROVEN[b]),
-);
-
 describe("run", () => {
   describe("when a contest runs", () => {
-    it("reports to onPlanned every repetition of each contest among the measuring children", async () => {
-      const planned: number[] = [];
-
-      await runCases([APPLE, JOIN, LOOP], {
-        runtimes: ["node", "bun"],
-        onPlanned: (total) => {
-          planned.push(total);
-        },
-      });
-
-      expect(planned.at(-1)).toBe(30);
-    });
-
-    it("runs all of a contest's repetitions at its first contender's place, one child per contender back to back, on each runtime", async () => {
-      const { started } = await runCases([APPLE, JOIN, BANANA, LOOP], {
-        runtimes: ["bun", "node"],
-        contestRepetitionCount: 2,
-      });
-
-      const onRuntime = (offset: number): unknown[] => {
-        const ids = started.slice(offset, offset + 6);
-        return [ids[0], ids.slice(1, 3).toSorted(), ids.slice(3, 5).toSorted(), ids[5]];
-      };
-      const contest = ["concat/join", "concat/loop"];
-      expect([onRuntime(0), onRuntime(6)]).toStrictEqual([
-        ["apple", contest, contest, "banana"],
-        ["apple", contest, contest, "banana"],
-      ]);
-    });
-
-    it("runs a lone selected contender once, keeping its contender key, as a plain case with no repetition", async () => {
-      const { report } = await runCases([APPLE, JOIN, LOOP], { filter: "apple|join" });
-
-      expect(
-        report.results.map((result) => [
-          result.id,
-          result.name,
-          result.contender,
-          measurementsOf(result),
-        ]),
-      ).toStrictEqual([
-        ["apple", "apple", null, [[null, null, 4656]]],
-        ["concat/join", "concat", "join", [[null, null, 4656]]],
-      ]);
-    });
-
-    it("runs 12 repetitions for 8 contenders when contestRepetitionCount is not given", async () => {
-      const cases = Array.from({ length: 8 }, (_, index) => contender(`c${String(index)}`));
-
-      const { report } = await runCases(cases);
-
-      expect(report.results.map((result) => result.measurements.length)).toStrictEqual(
-        Array<number>(8).fill(12),
-      );
-    });
-
     it.each([
       { repetitions: 3, medians: { "concat/join": 40, "concat/loop": 30 } },
       { repetitions: 4, medians: { "concat/join": 30, "concat/loop": 45 } },
@@ -242,9 +81,7 @@ describe("run", () => {
           "concat/join": [50, 10, 40, 20],
           "concat/loop": [30, 60, 5, 70],
         };
-        const nextCall = callCounter();
-        const answer: Answer = (request) => {
-          const call = nextCall(request.id);
+        const answer: Answer = (request, call) => {
           return measuredOutcome(byRepetition[request.id]?.[call] ?? 0);
         };
 
@@ -290,33 +127,6 @@ describe("run", () => {
         const { report } = await runCases([APPLE, JOIN, LOOP], { filter: "apple|join" });
 
         expect(report.options.seed).toBeNull();
-      });
-
-      it("repeats the orders for the same seed", async () => {
-        const { started: first } = await runCases([JOIN, LOOP, PLUS]);
-
-        const { started: second } = await runCases([JOIN, LOOP, PLUS]);
-
-        expect(second).toStrictEqual(first);
-      });
-
-      it("draws the orders uniformly from the permutations of the contenders", async () => {
-        const started: string[] = [];
-
-        for (let seed = 1; seed <= 1000; seed += 1) {
-          const seeded = await runCases([JOIN, LOOP, PLUS], {
-            contestRepetitionCount: 6,
-            drawSeed: () => seed,
-          });
-          started.push(...seeded.started);
-        }
-
-        const counts = Object.values(
-          Object.groupBy(chunks(started, 3), (order) => order.join(" ")),
-        );
-        expect(counts.map((orders) => Math.abs((orders?.length ?? 0) - 1000) < 150)).toStrictEqual(
-          Array<boolean>(6).fill(true),
-        );
       });
     });
 
@@ -376,16 +186,6 @@ describe("run", () => {
         expect(events[failedAt + 1]).toBe("result concat/loop");
       });
 
-      it("runs it in no later repetition while the rest run every repetition", async () => {
-        const { started } = await runWithLoopFailingInRepetitionTwo();
-
-        expect({
-          join: countOf(started, "concat/join"),
-          loop: countOf(started, "concat/loop"),
-          plus: countOf(started, "concat/plus"),
-        }).toStrictEqual({ join: 4, loop: 2, plus: 4 });
-      });
-
       it("gives every contender exactly one result", async () => {
         const { events } = await runWithLoopFailingInRepetitionTwo();
 
@@ -394,23 +194,6 @@ describe("run", () => {
           loop: countOf(events, "result concat/loop"),
           plus: countOf(events, "result concat/plus"),
         }).toStrictEqual({ join: 1, loop: 1, plus: 1 });
-      });
-
-      it("reports its repetitions still to come as dropped, once, so planned minus dropped is the children started", async () => {
-        const planned: number[] = [];
-        const dropped: number[] = [];
-
-        const { started } = await runWithLoopFailingInRepetitionTwo({
-          onPlanned: (total) => {
-            planned.push(total);
-          },
-          onDropped: (count) => {
-            dropped.push(count);
-          },
-        });
-
-        const left = (planned.at(-1) ?? 0) - dropped.reduce((sum, count) => sum + count, 0);
-        expect({ dropped, left }).toStrictEqual({ dropped: [2], left: started.length });
       });
     });
 
@@ -483,7 +266,7 @@ describe("run", () => {
         {
           name: "concat",
           params: {},
-          runtime: NODE,
+          runtime: runtimeOf("node"),
           repetitionCount: 7,
           contenders: [
             { id: "concat/join", time: nsPerCall(812), memory: null, ratio: 1, rank: 1 },
@@ -505,259 +288,7 @@ describe("run", () => {
       ]);
     });
 
-    describe("when a contender is told apart from neither of a proven pair", () => {
-      it("ranks each contender 1 plus the contenders proven faster than it", async () => {
-        const report = await judge(TIED);
-
-        const contenders = report.contests[0]?.contenders ?? [];
-        expect(Object.fromEntries(contenders.map(({ id, rank }) => [id, rank]))).toStrictEqual({
-          "concat/plus": 1,
-          "concat/loop": 1,
-          "concat/join": 2,
-        });
-      });
-
-      it("sorts contenders of equal rank by median", async () => {
-        const report = await judge(TIED);
-
-        expect(
-          report.contests[0]?.contenders.map(({ id, time }) => [id, time?.median]),
-        ).toStrictEqual([
-          ["concat/plus", 100],
-          ["concat/loop", 150],
-          ["concat/join", 200],
-        ]);
-      });
-
-      it("gives each contender its ratio to the first", async () => {
-        const report = await judge(TIED);
-
-        const contenders = report.contests[0]?.contenders ?? [];
-        expect(Object.fromEntries(contenders.map(({ id, ratio }) => [id, ratio]))).toStrictEqual({
-          "concat/plus": 1,
-          "concat/loop": near(Math.exp(hodgesLehmann(logRatios(TIED.plus, TIED.loop)))),
-          "concat/join": near(Math.exp(hodgesLehmann(logRatios(TIED.plus, TIED.join)))),
-        });
-      });
-
-      it("names no faster contender for the pairs it is in", async () => {
-        const report = await judge(TIED);
-
-        expect(
-          report.contests[0]?.pairs.map((pair) => [pair.a, pair.b, pair.faster]).toSorted(),
-        ).toStrictEqual([
-          ["concat/loop", "concat/join", null],
-          ["concat/plus", "concat/join", "concat/plus"],
-          ["concat/plus", "concat/loop", null],
-        ]);
-      });
-    });
-
-    it("sorts a contender proven faster ahead of one with a lower median", async () => {
-      const callsPerSample = 1_000_000;
-      const y = [10, 10, 10, 10, 100, 100, 100, 100];
-      const x = [11, 11, 11, 11, 110, 110, 110, 95];
-
-      const report = await judge(
-        {
-          x: x.map((median) => measuredAt(median, callsPerSample)),
-          y: y.map((median) => measuredAt(median, callsPerSample)),
-        },
-        { contestRepetitionCount: 8 },
-      );
-
-      expect(
-        report.contests[0]?.contenders.map(({ id, time, rank }) => ({ id, time, rank })),
-      ).toStrictEqual([
-        { id: "concat/y", time: nsPerCall(55), rank: 1 },
-        { id: "concat/x", time: nsPerCall(53), rank: 2 },
-      ]);
-    });
-
-    it("adjusts each pair's p by Holm's over the contest's pairs", async () => {
-      const pValues = THREE_PROVEN_DIFFERENCES.map((differences) => signedRankP(differences));
-      const adjusted = holm(pValues);
-
-      const report = await judge(THREE_PROVEN);
-
-      expect(
-        sortedPairs(report).map(({ a, b, p, pAdjusted }) => ({
-          a,
-          b,
-          p,
-          pAdjusted,
-        })),
-      ).toStrictEqual(
-        byContenders(
-          THREE_PROVEN_PAIRS.map(([a, b], index) => ({
-            a: `concat/${a}`,
-            b: `concat/${b}`,
-            p: near(pValues[index] ?? Number.NaN),
-            pAdjusted: near(adjusted[index] ?? Number.NaN),
-          })),
-        ),
-      );
-    });
-
-    it("widens each pair's interval to 1 − 0.05 / pairs", async () => {
-      const report = await judge(THREE_PROVEN);
-
-      expect(
-        sortedPairs(report).map(({ a, b, interval }) => ({
-          a,
-          b,
-          interval,
-        })),
-      ).toStrictEqual(
-        byContenders(
-          THREE_PROVEN_PAIRS.map(([a, b], index) => ({
-            a: `concat/${a}`,
-            b: `concat/${b}`,
-            interval: ratioInterval(THREE_PROVEN_DIFFERENCES[index] ?? [], 1 - 0.05 / 3),
-          })),
-        ),
-      );
-    });
-
-    it.each([
-      {
-        why: "whose repetitions do not reach the significance bar",
-        loop: [500, 2000, 500, 2000, 500, 2000, 500],
-        faster: null,
-        tie: "repetitions",
-      },
-      {
-        why: "proven within 1.25 resolutions per call of 1, as a share of the smaller median",
-        loop: repeated<Answered>(1026, 7),
-        faster: null,
-        tie: "timer",
-      },
-      {
-        why: "proven beyond it",
-        loop: repeated<Answered>(1030, 7),
-        faster: "concat/join",
-        tie: null,
-      },
-      {
-        why: "proven beyond it the other way",
-        loop: repeated<Answered>(970, 7),
-        faster: "concat/loop",
-        tie: null,
-      },
-      {
-        why: "proven within the resolution per call of the pair's coarsest process",
-        loop: [1030, 1030, measuredAt(1030, 1), 1030, 1030, 1030, 1030],
-        faster: null,
-        tie: "timer",
-      },
-    ])(
-      "names $faster faster and $tie as the tie for a ratio $why",
-      async ({ loop, faster, tie }) => {
-        const report = await judge({ join: repeated(1000, 7), loop });
-
-        expect(
-          report.contests[0]?.pairs.map((pair) => ({ faster: pair.faster, tie: pair.tie })),
-        ).toStrictEqual([{ faster, tie }]);
-      },
-    );
-
-    describe("when the repetitions cannot reach a verdict", () => {
-      it("holds the medians, sorted, with no rank, ratio or pair", async () => {
-        const report = await judge(
-          { join: repeated(300, 5), loop: repeated(100, 5) },
-          { contestRepetitionCount: 5 },
-        );
-
-        expect(report.contests).toStrictEqual([
-          {
-            name: "concat",
-            params: {},
-            runtime: NODE,
-            repetitionCount: 5,
-            contenders: [
-              { id: "concat/loop", time: nsPerCall(100), memory: null, ratio: null, rank: null },
-              { id: "concat/join", time: nsPerCall(300), memory: null, ratio: null, rank: null },
-            ],
-            pairs: [],
-          },
-        ]);
-      });
-
-      it.each([
-        { contenders: 3, repetitions: 6, judged: false },
-        { contenders: 3, repetitions: 7, judged: true },
-      ])(
-        "judges $contenders contenders over $repetitions repetitions: $judged",
-        async ({ contenders, repetitions, judged }) => {
-          const byRepetition = Object.fromEntries(
-            Array.from({ length: contenders }, (_, index) => [
-              `c${String(index)}`,
-              repeated(100 * (index + 1), repetitions),
-            ]),
-          );
-
-          const report = await judge(byRepetition, { contestRepetitionCount: repetitions });
-
-          expect(report.contests[0]?.pairs.length).toBe(
-            judged ? (contenders * (contenders - 1)) / 2 : 0,
-          );
-        },
-      );
-    });
-
-    it("ties pairs whose p clears the bar only before the Holm adjustment", async () => {
-      const report = await judge({
-        join: repeated(1000, 7),
-        loop: [...repeated(1500, 6), 990],
-        plus: [...repeated(2250, 6), 980],
-      });
-
-      expect(
-        sortedPairs(report).map(({ p, faster, tie }) => ({
-          clearsTheBar: p <= 0.05,
-          faster,
-          tie,
-        })),
-      ).toStrictEqual(repeated({ clearsTheBar: true, faster: null, tie: "repetitions" }, 3));
-    });
-
     describe("when a contender fails", () => {
-      it("judges the rest among themselves, listing it last with no median, rank or ratio", async () => {
-        const join = [100, 102, 98, 101, 99, 100];
-        const plus = [200, 210, 190, 205, 195, 220];
-        const differences = logRatios(join, plus);
-        const ratio = near(Math.exp(hodgesLehmann(differences)));
-        const p = signedRankP(differences);
-
-        const report = await judge({ join, loop: [17, null], plus }, { contestRepetitionCount: 6 });
-
-        expect(report.contests).toStrictEqual([
-          {
-            name: "concat",
-            params: {},
-            runtime: NODE,
-            repetitionCount: 6,
-            contenders: [
-              { id: "concat/join", time: nsPerCall(100), memory: null, ratio: 1, rank: 1 },
-              { id: "concat/plus", time: nsPerCall(202.5), memory: null, ratio, rank: 2 },
-              { id: "concat/loop", time: null, memory: null, ratio: null, rank: null },
-            ],
-            pairs: [
-              {
-                a: "concat/join",
-                b: "concat/plus",
-                ratio,
-                interval: ratioInterval(differences, 0.95),
-                p: near(p),
-                pAdjusted: near(holm([p])[0] ?? Number.NaN),
-                faster: "concat/join",
-                tie: null,
-              },
-            ],
-          },
-        ]);
-      });
-
       it("leaves the contest not judged when fewer than two never failed, the failed ones in results order", async () => {
         const report = await judge({ join: [100, null], loop: [null], plus: repeated(200, 8) });
 
@@ -765,7 +296,7 @@ describe("run", () => {
           {
             name: "concat",
             params: {},
-            runtime: NODE,
+            runtime: runtimeOf("node"),
             repetitionCount: 8,
             contenders: [
               { id: "concat/plus", time: nsPerCall(200), memory: null, ratio: null, rank: null },

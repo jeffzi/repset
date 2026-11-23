@@ -1,8 +1,15 @@
 import { basename } from "node:path";
 
+import type { MeasureRequest } from "../src/child-protocol.js";
+import type { Outcome } from "../src/children.js";
+import type { Report } from "../src/report.js";
 import { run } from "../src/run.js";
 import {
+  answered,
+  type CaseToList,
+  contender,
   findAny,
+  listingStarter,
   measuredOutcome,
   starter as fakeStarter,
   type StartChild,
@@ -47,4 +54,39 @@ export async function runHere(input: Partial<RunInput> = {}): ReturnType<typeof 
     cpus: () => [cpu("Apple M2 Max")],
     ...input,
   });
+}
+
+/** A contender of the contest `concat`. */
+export const JOIN = contender("join");
+
+/** Another contender of the contest `concat`. */
+export const LOOP = contender("loop");
+
+/** A third contender of the contest `concat`. */
+export const PLUS = contender("plus");
+
+/** The seed `runCases` draws unless told otherwise. */
+export const SEED = 20_261_119;
+
+/** Answers a measuring child's request; `call` counts the earlier requests for the same case. */
+export type Answer = (request: MeasureRequest, call: number) => Outcome;
+
+/** Runs `cases`, all listed in one file, drawing {@link SEED}, and logs each measuring request in start order. */
+export async function runCases(
+  cases: readonly CaseToList[],
+  input: Partial<RunInput> = {},
+  answer: Answer = (request) => answered(request),
+): Promise<{ report: Report; asked: MeasureRequest[]; started: string[] }> {
+  const asked: MeasureRequest[] = [];
+  const report = await runHere({
+    drawSeed: () => SEED,
+    startChild: listingStarter([...cases], (request) => {
+      if (request.mode !== "measure") throw new Error(`a ${request.mode} child started`);
+      const call = asked.filter((earlier) => earlier.id === request.id).length;
+      asked.push(request);
+      return answer(request, call);
+    }),
+    ...input,
+  });
+  return { report, asked, started: asked.map((request) => request.id) };
 }

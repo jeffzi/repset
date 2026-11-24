@@ -61,7 +61,7 @@ export interface Case<State> {
   readonly teardown?: ((state: State) => unknown) | undefined;
 }
 
-export interface MeasureOptions {
+interface MeasureOptions {
   /** Calls per sample to run instead of calibrating one, for the empty body and the body alike. */
   readonly callsPerSample?: number | undefined;
   /** The clock, in milliseconds; defaults to `performance.now()`. */
@@ -374,7 +374,7 @@ export function exposedGc(): NonNullable<typeof globalThis.gc> {
  * @throws MeasureError in phase `child` when Bun is running but `bun:jsc` cannot be loaded,
  *   with whatever the loader rejected with as cause.
  */
-export async function runtimeNoInline(): Promise<NoInline | undefined> {
+async function runtimeNoInline(): Promise<NoInline | undefined> {
   if (runningRuntime() !== "bun") return undefined;
   try {
     const { noInline } = await import("bun:jsc");
@@ -526,7 +526,13 @@ function measurePerCall<State>(
     timing.endMs = performance.now();
     return run;
   } catch (error) {
-    const phase = perCallPhase(inFlight.held, tearingDown);
+    // The phase from the sampler's state when the error reached here, for `failedIn` to fall back
+    // to (it maps the sampler's `CalibrationError` itself): `setup` with no state in flight,
+    // `teardown` while one was being torn down, and `fn` for the rest.
+    let phase: Phase = "fn";
+    if (!inFlight.held) phase = "setup";
+    // oxlint-disable-next-line typescript/no-unnecessary-condition -- `trackedTeardown`'s closure sets the flag, which TypeScript does not track, and a throwing teardown leaves it set.
+    else if (tearingDown) phase = "teardown";
     // A state whose teardown threw is left alone rather than torn down a second time.
     const teardownError =
       holds(inFlight) && phase !== "teardown" ? tearDownCatching(teardown, inFlight.state) : null;
@@ -543,20 +549,6 @@ function measurePerCall<State>(
  */
 function holds<State>(inFlight: InFlight<State>): inFlight is { held: true; state: State } {
   return inFlight.held;
-}
-
-/**
- * Names the phase a per-call case failed in from the sampler's state when the error reached
- * `measure`, for {@link failedIn} to fall back to: it maps the sampler's `CalibrationError` itself.
- *
- * @param held - Whether a state was built and not torn down.
- * @param tearingDown - Whether the case's teardown had started and not returned.
- * @returns `setup` with no state in flight, `teardown` while one was being torn down, and `fn` for
- *   the rest.
- */
-function perCallPhase(held: boolean, tearingDown: boolean): Phase {
-  if (!held) return "setup";
-  return tearingDown ? "teardown" : "fn";
 }
 
 /** A case callback whose first call `measure` checks for a thenable. */

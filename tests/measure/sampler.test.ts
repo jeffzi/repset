@@ -116,17 +116,6 @@ function slowerAfterFirstRun(firstRun: (sample: number) => number): CostMs {
   return (sample, _timed, timingRun) => (timingRun === 1 ? firstRun(sample) : coarse(40));
 }
 
-/**
- * Costs 21.6 times the resolution a call on every tenth sample and 30 on the rest, so a first run of 5 calls
- * per sample is discarded and its shortest sample grows the count to 10.
- *
- * @param sample - The index of the sample the call belongs to.
- * @returns The body's cost per call, in milliseconds.
- */
-function shortestFirstRun(sample: number): number {
-  return coarse(sample % 10 === 0 ? 21.6 : 30);
-}
-
 /** A timer resolution whose cap, `ceil(200 × resolution / 0.1 ns)`, is 30518 calls. */
 const CAPPED_STEP = 2 ** -16;
 
@@ -427,12 +416,7 @@ describe("sampleSharedState", () => {
     describe("when growing the count for the next attempt", () => {
       it.each([
         {
-          rule: "scales the run's count to its shortest sample's 200 times the resolution, rounded up",
-          firstRun: shortestFirstRun,
-          expected: 10,
-        },
-        {
-          rule: "leaves out samples that read no clock change",
+          rule: "scales the run's count to its shortest sample's 200 times the resolution, rounded up, leaving out samples that read no clock change",
           firstRun: (sample: number) => {
             if (sample % 10 === 2) return 0;
             return coarse(sample % 10 === 1 ? 21.6 : 30);

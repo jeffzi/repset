@@ -85,7 +85,7 @@ export interface TimedMinimums {
   readonly minSamples: number;
 }
 
-export interface SharedStateOptions<State> extends Sampling, TimedMinimums {
+interface SharedStateOptions<State> extends Sampling, TimedMinimums {
   readonly fn: (state: State) => unknown;
   /** The one state every sample runs on; the caller builds and tears it down. */
   readonly state: State;
@@ -215,7 +215,7 @@ function withinCap(next: number, resolutionMs: number): number {
  * Either sampler's warmup bookkeeping between samples. Each sampler keeps its own loop, stop rule
  * and call to its own sample function, so no sampling loop runs another sampler's body.
  */
-export interface WarmupProgress {
+interface WarmupProgress {
   /** The calls the next warmup sample runs. */
   count: number;
   /** The warmup samples recorded so far. */
@@ -546,7 +546,7 @@ export function releaseInFlight<State>(inFlight: InFlight<State>): void {
   inFlight.state = undefined;
 }
 
-export interface PerCallOptions<State> extends Sampling, TimedMinimums {
+interface PerCallOptions<State> extends Sampling, TimedMinimums {
   /** Builds the fresh state one body call consumes. */
   readonly setup: () => State;
   /** The benchmark body; every call receives a state built for it alone. */

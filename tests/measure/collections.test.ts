@@ -75,8 +75,8 @@ describe("observeCollections", () => {
     it("counts kinds 1 and 2 as minor and kind 4 as major, with their sum, total and longest duration", async () => {
       deliversCollections([
         { kind: 1, startTime: 110, duration: 0.5 },
-        { kind: 2, startTime: 120, duration: 0.25 },
-        { kind: 4, startTime: 130, duration: 2 },
+        { kind: 4, startTime: 120, duration: 2 },
+        { kind: 2, startTime: 130, duration: 0.25 },
       ]);
 
       const gc = await collectionsInWindow();
@@ -95,6 +95,26 @@ describe("observeCollections", () => {
         { kind: 8, startTime: 110, duration: 3 },
         { kind: 16, startTime: 120, duration: 4 },
         { kind: 1, startTime: 130, duration: 0.5 },
+      ]);
+
+      const gc = await collectionsInWindow();
+
+      expect(gc).toStrictEqual({
+        collectionCount: 1,
+        durationMs: 0.5,
+        maxDurationMs: 0.5,
+        nodeMinorCollectionCount: 1,
+        nodeMajorCollectionCount: 0,
+      });
+    });
+  });
+
+  describe("when collections start at the timing window's edges", () => {
+    it("counts one starting at startMs and none starting just before it or at endMs", async () => {
+      deliversCollections([
+        { kind: 1, startTime: WINDOW.startMs - 1, duration: 4 },
+        { kind: 1, startTime: WINDOW.startMs, duration: 0.5 },
+        { kind: 1, startTime: WINDOW.endMs, duration: 8 },
       ]);
 
       const gc = await collectionsInWindow();

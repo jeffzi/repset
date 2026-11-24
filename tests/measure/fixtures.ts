@@ -108,17 +108,14 @@ export function recordedLifecycle(options: LifecycleOptions): RecordedLifecycle 
 /**
  * Exposes V8's garbage collector by enabling the `--expose-gc` flag for the whole process.
  *
- * @param options - Forwarded to every `gc` call, e.g. `{ type: "minor" }`. When omitted, `gc` is
- *   called with no argument, which runs a major collection.
- * @returns A function that runs a garbage collection when called.
+ * @returns A function that runs a major garbage collection when called.
  * @throws {Error} When V8 exposes no `gc` function after the flag is set.
  */
-export function enabledGc(options?: NodeJS.GCOptions & { execution?: "sync" }): () => void {
+export function enabledGc(): () => void {
   setFlagsFromString("--expose-gc");
   const gc: unknown = runInNewContext("gc");
   if (typeof gc !== "function") throw new Error("V8 exposed no gc function");
-  const args = options === undefined ? [] : [options];
   return () => {
-    Reflect.apply(gc, undefined, args);
+    Reflect.apply(gc, undefined, []);
   };
 }

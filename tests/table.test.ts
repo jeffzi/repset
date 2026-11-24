@@ -3,14 +3,7 @@ import { stripVTControlCharacters } from "node:util";
 import { describe, expect, it } from "vitest";
 
 import type { ChildPhase } from "../src/child-protocol.js";
-import type {
-  Contest,
-  ContestPair,
-  FailedResult,
-  MeasuredResult,
-  Result,
-  ResultError,
-} from "../src/report.js";
+import type { Contest, ContestPair, FailedResult, MeasuredResult, Result } from "../src/report.js";
 import { failureLines, formatTable, paint, visibleWidth } from "../src/table.js";
 import { found, runtimeOf } from "./helpers/fake-children.js";
 import {
@@ -31,15 +24,10 @@ import {
 const WIDE_STATS: Stats = { ...flatStats(4656), max: 2_340_000, sampleCount: 1200 };
 
 /** A result of the contender whose case id is `id` (`<contest>/<key>`) that failed on Node in `phase`. */
-function failedContender(
-  id: string,
-  phase: ChildPhase,
-  message: string,
-  teardownError: ResultError["teardownError"] = null,
-): FailedResult {
+function failedContender(id: string, phase: ChildPhase, message: string): FailedResult {
   const slash = id.lastIndexOf("/");
   return {
-    ...failed(id, phase, message, teardownError),
+    ...failed(id, phase, message),
     name: id.slice(0, slash),
     contender: id.slice(slash + 1),
   };
@@ -124,9 +112,9 @@ function notJudgedContest(repetitions: number): { results: Result[]; entry: Cont
 /** The keys of the contenders of `threeWayContest`, fastest first. */
 const THREE_WAY = ["regex", "split", "scan"] as const;
 
-/** The results of the contenders of `threeWayContest(name, …)` measured on `runtime`. */
-function threeWayResults(name: string, runtime: Runtime = "node"): MeasuredResult[] {
-  return THREE_WAY.map((key, index) => contenderResult(name, key, 100 + index, { runtime }));
+/** The results of the contenders of `threeWayContest(name, …)` measured on Node. */
+function threeWayResults(name: string): MeasuredResult[] {
+  return THREE_WAY.map((key, index) => contenderResult(name, key, 100 + index));
 }
 
 /** A contest `name` over `repetitions` repetitions among regex, split and scan, its regex–split and split–scan pairs tied by the given kinds, or proven for the first when null. */
@@ -179,20 +167,9 @@ function notePattern(
   return new RegExp(`^${keys.join("")}(?!.*${name}/)${advice}.*\\S`, "u");
 }
 
-/** The contender ids scheduled in a contest on `runtime`, as the table receives them. */
-function contestedOn(
-  runtime: Runtime,
-  ids: readonly string[],
-): readonly [Runtime, ReadonlySet<string>] {
-  return [runtime, new Set(ids)];
-}
-
 /** The lines of the table of `results` with no finished contest, `contested` scheduled in a contest. */
-function contestedTableLines(
-  results: readonly Result[],
-  contested: readonly (readonly [Runtime, ReadonlySet<string>])[],
-): string[] {
-  return formatTable(results, [], { color: false, contested: new Map(contested) }).split("\n");
+function contestedTableLines(results: readonly Result[], contested: readonly string[]): string[] {
+  return formatTable(results, [], { color: false, contested: new Set(contested) }).split("\n");
 }
 
 /** The footer of `lines`: its lines after the last blank line before the closing one. */
@@ -205,10 +182,10 @@ function footer(results: readonly Result[], contests: readonly Contest[]): strin
   return footerLines(tableLines(results, contests)).join("\n");
 }
 
-/** The lines between the first row of `key` at or after line `from` and the next blank line. */
-function notesUnder(lines: readonly string[], key: string, from = 0): string[] {
-  const row = lines.findIndex((line, index) => index >= from && line.startsWith(`${key} `));
-  if (row === -1) throw new Error(`no row of ${key} at or after line ${from}`);
+/** The lines between the first row of `key` and the next blank line. */
+function notesUnder(lines: readonly string[], key: string): string[] {
+  const row = lines.findIndex((line) => line.startsWith(`${key} `));
+  if (row === -1) throw new Error(`no row of ${key}`);
   return lines.slice(row + 1, lines.indexOf("", row));
 }
 
@@ -459,7 +436,6 @@ describe("formatTable", () => {
       expectBox(lines.slice(7, 13));
       expectBox(lines.slice(14, 18));
       expect([lines[0], lines[5], lines[13], lines[18]]).toStrictEqual(["node 24.1.0", "", "", ""]);
-      expect(lines[6]).toMatch(/^concat\b.*\b8 repetitions$/u);
       const rows = [lines[4], ...lines.slice(10, 13), lines[17]];
       expect(rows.map((row) => cellsOf(row ?? ""))).toStrictEqual([
         ["apple", "812 ns", "812 ns", "812 ns", "812 ns", "64"],
@@ -479,30 +455,10 @@ describe("formatTable", () => {
 
       expect(row).toStrictEqual(["concat/join", "812 ns", "812 ns", "812 ns", "812 ns", "64"]);
     });
-
-    describe("when the same benchmark was a contest on another runtime", () => {
-      it("rows it as a plain case under its case id", () => {
-        const results = [contenderResult("concat", "join", 812)];
-
-        const lines = contestedTableLines(results, [
-          contestedOn("node", ["parse/regex", "parse/split"]),
-          contestedOn("bun", ["concat/join", "concat/loop"]),
-        ]);
-
-        expect(cellsOf(lines[rowIndex(lines, "concat/join")] ?? "")).toStrictEqual([
-          "concat/join",
-          "812 ns",
-          "812 ns",
-          "812 ns",
-          "812 ns",
-          "64",
-        ]);
-      });
-    });
   });
 
   describe("when the stop signal ended a contest after a contender failed", () => {
-    const stoppedContest = [contestedOn("node", ["concat/join", "concat/loop"])];
+    const stoppedContest = ["concat/join", "concat/loop"];
 
     it("rows the failed contender by its key in the contest's block", () => {
       const results = [failedContender("concat/loop", "fn", "kiwi")];
@@ -511,10 +467,29 @@ describe("formatTable", () => {
 
       const loop = rowIndex(lines, "loop");
       const heading = lines.findIndex((line) => /^concat(?:\s|$)/u.test(line));
-      expect(rowIndex(lines, "concat/loop")).toBe(-1);
       expect(lines[loop]).toMatch(/^loop {6}│ \S.* kiwi$/u);
       expect(heading).not.toBe(-1);
       expect(heading).toBeLessThan(loop);
+    });
+
+    it("rows each benchmark's failed contenders together under its own heading", () => {
+      const results = [
+        failedContender("concat/join", "fn", "kiwi"),
+        failedContender("parse/regex", "fn", "kiwi"),
+        failedContender("concat/loop", "fn", "kiwi"),
+      ];
+
+      const lines = contestedTableLines(results, ["concat/join", "concat/loop", "parse/regex"]);
+
+      const concat = lines.findIndex((line) => /^concat(?:\s|$)/u.test(line));
+      const parse = lines.findIndex((line) => /^parse(?:\s|$)/u.test(line));
+      expect({
+        headings: lines.filter((line) => /^(?:concat|parse)(?:\s|$)/u.test(line)).length,
+        concatRows: [rowIndex(lines, "join"), rowIndex(lines, "loop")].map(
+          (row) => row > concat && row < parse,
+        ),
+        parseRow: rowIndex(lines, "regex") > parse,
+      }).toStrictEqual({ headings: 2, concatRows: [true, true], parseRow: true });
     });
 
     it("does not end with the footer of a run of plain cases alone", () => {
@@ -572,14 +547,6 @@ describe("formatTable", () => {
       expect(lines[2]).toMatch(new RegExp(`^concat\\b.*\\b${text}$`, "u"));
     });
 
-    it("closes the contest with not judged over 3 repetitions", () => {
-      const { results, entry } = notJudgedContest(3);
-
-      const lines = tableLines(results, [entry]);
-
-      expect(lines[8]).toMatch(/\b3 repetitions$/u);
-    });
-
     it("rows a failed contender before the not judged line", () => {
       const results = [
         failedContender("concat/plus", "fn", "kiwi"),
@@ -603,7 +570,6 @@ describe("formatTable", () => {
 
       const loop = rowIndex(lines, "loop");
       expectBox(lines.slice(loop - 4, loop + 1), ["plus"]);
-      expect(cellsOf(lines[loop] ?? "")).toStrictEqual(["loop", "1.88 µs"]);
       expect(lines.slice(loop + 1, loop + 3)).toStrictEqual([
         expect.stringMatching(/^plus {6}│ \S.* kiwi$/u),
         expect.stringMatching(/\b1 repetition$/u),

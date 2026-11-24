@@ -320,8 +320,8 @@ function requireReading(options: ResolvedOptions): void {
  * result, and no further child starts.
  *
  * @param input - The caller's options, the positional files, the stop signal, the result,
- *   selection, plan and dropped-children callbacks, the calls per sample to fix, and the functions
- *   that look a runtime up, start a child, list the CPUs, draw the seed and name the
+ *   selection, plan and dropped-children callbacks, the calls per sample to fix, the functions that
+ *   look a runtime up and start a child, and those that list the CPUs, draw the seed and name the
  *   `package.json` to read the version from, the real ones by default.
  * @returns The report of the results that finished, with `interrupted` set when the stop signal
  *   ended the run.
@@ -397,7 +397,7 @@ export async function run(input: RunInput): Promise<Report> {
  * does not stop it.
  *
  * @param input - The caller's options, the positional files, the stop signal, the plan callback,
- *   and the functions that look a runtime up and start a child, the real ones by default.
+ *   and the functions that look a runtime up and start a child.
  * @returns Per case and runtime, that it ran or how it failed, with `interrupted` set when the stop
  *   signal ended it.
  * @throws `ConfigError` When the options are invalid or the selection fails, before any once

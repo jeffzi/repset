@@ -7,9 +7,9 @@ import { stripVTControlCharacters, styleText } from "node:util";
 
 import type { ChildError } from "./child-protocol.js";
 import { contestOf } from "./judge.js";
-import type { Runtime } from "./measure/runtime.js";
 import type { Measure } from "./options.js";
 import type { Contest, ContestPair, FailedResult, MeasuredResult, Result } from "./report.js";
+import { contestKey } from "./schedule.js";
 import { GRAPHEMES, valueAt } from "./utils.js";
 
 /** Time units from nanoseconds up, each a thousand of the one before. */
@@ -124,20 +124,6 @@ function formatIn(amount: number, units: readonly string[]): string {
 /** Formats a time in nanoseconds in the unit that keeps three significant digits, up to seconds. */
 function formatTime(ns: number): string {
   return formatIn(ns, TIME_UNITS);
-}
-
-/**
- * The memory column's cell of a measured case.
- *
- * @param result - The measured result.
- * @returns Its bytes per call in the unit that keeps three significant digits, up to megabytes;
- *   `n/a` when its runtime has no heap reading, or `no clean pair` when no pair of samples was free
- *   of a collection.
- */
-function memoryCell(result: MeasuredResult): string {
-  if (result.memory === null) return NO_HEAP_READING;
-  if (result.memory.median === null) return NO_CLEAN_PAIR;
-  return formatIn(result.memory.median, MEMORY_UNITS);
 }
 
 // ---------------------------------------------------------------------------
@@ -339,9 +325,20 @@ function columnsOf(
   return { header, align: header.map((_, column) => (column === 0 ? "left" : "right")) };
 }
 
-/** The memory cell of `result`'s row when `measure` holds memory, none otherwise. */
+/**
+ * The memory cell of a measured case's row.
+ *
+ * @param result - The measured result.
+ * @param measure - What the run measured.
+ * @returns None when `measure` holds no memory; otherwise its bytes per call in the unit that keeps
+ *   three significant digits, up to megabytes, `n/a` when its runtime has no heap reading, or
+ *   `no clean pair` when no pair of samples was free of a collection.
+ */
 function memoryCells(result: MeasuredResult, measure: readonly Measure[]): string[] {
-  return measure.includes("memory") ? [memoryCell(result)] : [];
+  if (!measure.includes("memory")) return [];
+  if (result.memory === null) return [NO_HEAP_READING];
+  if (result.memory.median === null) return [NO_CLEAN_PAIR];
+  return [formatIn(result.memory.median, MEMORY_UNITS)];
 }
 
 /** The columns of a run of plain cases under `measure`. */
@@ -516,14 +513,15 @@ function blocksOf(results: readonly Result[], contestById: ReadonlyMap<string, C
  * @param measure - What the run measured, which sets each table's columns.
  * @returns Its heading, then each block, a contest's or one after another block opened by a blank
  *   line.
+ * @throws RangeError when `blocks` or its first block holds nothing: a section has a result.
  */
 function sectionLines(
   blocks: readonly Block[],
   color: boolean,
   measure: readonly Measure[],
 ): string[] {
-  const first = blocks[0]?.results[0];
-  const heading = first === undefined ? "" : `${first.runtime.name} ${first.runtime.version}`;
+  const { runtime } = valueAt(valueAt(blocks, 0).results, 0);
+  const heading = `${runtime.name} ${runtime.version}`;
   return [
     paint("bold", heading, color),
     ...blocks.flatMap((block, index) => {
@@ -548,16 +546,13 @@ function contestFooter(contests: readonly Contest[]): string[] {
   return [contests.some(twoFinished) ? NONE_JUDGED_FOOTER : NONE_FINISHED_FOOTER];
 }
 
-/** Per runtime, the case ids of the contenders scheduled in a contest there. */
-export type ScheduledContests = ReadonlyMap<Runtime, ReadonlySet<string>>;
-
 /**
  * The entries of the contests the stop signal ended on one runtime, built from the results of their
  * contenders that failed before it: such a contest has a result for each, but no entry.
  *
  * @param results - The runtime's results, in run order.
  * @param finished - The entries of the contests that finished on the runtime.
- * @param scheduled - The case ids of the contenders scheduled in a contest on the runtime.
+ * @param scheduled - The case ids of the contenders scheduled in a contest.
  * @returns An entry per stopped contest, not judged, listing its failed contenders, its repetition
  *   count the last repetition one of them reached.
  */
@@ -568,7 +563,7 @@ function stoppedContests(
 ): Contest[] {
   const entered = new Set(finished.flatMap(({ contenders }) => contenders.map(({ id }) => id)));
   const stopped = results.filter(({ id }) => scheduled.has(id) && !entered.has(id));
-  const byBenchmark = Map.groupBy(stopped, ({ file, name }) => JSON.stringify([file, name]));
+  const byBenchmark = Map.groupBy(stopped, contestKey);
   return [...byBenchmark.values()].map((contenders) =>
     contestOf([valueAt(contenders, 0), ...contenders.slice(1)]),
   );
@@ -580,11 +575,11 @@ function stoppedContests(
  * @param results - The results that finished, in run order.
  * @param contests - The contests that finished; their contenders' results show in a sub-table each.
  * @param options - Whether the stream the table goes to shows color; the footer's lines show dim.
- *   `contested` holds, per runtime, the case ids of the contenders scheduled in a contest there,
- *   none by default: a contender's result that no finished contest lists shows in its stopped
- *   contest's sub-table when its id is among them, and as a plain case otherwise. `measure` holds
- *   what the run measured, time alone by default: without time, the time columns and the lines on
- *   contest verdicts are absent; with memory, each measured row ends in a memory column.
+ *   `contested` holds the case ids of the contenders scheduled in a contest, none by default: a
+ *   contender's result that no finished contest lists shows in its stopped contest's sub-table when
+ *   its id is among them, and as a plain case otherwise. `measure` holds what the run measured,
+ *   time alone by default: without time, the time columns and the lines on contest verdicts are
+ *   absent; with memory, each measured row ends in a memory column.
  * @returns The table, then the footer after a blank line when it has anything to say, ending in a
  *   newline, or the empty string when there is no result.
  */
@@ -593,20 +588,16 @@ export function formatTable(
   contests: readonly Contest[],
   options: {
     readonly color: boolean;
-    readonly contested?: ScheduledContests;
+    readonly contested?: ReadonlySet<string>;
     readonly measure?: readonly Measure[];
   },
 ): string {
   if (results.length === 0) return "";
-  const { color, contested, measure = ["time"] } = options;
+  const { color, contested = new Set<string>(), measure = ["time"] } = options;
   const byRuntime = Map.groupBy(results, (result) => result.runtime.name);
   const ran = [...byRuntime].map(([runtime, section]) => {
     const finished = contests.filter((contest) => contest.runtime.name === runtime);
-    const stopped = stoppedContests(
-      section,
-      finished,
-      contested?.get(runtime) ?? new Set<string>(),
-    );
+    const stopped = stoppedContests(section, finished, contested);
     const contestById = new Map(
       [...finished, ...stopped].flatMap((contest) =>
         contest.contenders.map(({ id }) => [id, contest] as const),

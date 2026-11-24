@@ -6,12 +6,7 @@ import { globSync } from "node:fs";
 import { basename, relative, resolve, sep } from "node:path";
 
 import type { ChildError, ListedCase } from "./child-protocol.js";
-import {
-  findRuntime as realFindRuntime,
-  type FoundRuntime,
-  startChild as realStartChild,
-  type StartOptions,
-} from "./children.js";
+import type { findRuntime, FoundRuntime, startChild, StartOptions } from "./children.js";
 import { ConfigError, isFile, type ResolvedOptions } from "./options.js";
 
 export interface SelectedCase extends ListedCase {
@@ -31,8 +26,8 @@ export type Selection =
   | { readonly status: "stopped" };
 
 export interface ChildFunctions {
-  readonly findRuntime: typeof realFindRuntime;
-  readonly startChild: typeof realStartChild;
+  readonly findRuntime: typeof findRuntime;
+  readonly startChild: typeof startChild;
 }
 
 /** {@link ChildFunctions} a caller may replace; each one it leaves out is the real function. */
@@ -40,7 +35,7 @@ export type ChildFunctionOverrides = {
   readonly [Name in keyof ChildFunctions]?: ChildFunctions[Name] | undefined;
 };
 
-export interface SelectInput extends ChildFunctionOverrides {
+interface SelectInput extends ChildFunctions {
   readonly options: ResolvedOptions;
   /** The positional files, relative to `cwd`; when there are some, they replace `include`. */
   readonly files: readonly string[];
@@ -191,7 +186,7 @@ async function listFiles(
   runtime: FoundRuntime,
   input: SelectInput,
 ): Promise<SelectedCase[] | undefined> {
-  const { options, cwd, signal, startChild = realStartChild } = input;
+  const { options, cwd, signal, startChild } = input;
   const childOptions = startOptions(options, signal);
   input.onPlanned?.(files.length);
   const cases: SelectedCase[] = [];
@@ -212,8 +207,7 @@ async function listFiles(
  * Selects the cases a run measures. Every runtime is looked up before any listing child starts.
  *
  * @param input - The options, the positional files, the working directory, the stop signal, the
- *   plan callback, and the functions that look a runtime up and start a child, the real ones by
- *   default.
+ *   plan callback, and the functions that look a runtime up and start a child.
  * @returns The runtimes with their versions and the selected cases, or a stop when the signal fired
  *   during runtime discovery or listing.
  * @throws {@link ConfigError} When an argument matches no file, a runtime cannot be found, a
@@ -223,11 +217,11 @@ async function listFiles(
  *   for it.
  */
 export async function selectCases(input: SelectInput): Promise<Selection> {
-  const { options, files, cwd, signal, findRuntime = realFindRuntime } = input;
+  const { options, files, cwd, signal } = input;
   const found = benchmarkFiles(options, files, cwd);
   const lookup = { timeout: options.timeout, signal };
   const looked = await Promise.all(
-    options.runtimes.map(async (runtime) => findRuntime(runtime, lookup)),
+    options.runtimes.map(async (runtime) => input.findRuntime(runtime, lookup)),
   );
   const runtimes = looked.filter((runtime) => runtime !== undefined);
   if (runtimes.length < looked.length) return { status: "stopped" };

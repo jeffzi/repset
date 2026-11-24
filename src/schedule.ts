@@ -3,22 +3,12 @@
  * contenders in repetitions of one child each, in a seeded random order per repetition.
  */
 import type { ChildError, ChildRequest } from "./child-protocol.js";
-import {
-  type FoundRuntime,
-  type Outcome,
-  startChild as realStartChild,
-  type StartOptions,
-} from "./children.js";
+import type { FoundRuntime, Outcome, StartOptions } from "./children.js";
 import { type OptionsInput, resolveOptions, type ResolvedOptions } from "./options.js";
-import {
-  type ChildFunctionOverrides,
-  type SelectedCase,
-  selectCases,
-  startOptions,
-} from "./select.js";
+import { type ChildFunctions, type SelectedCase, selectCases, startOptions } from "./select.js";
 import { pairsOf, valueAt } from "./utils.js";
 
-export interface OnceInput extends OptionsInput, ChildFunctionOverrides {
+export interface OnceInput extends OptionsInput, ChildFunctions {
   /** Paths or globs of benchmark files, relative to `cwd`; when there are some, they replace `include`. */
   readonly files?: readonly string[] | undefined;
   /** Kills the running child and starts no further one when it fires. */
@@ -89,7 +79,7 @@ interface GroupStart<R extends ChildRequest> {
   readonly options: ResolvedOptions;
   readonly request: RequestOf<R>;
   readonly handlers: StartHandlers<R["mode"]>;
-  readonly startChild: NonNullable<OnceInput["startChild"]>;
+  readonly startChild: OnceInput["startChild"];
   readonly childOptions: StartOptions;
   /** Draws the numbers that order each repetition of a contest. */
   readonly random: () => number;
@@ -140,7 +130,7 @@ function groupsOf(cases: readonly SelectedCase[]): SelectedCase[][] {
       groups.push([selected]);
       continue;
     }
-    const benchmark = JSON.stringify([selected.path, selected.name]);
+    const benchmark = contestKey(selected);
     const contest = contests.get(benchmark);
     if (contest === undefined) {
       const group = [selected];
@@ -151,6 +141,23 @@ function groupsOf(cases: readonly SelectedCase[]): SelectedCase[][] {
     }
   }
   return groups;
+}
+
+/**
+ * The key the contenders of one contest share: their benchmark's file and name. Planning groups the
+ * selected contenders by it, and the table groups a stopped contest's results by it.
+ *
+ * @param contender - The case, selected or reported, whose `file` is the benchmark file as shown.
+ * @returns The same string for every contender of one benchmark, a different one for any other.
+ */
+export function contestKey({
+  file,
+  name,
+}: {
+  readonly file: string;
+  readonly name: string;
+}): string {
+  return JSON.stringify([file, name]);
 }
 
 /** The significance level of a contest's family of pairs. */
@@ -295,7 +302,7 @@ export async function startEach<R extends ChildRequest>(
   seed?: number,
 ): Promise<{ options: ResolvedOptions; interrupted: boolean }> {
   const options = await resolveOptions(input);
-  const { signal, startChild = realStartChild } = input;
+  const { signal, startChild } = input;
   const selection = await selectCases({
     options,
     files: input.files ?? [],

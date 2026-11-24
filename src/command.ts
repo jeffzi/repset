@@ -63,7 +63,7 @@ const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 type Signal = (typeof SIGNALS)[number];
 
 /** What delivers the interrupting signals: `process` fits. */
-export interface SignalSource {
+interface SignalSource {
   /**
    * Listens for an interrupting signal.
    *
@@ -86,7 +86,7 @@ export interface SignalSource {
  * A stream the command prints to and watches for failed writes: `process.stdout` and
  * `process.stderr` fit.
  */
-export interface WatchedOutput extends Output {
+interface WatchedOutput extends Output {
   /**
    * Writes `text`; a write that fails reports its error to `done`, and a stream may report it
    * again afterwards as an `error` event.
@@ -331,7 +331,7 @@ async function measure(command: Command, context: Context): Promise<number> {
       ? undefined
       : { name: output, path: resolve(context.cwd, output) };
   const writes = file === undefined ? undefined : reportWrites(file.path, file.name);
-  const contested = new Map<Runtime, ReadonlySet<string>>();
+  let contested: ReadonlySet<string> = new Set();
   const report = await run({
     ...command.input,
     ...childInput(context),
@@ -341,8 +341,7 @@ async function measure(command: Command, context: Context): Promise<number> {
     },
     ...writes,
     onSelected: (head, contests) => {
-      const ids = new Set(contests.flat().map(({ id }) => id));
-      for (const runtime of head.options.runtimes) contested.set(runtime, ids);
+      contested = new Set(contests.flat().map(({ id }) => id));
       writes?.onSelected?.(head, contests);
     },
   });

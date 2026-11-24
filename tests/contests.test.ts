@@ -1,3 +1,5 @@
+import { basename } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import type { Report, Result } from "../src/report.js";
@@ -9,6 +11,7 @@ import {
   contender,
   failedOutcome,
   failsLoopInRepetitionTwo,
+  listed,
   listingStarter,
   measuredOutcome,
   memoryOf,
@@ -246,6 +249,45 @@ describe("run", () => {
           ids: report.results.map((result) => result.id),
         }).toStrictEqual({ interrupted: true, ids: ["apple", "concat/loop"] });
       });
+    });
+  });
+
+  describe("when files hold contenders of several benchmarks", () => {
+    it("forms one contest per benchmark of each file", async () => {
+      const contenderOf = (name: string, key: string): CaseToList => ({
+        id: `${name}/${key}`,
+        setupPerCall: false,
+        name,
+        contender: key,
+      });
+      const byFile: Record<string, CaseToList[]> = {
+        "zeta.bench.ts": [contenderOf("concat", "join"), contenderOf("concat", "loop")],
+        "a.bench.ts": [
+          contenderOf("concat", "plus"),
+          contenderOf("parse", "regex"),
+          contenderOf("concat", "scan"),
+          contenderOf("parse", "split"),
+        ],
+      };
+
+      const { report } = await runCases([], {
+        files: ["zeta.bench.ts", "a.bench.ts"],
+        startChild: async (_runtime, request) =>
+          request.mode === "list"
+            ? listed(byFile[basename(request.file)] ?? [])
+            : measuredOutcome(4656),
+      });
+
+      expect(
+        report.contests.map(({ name, contenders }) => [
+          name,
+          contenders.map(({ id }) => id).toSorted(),
+        ]),
+      ).toStrictEqual([
+        ["concat", ["concat/join", "concat/loop"]],
+        ["concat", ["concat/plus", "concat/scan"]],
+        ["parse", ["parse/regex", "parse/split"]],
+      ]);
     });
   });
 

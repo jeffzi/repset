@@ -70,7 +70,7 @@ async function stoppedOnBun(runtime: Runtime): Promise<FoundRuntime | undefined>
   return runtime === "bun" ? undefined : found(runtime);
 }
 
-/** Selects from the discovery fixtures, passing the stop signal on only when one is given. */
+/** Selects from the discovery fixtures, passing the stop signal and the plan callback as given. */
 async function select(
   input: {
     options?: Partial<ResolvedOptions>;
@@ -88,8 +88,8 @@ async function select(
     cwd: input.cwd ?? FIXTURES,
     findRuntime: input.findRuntime ?? findAny,
     startChild: input.startChild ?? onePerFile,
-    ...(input.signal === undefined ? {} : { signal: input.signal }),
-    ...(input.onPlanned === undefined ? {} : { onPlanned: input.onPlanned }),
+    signal: input.signal,
+    onPlanned: input.onPlanned,
   });
 }
 
@@ -131,13 +131,12 @@ describe("selectCases", () => {
 
   describe("when no positional file is given", () => {
     it("matches the include globs against includeBase, not cwd", async () => {
-      const selection = await select({ cwd: TESTS });
+      const selection = await select({ options: { includeBase: fixture("nested") } });
 
-      const paths = pathsOf(selection);
-      expect({
-        found: paths.length > 0,
-        outsideBase: paths.filter((path) => !path.startsWith(FIXTURES + sep)),
-      }).toStrictEqual({ found: true, outsideBase: [] });
+      expect(pathsOf(selection)).toStrictEqual([
+        fixture(join("nested", "deep", "inner.bench.ts")),
+        fixture(join("nested", "mid.bench.ts")),
+      ]);
     });
 
     it("skips every file under a node_modules directory", async () => {

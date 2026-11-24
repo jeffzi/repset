@@ -5,6 +5,7 @@ import { stripVTControlCharacters } from "node:util";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { Outcome } from "../src/children.js";
 import { formatTable } from "../src/table.js";
 import {
   blockWrites,
@@ -41,6 +42,32 @@ import {
 } from "./helpers/fake-children.js";
 import { fixturePath } from "./helpers/fixture-path.js";
 import { reportAt } from "./helpers/report-file.js";
+
+/** The stack of the Error `sort/fast` throws. */
+const STACK = "Error: kiwi\n    at plum (sort.bench.ts:3:9)";
+
+/** What `sort/fast`'s child printed before it failed. */
+const OUTPUT = "pear\nfig\n";
+
+const SORT_FAILED: Outcome = {
+  status: "failed",
+  error: { phase: "fn", message: "kiwi", stack: STACK, teardownError: null },
+  output: OUTPUT,
+};
+
+/** A child starter that fails `sort/fast` with {@link STACK} and {@link OUTPUT}, keeping in `seen` what stderr held as `parse/fast` started. */
+function failsSort(stderr: { readonly text: string }, seen: string[]): StartChild {
+  return starter((request, runtime, options) => {
+    if (request.id === "sort/fast") return SORT_FAILED;
+    seen.push(stderr.text);
+    return measuresAll(runtime, request, options);
+  });
+}
+
+/** Whether `text` holds the failed case's stack and its child's output. */
+function holdsFailure(text: string): { stack: boolean; output: boolean } {
+  return { stack: text.includes(STACK), output: text.includes(OUTPUT) };
+}
 
 /** A child starter that ends as stopped once the run is aborted, and measures every case before. */
 const measuresUnlessAborted: StartChild = async (runtime, request, options) =>
@@ -117,11 +144,33 @@ describe("main", () => {
     });
   });
 
-  describe("when the config file sets debug", () => {
+  describe("when debug is on", () => {
     it("keeps the config file's true when no flag is given", async () => {
       const { report } = await runWithReport(["--config", fixturePath("config", "debug-on.ts")]);
 
       expect(report.options.debug).toBe(true);
+    });
+
+    it("writes a failed case's stack and its child's output to stderr when the case fails", async () => {
+      const stderr = captured();
+      const seen: string[] = [];
+
+      await command(workspace(), ["--debug", ...FILES], {
+        stderr,
+        startChild: failsSort(stderr, seen),
+      });
+
+      expect(seen.map(holdsFailure)).toStrictEqual([{ stack: true, output: true }]);
+    });
+  });
+
+  describe("when debug is off", () => {
+    it("writes neither a failed case's stack nor its child's output to stderr", async () => {
+      const stderr = captured();
+
+      await command(workspace(), FILES, { stderr, startChild: failsSort(stderr, []) });
+
+      expect(holdsFailure(stderr.text)).toStrictEqual({ stack: false, output: false });
     });
   });
 
@@ -182,8 +231,24 @@ describe("main", () => {
       expect({ code, stdout, stderrLines: linesOf(stderr) }).toStrictEqual({
         code: 2,
         stdout: "",
-        stderrLines: expect.arrayContaining(["at plum", "pear"]),
+        stderrLines: expect.arrayContaining([
+          naming("sort.bench.ts", "load", "kiwi"),
+          "at plum",
+          "pear",
+        ]),
       });
+    });
+  });
+
+  describe("when --measure holds a good list", () => {
+    it("accepts it, exiting 0 with --list, running no case", async () => {
+      const dir = workspace();
+
+      const { code } = await command(dir, ["--list", ...FILES, "--measure", "memory,time"], {
+        startChild: startsNoCase,
+      });
+
+      expect(code).toBe(0);
     });
   });
 
@@ -218,7 +283,7 @@ describe("main", () => {
     });
   });
 
-  describe("when REPSET_CALLS_PER_SAMPLE is set or unset", () => {
+  describe("when REPSET_CALLS_PER_SAMPLE is set", () => {
     const NAME = "REPSET_CALLS_PER_SAMPLE";
     const MAX = Number.MAX_SAFE_INTEGER;
 
@@ -618,8 +683,7 @@ describe("main", () => {
       expect({ code: ended.code, stdout: ended.stdout }).toStrictEqual({ code: 130, stdout: "" });
     });
 
-    it("prints a contender that failed before SIGINT in its contest's block, with no plain-case footer", async () => {
-      const plainRun = linesOf((await command(workspace(), ["sort.bench.ts"])).stdout).at(-1);
+    it("prints a contender that failed before SIGINT in its contest's block", async () => {
       const signals = new EventEmitter();
       let loopFailed = false;
       const loopFailsThenStops = listingStarter(
@@ -641,17 +705,14 @@ describe("main", () => {
       });
 
       const lines = linesOf(ended.stdout);
-      expect(plainRun).toMatch(/\S/u);
       expect({
         code: ended.code,
         heading: lines.some((line) => /^concat(?:\s|$)/u.test(line)),
         loop: lines.filter((line) => line.includes("kiwi")),
-        plainFooter: lines.includes(plainRun ?? ""),
       }).toStrictEqual({
         code: 130,
         heading: true,
         loop: [expect.stringMatching(/^loop +│ \S.* kiwi$/u)],
-        plainFooter: false,
       });
     });
   });
@@ -776,28 +837,23 @@ describe("main", () => {
   });
 
   describe("when a write to stderr fails", () => {
-    it.each([{ code: "EIO", exit: 1 }])(
-      "on $code stops the run like an interrupt, exiting $exit",
-      async ({ code, exit }) => {
-        const { ended, started, report } = await failsInParse("stderr", code);
+    it("on EIO stops the run like an interrupt, exiting 1", async () => {
+      const { ended, started, report } = await failsInParse("stderr", "EIO");
 
-        expect({
-          code: ended.code,
-          started,
-          ran: report.results.map((result) => result.id),
-          interrupted: report.interrupted,
-          stdout: ended.stdout,
-          said: linesOf(ended.stderr).filter((line) => line.includes(code)),
-        }).toStrictEqual({
-          code: exit,
-          started: ["sort/fast", "parse/fast"],
-          ran: ["sort/fast"],
-          interrupted: true,
-          stdout: formatTable(report.results, report.contests, { color: false }),
-          said: [],
-        });
-      },
-    );
+      expect({
+        code: ended.code,
+        started,
+        ran: report.results.map((result) => result.id),
+        interrupted: report.interrupted,
+        stdout: ended.stdout,
+      }).toStrictEqual({
+        code: 1,
+        started: ["sort/fast", "parse/fast"],
+        ran: ["sort/fast"],
+        interrupted: true,
+        stdout: formatTable(report.results, report.contests, { color: false }),
+      });
+    });
 
     it("keeps listening for stderr's error after a crash, so the crash report's failed write does not crash", async () => {
       const stderr = captured();

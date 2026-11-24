@@ -10,6 +10,7 @@ import {
   DEFAULT_MEASURE,
   DEFAULT_RUNTIMES,
   DEFAULT_TIMEOUT,
+  isMeasure,
   resolveOptions,
   type OptionsInput,
 } from "../src/options.js";
@@ -59,6 +60,14 @@ const DEFAULTS = {
   filter: undefined,
   measure: DEFAULT_MEASURE,
 };
+
+describe("isMeasure", () => {
+  it("rejects a name that is neither time nor memory", () => {
+    const accepted = isMeasure("banana");
+
+    expect(accepted).toBe(false);
+  });
+});
 
 describe("resolveOptions", () => {
   describe("when no config is named", () => {
@@ -151,7 +160,6 @@ describe("resolveOptions", () => {
       { name: "node-import-number.ts", option: "nodeImport", shown: "5" },
       { name: "debug-string.ts", option: "debug", shown: "yes" },
       { name: "measure-string.ts", option: "measure", shown: "time" },
-      { name: "measure-unknown.ts", option: "measure", shown: "banana" },
     ])("rejects $name, naming $option and the value", async ({ name, option, shown }) => {
       const result = resolveHere({ config: name });
 

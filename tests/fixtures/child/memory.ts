@@ -1,7 +1,13 @@
 import { bench } from "../../../src/bench.js";
 
-/** Numbers each body sums, so every body costs well above an empty body while allocating nothing. */
-const VALUES: readonly number[] = Array.from({ length: 256 }, (_, index) => index);
+/**
+ * Numbers each body sums, so every body costs well above an empty body while allocating nothing.
+ *
+ * A per-call body is timed between its own pair of clock reads, which cost about 300 ns on a
+ * Windows runner: summing a few hundred numbers there reads too close to the empty body and fails as
+ * optimized away. Several thousand keep each call microseconds long on every platform.
+ */
+const VALUES: readonly number[] = Array.from({ length: 4096 }, (_, index) => index);
 
 /** Where a `setupPerCall` body keeps its sum, a small integer, since repset discards its return. */
 let numberSink = 0;

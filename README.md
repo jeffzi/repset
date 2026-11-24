@@ -204,6 +204,10 @@ search/binary │ 10.8 ns │ 11.0 ns │ 10.4 ns │ 250 ns │  113348 │  0.
 - **When a collection interferes.** A garbage collection inside a sample frees part of what it
   measures, so repset discards that sample and takes it again with fewer calls. A row reads
   `no clean pair` when every sample was disturbed.
+- **With `setupPerCall`.** To read memory, repset sets up every call of a sample before it runs the
+  first, so one sample's per-call states are alive together. To read an empty call, it also sets up
+  and tears down states it never passes to `fn`. State shared across calls, such as a pool or a
+  cache, must not assume one call at a time, or that `fn` runs on every state.
 - **In a contest.** repset reads each contender's memory once, in its first repetition: bytes per
   call agree across processes where times do not. Ranks and ratios still come from time. A contest
   measured for memory alone shows each contender's bytes and ranks nothing.

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { runCheck } from "../../scripts/check-timing-accuracy.js";
 import type { Readers } from "../../scripts/check-timing-accuracy.js";
+import { judgeScenario } from "../../scripts/check-timing-accuracy/verdict.js";
+import type { Pairs } from "../../scripts/check-timing-accuracy/verdict.js";
 import { READING } from "../helpers/repset-reading.js";
 import { wordsInOrder } from "../helpers/words-in-order.js";
 
@@ -10,6 +12,36 @@ const READERS: Readers = {
   repset: () => READING,
   baseline: () => 1000,
 };
+
+/** A round whose repset medians sit `differences` (ns) above baselines of 1000. */
+function pairsOf(differences: readonly number[]): Pairs {
+  return {
+    baseline: differences.map(() => 1000),
+    repset: differences.map((difference) => 1000 + difference),
+    perCallResolutions: differences.map(() => 4),
+  };
+}
+
+const REPSET_HIGHER = pairsOf(Array.from({ length: 12 }, () => 100));
+
+describe("judgeScenario", () => {
+  describe("when a significant first round is not confirmed", () => {
+    it.each([
+      {
+        confirmation: "not significant, same direction",
+        differences: [100, 100, 100, 100, 100, 100, 100, -90, -90, -90, -90, -90],
+      },
+      {
+        confirmation: "significant, opposite direction",
+        differences: Array.from({ length: 12 }, () => -100),
+      },
+    ])("passes with a confirmation round $confirmation", ({ differences }) => {
+      const verdict = judgeScenario(REPSET_HIGHER, () => pairsOf(differences));
+
+      expect(verdict.passed).toBe(true);
+    });
+  });
+});
 
 describe("runCheck", () => {
   describe("when every scenario passes", () => {

@@ -22,9 +22,9 @@ import {
   PAIRS,
   readRepsetRun,
   type RepsetReading,
+  roundLines,
   scenarioLine,
   type SideLabels,
-  summaryLine,
 } from "./check-timing-accuracy.js";
 import { judgeScenario, type Pairs } from "./check-timing-accuracy/verdict.js";
 
@@ -139,6 +139,9 @@ function takeRound(body: MemoryBodyName, readers: Readers): Pairs {
 /**
  * Runs the memory timing check over every body, one reading at a time, printing each once judged.
  *
+ * Each body prints, for each round it takes, the round's summary line and one line per pair with
+ * both medians at full precision, then its pass or FAIL line.
+ *
  * @param readers - The two sides' readers; the real ones run `dist/cli.js`.
  * @param print - Where each body's lines go.
  * @returns 1 when any body's timing with memory measured differs from its timing alone in both
@@ -147,16 +150,20 @@ function takeRound(body: MemoryBodyName, readers: Readers): Pairs {
  *   filesystem errors from creating or removing its temporary directory, which name no body;
  *   whatever a caller-supplied reader throws; and whatever `print` throws.
  * @throws RangeError when a round's arrays are empty or differ in length.
+ * @throws Error naming the body when a confirmation round was taken but the verdict holds no
+ *   confirmation summary.
  */
 export function runCheck(readers: Readers, print: (text: string) => void = console.log): 0 | 1 {
   let failed = false;
   for (const body of MEMORY_BODY_NAMES) {
-    const verdict = judgeScenario(takeRound(body, readers), () => takeRound(body, readers));
-    const summaries =
-      verdict.confirmation === undefined ? [verdict.first] : [verdict.first, verdict.confirmation];
-    const lines = summaries.map((summary, roundIndex) =>
-      summaryLine(body, roundIndex, summary, SIDES),
-    );
+    const first = takeRound(body, readers);
+    const rounds = [first];
+    const verdict = judgeScenario(first, () => {
+      const confirmation = takeRound(body, readers);
+      rounds.push(confirmation);
+      return confirmation;
+    });
+    const lines = roundLines(body, verdict, rounds, SIDES);
     lines.push(scenarioLine(body, verdict.passed ? "pass" : "FAIL"));
     failed ||= !verdict.passed;
     print(lines.join("\n"));

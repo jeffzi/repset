@@ -487,7 +487,7 @@ function pairPlace(name: string, roundIndex: number, pairIndex: number): string 
   return scenarioLine(name, `${roundLabel(roundIndex)} round, pair ${String(pairIndex + 1)}:`);
 }
 
-/** What a round's summary line calls each side of its pairs. */
+/** What a round's summary and pair lines call each side of its pairs. */
 export interface SideLabels {
   readonly baseline: string;
   readonly repset: string;
@@ -505,7 +505,7 @@ const CHECK_SIDES: SideLabels = { baseline: "baseline", repset: "repset" };
  * @param sides - What the line calls the baseline side and the repset side.
  * @returns The summary line.
  */
-export function summaryLine(
+function summaryLine(
   name: string,
   roundIndex: number,
   summary: RoundSummary,
@@ -518,27 +518,37 @@ export function summaryLine(
 }
 
 /**
- * Lays out one round: its summary line, then one line per pair with both medians at full precision.
+ * Lays out every round taken: for each, its summary line, then one line per pair with both medians
+ * at full precision.
  *
- * @param name - The scenario's name.
- * @param roundIndex - The round's index among the scenario's rounds: 0 for the first, 1 for the
- *   confirmation.
- * @param summary - The verdict's summary of the round.
- * @param pairs - The round's pairs.
- * @returns The summary line, then the pair lines in pair order.
- * @throws RangeError when `pairs.repset` is shorter than `pairs.baseline`.
+ * @param name - The scenario's or body's name.
+ * @param verdict - The verdict judging the rounds.
+ * @param rounds - Each round's pairs: the first round's, then the confirmation round's when it was
+ *   taken.
+ * @param sides - What the summary lines and the pair lines call the baseline side and the repset
+ *   side.
+ * @returns Each round's summary line followed by its pair lines in pair order, round after round.
+ * @throws Error naming `name` when a confirmation round was taken but `verdict` holds no
+ *   confirmation summary.
+ * @throws RangeError when a round's `repset` medians are fewer than its `baseline` ones.
  */
-function roundLines(
+export function roundLines(
   name: string,
-  roundIndex: number,
-  summary: RoundSummary,
-  pairs: Pairs,
+  verdict: ScenarioVerdict,
+  rounds: readonly Pairs[],
+  sides: SideLabels,
 ): string[] {
-  const pairLines = pairs.baseline.map((baseline, pairIndex) => {
-    const repset = valueAt(pairs.repset, pairIndex);
-    return `${pairPlace(name, roundIndex, pairIndex)}  baseline ${String(baseline)}  repset ${String(repset)}`;
+  return rounds.flatMap((pairs, roundIndex) => {
+    const summary = roundIndex === 0 ? verdict.first : verdict.confirmation;
+    if (summary === undefined) {
+      throw new Error(`${name}: the confirmation round has no confirmation summary`);
+    }
+    const pairLines = pairs.baseline.map((baseline, pairIndex) => {
+      const repset = valueAt(pairs.repset, pairIndex);
+      return `${pairPlace(name, roundIndex, pairIndex)}  ${sides.baseline} ${String(baseline)}  ${sides.repset} ${String(repset)}`;
+    });
+    return [summaryLine(name, roundIndex, summary, sides), ...pairLines];
   });
-  return [summaryLine(name, roundIndex, summary, CHECK_SIDES), ...pairLines];
 }
 
 /**
@@ -582,13 +592,12 @@ function scenarioReport(
   rounds: readonly Round[],
 ): { readonly lines: readonly string[]; readonly floorBreaks: readonly string[] } {
   const name = scenarioName(scenario);
-  const lines = rounds.flatMap((round, roundIndex) => {
-    const summary = roundIndex === 0 ? verdict.first : verdict.confirmation;
-    if (summary === undefined) {
-      throw new Error(`${name}: the confirmation round has no confirmation summary`);
-    }
-    return roundLines(name, roundIndex, summary, round.pairs);
-  });
+  const lines = roundLines(
+    name,
+    verdict,
+    rounds.map((round) => round.pairs),
+    CHECK_SIDES,
+  );
   const outcome = scenarioLine(name, verdict.passed ? "pass" : "FAIL");
   if (scenario.countMode === "one-call") {
     lines.push(outcome);

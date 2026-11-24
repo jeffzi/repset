@@ -80,5 +80,7 @@ jobs:
       - name: Timing accuracy
         run: task check-timing-accuracy
 
+      # Runs after a failed timing accuracy step too, so one run reports both checks.
       - name: Memory timing
+        if: ${{ !cancelled() }}
         run: task check-memory-timing

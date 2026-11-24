@@ -18,4 +18,17 @@ describe("runCheck", () => {
       expect(status).toBe(0);
     });
   });
+
+  describe("when timing with memory measured reads higher than timing alone in every pair", () => {
+    it("returns 1", () => {
+      const readers: Readers = {
+        alone: () => READING,
+        withMemory: () => ({ ...READING, median: 1100 }),
+      };
+
+      const status = runCheck(readers, () => undefined);
+
+      expect(status).toBe(1);
+    });
+  });
 });

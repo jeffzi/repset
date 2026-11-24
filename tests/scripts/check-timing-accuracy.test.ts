@@ -18,4 +18,17 @@ describe("runCheck", () => {
       expect(status).toBe(0);
     });
   });
+
+  describe("when repset reads higher than the baseline in every pair", () => {
+    it("returns 1", () => {
+      const readers: Readers = {
+        repset: () => ({ ...READING, median: 1100 }),
+        baseline: () => 1000,
+      };
+
+      const status = runCheck(readers, () => undefined);
+
+      expect(status).toBe(1);
+    });
+  });
 });

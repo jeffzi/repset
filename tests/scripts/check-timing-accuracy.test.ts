@@ -20,6 +20,19 @@ describe("runCheck", () => {
     });
   });
 
+  describe("when a calibrated reading's timing lasted under its minTime", () => {
+    it("returns 1", () => {
+      const readers: Readers = {
+        repset: () => ({ ...READING, timingMs: READING.minTime - 1 }),
+        baseline: () => 1000,
+      };
+
+      const status = runCheck(readers, () => undefined);
+
+      expect(status).toBe(1);
+    });
+  });
+
   describe("when repset reads higher than the baseline in every pair", () => {
     it("returns 1", () => {
       const readers: Readers = {

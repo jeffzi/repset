@@ -89,8 +89,6 @@ const FIELD_ORDER: Readonly<Record<keyof Benchmark<unknown>, true>> = {
 /** A benchmark object's fields, in the order an error message lists them. */
 const FIELDS = Object.keys(FIELD_ORDER);
 
-const KNOWN_FIELDS: ReadonlySet<string> = new Set(FIELDS);
-
 /** One segment of a name: ASCII letters, digits, `_`, `-` and `.`. */
 const SEGMENT = String.raw`[\w.-]+`;
 
@@ -236,7 +234,7 @@ function casesOf(name: string, benchmark: unknown): ContenderCase[] {
     );
   }
   for (const field of Object.keys(benchmark)) {
-    if (!KNOWN_FIELDS.has(field)) {
+    if (!Object.hasOwn(FIELD_ORDER, field)) {
       throw new TypeError(
         `${subject} has the field ${JSON.stringify(field)}, which repset does not know: a benchmark's fields are ${FIELDS.join(", ")}`,
       );

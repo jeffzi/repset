@@ -214,10 +214,10 @@ describe("bench", () => {
   });
 
   describe("when given a benchmark object with a field repset does not know", () => {
-    it("throws a TypeError holding the field", () => {
-      const error = rejectionOf("sort", { fn: sync, banana: 1 });
+    it.each(["banana", "toString"])("throws a TypeError holding the field %s", (field) => {
+      const error = rejectionOf("sort", { fn: sync, [field]: 1 });
 
-      expectTypeErrorHolding(error, ["sort", "banana"]);
+      expectTypeErrorHolding(error, ["sort", field]);
     });
   });
 

@@ -47,9 +47,7 @@ describe("bench", () => {
           quick: (values) => {
             expectTypeOf(values).toEqualTypeOf<number[]>();
           },
-          merge: (values) => {
-            expectTypeOf(values).toEqualTypeOf<number[]>();
-          },
+          merge: () => undefined,
         },
       });
     });

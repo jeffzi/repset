@@ -3,7 +3,8 @@ import { pathToFileURL } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ConfigError } from "../src/options.js";
+import { DEFAULT_MIN_SAMPLES, DEFAULT_MIN_TIME } from "../src/measure/measure.js";
+import { ConfigError, DEFAULT_TIMEOUT } from "../src/options.js";
 import type { Report, Result } from "../src/report.js";
 import { runOnce } from "../src/run.js";
 import { expectConfigError } from "./helpers/config-error.js";
@@ -94,6 +95,9 @@ afterEach(() => {
 describe("run", () => {
   describe("when the run completes", () => {
     it("returns a report holding the inputs, the host and each measured case's result", async () => {
+      freezeClock();
+      const { time } = measured(4656);
+
       const report = await runHere({
         cwd: join(DISCOVERY, "nested"),
         files: ["../a.bench.ts"],
@@ -103,26 +107,44 @@ describe("run", () => {
         nodeImport: "tsx",
         cpus: () => [cpu("Apple M2 Max"), cpu("Apple M2 Max"), cpu("Apple M2 Max")],
       });
-      const { time } = measured(4656);
 
-      expect(report).toMatchObject({
+      expect(report).toStrictEqual({
+        schema: 1,
         repset: "1.2.3",
+        startedAt: STARTED_AT.toISOString(),
         interrupted: false,
-        options: { files: ["../a.bench.ts"], filter: "bench", nodeImport: "tsx" },
+        options: {
+          runtimes: ["node"],
+          measure: ["time"],
+          files: ["../a.bench.ts"],
+          filter: "bench",
+          minTime: DEFAULT_MIN_TIME,
+          minSampleCount: DEFAULT_MIN_SAMPLES,
+          contestRepetitionCount: null,
+          debug: true,
+          seed: null,
+          timeout: DEFAULT_TIMEOUT,
+          nodeImport: "tsx",
+          rawSamples: false,
+        },
         host: { os: process.platform, arch: process.arch, cpu: "Apple M2 Max", coreCount: 3 },
         results: [
           {
             id: "a.bench.ts",
             name: "a.bench.ts",
+            contender: null,
+            params: {},
             file: "../a.bench.ts",
             runtime: { name: "node", version: found("node").version },
             setupPerCall: true,
             status: "ok",
             error: null,
             time: { unit: "ns/call", median: 4656 },
-            measurements: [{ repetition: null, orderInRepetition: null, time }],
+            memory: null,
+            measurements: [{ repetition: null, orderInRepetition: null, time, memory: null }],
           },
         ],
+        contests: [],
       });
     });
 
@@ -242,17 +264,20 @@ describe("run", () => {
 
       const report = await runHere({ startChild: failsFn });
 
-      expect(report.results).toMatchObject([
+      expect(report.results).toStrictEqual([
         {
           id: "zeta.bench.ts",
           name: "zeta.bench.ts",
+          contender: null,
+          params: {},
           file: "zeta.bench.ts",
           runtime: { name: "node", version: found("node").version },
           setupPerCall: false,
           status: "failed",
           error: { ...error, output: "plum\n" },
           time: null,
-          measurements: [{ repetition: null, orderInRepetition: null, time: null }],
+          memory: null,
+          measurements: [{ repetition: null, orderInRepetition: null, time: null, memory: null }],
         },
       ]);
     });
@@ -323,10 +348,7 @@ describe("run", () => {
         startChild: noHeapOnBun,
       });
 
-      expect({
-        statuses: report.results.map((result) => result.status),
-        node: report.results.find((result) => result.runtime.name === "node")?.memory,
-      }).toStrictEqual({ statuses: ["ok", "ok"], node: { unit: "B/call", median: 40 } });
+      expect(report.results.map((result) => result.status)).toStrictEqual(["ok", "ok"]);
     });
 
     it("times a case on runtimes with no heap reading when measure holds time and memory", async () => {

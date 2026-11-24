@@ -27,7 +27,7 @@ import type {
 } from "./report.js";
 import { isContest, type OnceInput, type StartHandlers, startEach } from "./schedule.js";
 import type { SelectedCase } from "./select.js";
-import { property, quantile } from "./utils.js";
+import { property, quantile, quotedList } from "./utils.js";
 
 /**
  * The package's own `package.json`: one directory above this module, which holds from `src/` and
@@ -65,7 +65,7 @@ export interface RunInput extends OnceInput {
 }
 
 /** One case's once run on one runtime: it ran, or it failed in a phase. */
-export type OnceResult =
+type OnceResult =
   | { readonly id: string; readonly runtime: Runtime; readonly status: "ok" }
   | {
       readonly id: string;
@@ -74,7 +74,7 @@ export type OnceResult =
       readonly error: Pick<ChildError, "phase" | "message" | "teardownError">;
     };
 
-export interface OnceRun {
+interface OnceRun {
   readonly interrupted: boolean;
   readonly results: readonly OnceResult[];
 }
@@ -304,13 +304,8 @@ function requireReading(options: ResolvedOptions): void {
   if (options.measure.includes("time")) return;
   if (options.runtimes.some(hasHeapReading)) return;
   throw new ConfigError(
-    `measure holds only "memory", and no runtime in runtimes (${options.runtimes.join(", ")}) has a heap reading: add ${HEAP_READING_RUNTIMES.map((runtime) => `"${runtime}"`).join(" or ")} to runtimes or "time" to measure`,
+    `measure holds only "memory", and no runtime in runtimes (${options.runtimes.join(", ")}) has a heap reading: add ${quotedList(HEAP_READING_RUNTIMES, "or")} to runtimes or "time" to measure`,
   );
-}
-
-/** A random 32-bit seed for the repetition orders. */
-function drawRandomSeed(): number {
-  return randomInt(2 ** 32);
 }
 
 /**
@@ -340,7 +335,8 @@ export async function run(input: RunInput): Promise<Report> {
   const startedAt = new Date().toISOString();
   const repset = await packageVersion(input.packageJson);
   const host = hostOf(input.cpus ?? realCpus);
-  const seed = (input.drawSeed ?? drawRandomSeed)();
+  // A random 32-bit seed for the repetition orders unless the caller draws it.
+  const seed = (input.drawSeed ?? (() => randomInt(2 ** 32)))();
   const results: Result[] = [];
   const contests: Contest[] = [];
   let contested = false;
@@ -359,9 +355,6 @@ export async function run(input: RunInput): Promise<Report> {
   const emit = (result: Result): void => {
     results.push(result);
     input.onResult?.(result, [...contests]);
-  };
-  const record = (contest: Contest): void => {
-    contests.push(contest);
   };
   const { options, interrupted } = await startEach<MeasureRequest>(
     input,
@@ -385,7 +378,13 @@ export async function run(input: RunInput): Promise<Report> {
         input.onPlanned?.(total);
       },
       dropped: input.onDropped,
-      ...resultHandlers(emit, record, () => debug),
+      ...resultHandlers(
+        emit,
+        (contest) => {
+          contests.push(contest);
+        },
+        () => debug,
+      ),
     },
     seed,
   );

@@ -5,6 +5,7 @@ import {
   errorStack,
   isRecord,
   property,
+  quotedList,
   thrownMessage,
   timerResolutionMs,
   valueAt,
@@ -201,5 +202,13 @@ describe("valueAt", () => {
 
       expect(read).toThrow(RangeError);
     });
+  });
+});
+
+describe("quotedList", () => {
+  it("quotes each name and joins them with the conjunction between spaces", () => {
+    const list = quotedList(["node", "bun", "deno"], "or");
+
+    expect(list).toBe('"node" or "bun" or "deno"');
   });
 });

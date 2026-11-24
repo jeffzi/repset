@@ -14,7 +14,7 @@ import { pathToFileURL } from "node:url";
 
 import { DEFAULT_MIN_SAMPLES, DEFAULT_MIN_TIME } from "./measure/measure.js";
 import { RUNTIMES, type Runtime } from "./measure/runtime.js";
-import { describe, property, thrownMessage } from "./utils.js";
+import { describe, property, quotedList, thrownMessage } from "./utils.js";
 
 /** What a run can measure of each case. */
 export const MEASURES = ["time", "memory"] as const;
@@ -82,7 +82,7 @@ export interface OptionsInput extends Config {
 }
 
 /** A module Node children import first. */
-export interface NodeImport {
+interface NodeImport {
   /** The value as the config file or the caller wrote it, which the report records. */
   readonly written: string;
   /** The value Node children receive. */
@@ -232,7 +232,7 @@ export function isRuntime(value: unknown): value is Runtime {
 }
 
 /** Every runtime repset runs on, each quoted: `"node" and "bun"`. */
-export const QUOTED_RUNTIMES = RUNTIMES.map((runtime) => `"${runtime}"`).join(" and ");
+export const QUOTED_RUNTIMES = quotedList(RUNTIMES, "and");
 
 /** An option that lists names of a closed set: its key, what one name is, and the set. */
 interface NameOption<T> {
@@ -272,7 +272,7 @@ export function isMeasure(value: unknown): value is Measure {
 }
 
 /** Everything a run can measure, each quoted: `"time" and "memory"`. */
-export const QUOTED_MEASURES = MEASURES.map((measure) => `"${measure}"`).join(" and ");
+export const QUOTED_MEASURES = quotedList(MEASURES, "and");
 
 function checkedMeasure(value: unknown): readonly Measure[] {
   return checkedNames(

@@ -5,6 +5,7 @@ import type {
   ContestContender,
   FailedResult,
   HeadlineMemory,
+  HeadlineTime,
   MeasuredResult,
   Result,
   ResultError,
@@ -16,6 +17,16 @@ export type Runtime = Result["runtime"]["name"];
 type Measurement = MeasuredResult["measurements"][number];
 export type Stats = NonNullable<Measurement["time"]>["stats"];
 type ResultBase = StrictOmit<Result, "status" | "error" | "time" | "memory" | "measurements">;
+
+/** The headline time of `median` nanoseconds per call. */
+export function nsPerCall(median: number): HeadlineTime {
+  return { unit: "ns/call", median };
+}
+
+/** The headline memory of `median` bytes per call, `null` when no clean pair was kept. */
+export function bytesPerCall(median: number | null): HeadlineMemory {
+  return { unit: "B/call", median };
+}
 
 /** The statistics of a case whose every time is `median`, measured over 64 samples. */
 export function flatStats(median: number): Stats {

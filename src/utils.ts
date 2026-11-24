@@ -150,6 +150,17 @@ export function valueAt<T>(values: ArrayLike<T>, index: number): T {
 /** Splits text into the characters a person sees. */
 export const GRAPHEMES = new Intl.Segmenter();
 
+/**
+ * Quotes each name and joins them with a conjunction: `"node" and "bun"`.
+ *
+ * @param names - The names to quote, in order.
+ * @param conjunction - The word between every two names, such as `and` or `or`.
+ * @returns The quoted names, each pair separated by the conjunction between spaces.
+ */
+export function quotedList(names: readonly string[], conjunction: string): string {
+  return names.map((name) => `"${name}"`).join(` ${conjunction} `);
+}
+
 /** How many distinct pairs `size` items form. */
 export function pairsOf(size: number): number {
   return (size * (size - 1)) / 2;

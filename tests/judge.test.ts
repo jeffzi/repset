@@ -12,6 +12,7 @@ import type {
 import { errorOf } from "./helpers/error-of.js";
 import { measured, memoryOf, runtimeOf } from "./helpers/fake-children.js";
 import { repeated } from "./helpers/repeated.js";
+import { bytesPerCall, nsPerCall } from "./helpers/report-results.js";
 
 /** What a contender's child gave in one repetition: its median, or its median at a calls per sample. */
 type Timing = number | { readonly median: number; readonly callsPerSample: number };
@@ -126,16 +127,6 @@ function failed(key: string, medians: readonly number[]): FailedResult {
       { repetition: medians.length + 1, orderInRepetition: 1, time: null, memory: null },
     ],
   };
-}
-
-/** The headline memory of `median` bytes per call. */
-function bytesPerCall(median: number): HeadlineMemory {
-  return { unit: "B/call", median };
-}
-
-/** The headline time of `median` nanoseconds per call. */
-function nsPerCall(median: number): { unit: "ns/call"; median: number } {
-  return { unit: "ns/call", median };
 }
 
 /** The contest of one timed contender per key of `byKey`, in key order. */
@@ -343,24 +334,6 @@ describe("contestOf", () => {
         tie,
       })),
     ).toStrictEqual(repeated({ clearsTheBar: true, faster: null, tie: "repetitions" }, 3));
-  });
-
-  it("gives each contender its result's memory, ranking and pairing by time alone", () => {
-    const contest = contestOf([
-      timed("loop", repeated(200, 7), bytesPerCall(40)),
-      timed("join", repeated(100, 7), bytesPerCall(80)),
-    ]);
-
-    expect({
-      contenders: contest.contenders.map(({ id, memory, rank }) => ({ id, memory, rank })),
-      pairs: contest.pairs.map(({ a, b, faster }) => [a, b, faster]),
-    }).toStrictEqual({
-      contenders: [
-        { id: "concat/join", memory: bytesPerCall(80), rank: 1 },
-        { id: "concat/loop", memory: bytesPerCall(40), rank: 2 },
-      ],
-      pairs: [["concat/join", "concat/loop", "concat/join"]],
-    });
   });
 
   describe("when the repetitions cannot reach a verdict", () => {

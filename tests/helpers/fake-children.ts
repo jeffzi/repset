@@ -170,6 +170,20 @@ export function failedOutcome(
 /** The failure of a cleanup teardown that threw an `Error`, as the child encodes it. */
 export const MELON = { message: "melon", stack: "at teardown" } as const;
 
+/** The fields of a child's own failure in phase fn, before its `teardownError`. */
+export const FN_KIWI = { phase: "fn", message: "kiwi", stack: "at fn" } as const;
+
+/** The result line of a child whose own failure is `error`. */
+export function failureLine(error: object): string {
+  return `${JSON.stringify({ status: "failed", error })}\n`;
+}
+
+/** What a measure request asks the child to read. */
+export type MeasureKinds = Pick<MeasureRequest, "time" | "memory">;
+
+/** A measure request's kinds when it asks for time alone. */
+export const TIME_ONLY: MeasureKinds = { time: true, memory: false };
+
 /** An answer that measures every request, and fails `concat/loop`'s second call in phase `fn` with `kiwi`. */
 export function failsLoopInRepetitionTwo(): (request: Asked) => Outcome {
   let loopCalls = 0;

@@ -3,6 +3,13 @@ import { describe, expect, it } from "vitest";
 import type { ChildRequest, MeasureRequest } from "../src/child-protocol.js";
 import { readResult } from "../src/child-result.js";
 import { errorOf } from "./helpers/error-of.js";
+import {
+  failureLine,
+  FN_KIWI,
+  MELON,
+  type MeasureKinds,
+  TIME_ONLY,
+} from "./helpers/fake-children.js";
 
 /** A list request; `readResult` reads only its mode. */
 const LIST: ChildRequest = { mode: "list", file: "fruit.bench.ts" };
@@ -10,15 +17,10 @@ const LIST: ChildRequest = { mode: "list", file: "fruit.bench.ts" };
 /** A once request; `readResult` reads only its mode. */
 const ONCE: ChildRequest = { mode: "once", file: "fruit.bench.ts", id: "apple" };
 
-/** What a measure request asks the child to read. */
-type Asked = Pick<MeasureRequest, "time" | "memory">;
-
-const TIME_ONLY: Asked = { time: true, memory: false };
-
-const MEMORY_ONLY: Asked = { time: false, memory: true };
+const MEMORY_ONLY: MeasureKinds = { time: false, memory: true };
 
 /** A measure request asking for `asked`. */
-function measuring(asked: Asked = TIME_ONLY): MeasureRequest {
+function measuring(asked: MeasureKinds = TIME_ONLY): MeasureRequest {
   return {
     mode: "measure",
     file: "fruit.bench.ts",
@@ -44,14 +46,6 @@ const LISTED_QUICK = {
 function listingLine(listedCase: object): string {
   return `${JSON.stringify({ status: "ok", cases: [listedCase] })}\n`;
 }
-
-/** The result line of a child whose own failure is `error`. */
-function failureLine(error: object): string {
-  return `${JSON.stringify({ status: "failed", error })}\n`;
-}
-
-/** The fields of a child's own failure in phase fn, before its `teardownError`. */
-const FN_KIWI = { phase: "fn", message: "kiwi", stack: "at fn" } as const;
 
 /** The collections a measurement on Node reports, as the child writes them. */
 const NODE_GC = {
@@ -126,23 +120,24 @@ describe("readResult", () => {
           error: { phase: "load", message: "kiwi", stack: null, teardownError: null },
         },
       },
+      {
+        why: "the child's own failure with a stack whose cleanup teardown failed too",
+        written: failureLine({ ...FN_KIWI, teardownError: MELON }),
+        request: ONCE,
+        expected: { status: "failed", error: { ...FN_KIWI, teardownError: MELON } },
+      },
     ])("returns $why", ({ written, request, expected }) => {
       const result = readResult(written, request);
 
       expect(result).toStrictEqual(expected);
     });
 
-    it("returns a measurement holding its collections", () => {
-      const written = measuredLine("ok", { time: timeBlock(NODE_GC), memory: null });
-
-      const result = readResult(written, measuring());
-
-      expect(result).toStrictEqual(
-        expect.objectContaining({ time: expect.objectContaining({ gc: NODE_GC }) }),
-      );
-    });
-
     it.each([
+      {
+        why: "a time block holding its collections and a null memory for a request asking time alone",
+        fields: { time: timeBlock(NODE_GC), memory: null },
+        asked: TIME_ONLY,
+      },
       {
         why: "time and memory blocks for a request asking both",
         fields: { time: timeBlock(null), memory: memoryBlock(MEMORY_STATS) },
@@ -173,14 +168,9 @@ describe("readResult", () => {
   describe("when the line is not a usable result", () => {
     it.each([
       {
-        why: "a line with no newline",
-        written: listingLine(LISTED_APPLE).trimEnd(),
+        why: "a line with no newline that is a listing without its last character",
+        written: `${listingLine(LISTED_APPLE).trimEnd()} `,
         request: LIST,
-      },
-      {
-        why: "a listing for a measure request",
-        written: listingLine(LISTED_APPLE),
-        request: measuring(),
       },
       { why: "a listing for a once request", written: listingLine(LISTED_APPLE), request: ONCE },
       {
@@ -199,6 +189,11 @@ describe("readResult", () => {
         request: ONCE,
       },
       { why: "a failure with no teardownError", written: failureLine(FN_KIWI), request: ONCE },
+      {
+        why: "a failure in a phase the child does not have",
+        written: failureLine({ ...FN_KIWI, phase: "banana", teardownError: null }),
+        request: ONCE,
+      },
       {
         why: "a measurement whose collections lack the major count",
         written: measuredLine("ok", {

@@ -15,6 +15,7 @@ import {
   type MemoryProbe,
 } from "../src/child.js";
 import { MeasureError } from "../src/measure/measure.js";
+import { property } from "../src/utils.js";
 import { fixturePath, ROOT } from "./helpers/fixture-path.js";
 import { resetRegistry } from "./helpers/registry.js";
 import { repeated } from "./helpers/repeated.js";
@@ -145,43 +146,49 @@ describe("parseRequest", () => {
 });
 
 describe("failedResult", () => {
-  it("encodes a thrown Error in the phase given, with its message and stack", () => {
-    const error = new Error("banana");
+  describe("when the thrown value is an Error", () => {
+    it("encodes it in the phase given, with its message and stack", () => {
+      const error = new Error("banana");
 
-    const result = failedResult("load", error);
+      const result = failedResult("load", error);
 
-    expect(result).toStrictEqual({
-      status: "failed",
-      error: { phase: "load", message: "banana", stack: error.stack, teardownError: null },
+      expect(result).toStrictEqual({
+        status: "failed",
+        error: { phase: "load", message: "banana", stack: error.stack, teardownError: null },
+      });
     });
   });
 
-  it("takes a MeasureError's own phase and message, and the stack of its cause", () => {
-    const cause = new Error("kiwi");
+  describe("when the thrown value is a MeasureError", () => {
+    it("takes its own phase and message, and the stack of its cause", () => {
+      const cause = new Error("kiwi");
 
-    const result = failedResult("child", new MeasureError("fn", cause));
+      const result = failedResult("child", new MeasureError("fn", cause));
 
-    expect(result).toStrictEqual({
-      status: "failed",
-      error: { phase: "fn", message: "kiwi", stack: cause.stack, teardownError: null },
+      expect(result).toStrictEqual({
+        status: "failed",
+        error: { phase: "fn", message: "kiwi", stack: cause.stack, teardownError: null },
+      });
+    });
+
+    it("encodes its teardown failure as the message and stack of the Error it threw", () => {
+      const melon = new Error("melon");
+      const thrown = new MeasureError("fn", new Error("lime"), new MeasureError("teardown", melon));
+
+      const result = failedResult("child", thrown);
+
+      expect(result.error.teardownError).toStrictEqual({ message: "melon", stack: melon.stack });
     });
   });
 
-  it("encodes a MeasureError's teardown failure as the message and stack of the Error it threw", () => {
-    const melon = new Error("melon");
-    const thrown = new MeasureError("fn", new Error("lime"), new MeasureError("teardown", melon));
+  describe("when the thrown value's instanceof check throws", () => {
+    it("encodes it in the phase given", () => {
+      const result = failedResult("load", trappedProxy());
 
-    const result = failedResult("child", thrown);
-
-    expect(result.error.teardownError).toStrictEqual({ message: "melon", stack: melon.stack });
-  });
-
-  it("encodes a thrown value whose instanceof check throws in the phase given", () => {
-    const result = failedResult("load", trappedProxy());
-
-    expect(result).toMatchObject({
-      status: "failed",
-      error: { phase: "load", stack: null, teardownError: null },
+      expect(result).toMatchObject({
+        status: "failed",
+        error: { phase: "load", stack: null, teardownError: null },
+      });
     });
   });
 });
@@ -346,13 +353,23 @@ describe("measureCase", () => {
     });
   });
 
+  describe("when time alone is asked", { timeout: MEASURE_TIMEOUT_MS }, () => {
+    it("returns a null memory", async () => {
+      const result = await measureCase(LIFECYCLE, "steady", TIME_ONLY, cleanProbe());
+
+      expect(result).toMatchObject({ status: "ok", memory: null });
+    });
+
+    it("reads no heap", async () => {
+      await measureCase(LIFECYCLE, "steady", TIME_ONLY, cleanProbe());
+
+      expect(calls()).not.toContain(READ);
+    });
+  });
+
   describe("when memory is asked", { timeout: MEASURE_TIMEOUT_MS }, () => {
     beforeEach(() => {
       vi.stubGlobal("gc", () => undefined);
-    });
-
-    afterEach(() => {
-      vi.unstubAllGlobals();
     });
 
     describe("when time is asked too", () => {
@@ -373,20 +390,6 @@ describe("measureCase", () => {
             rawSamples: null,
           },
         });
-      });
-    });
-
-    describe("when time alone is asked", () => {
-      it("returns a null memory", async () => {
-        const result = await measureCase(LIFECYCLE, "steady", TIME_ONLY, cleanProbe());
-
-        expect(result).toMatchObject({ status: "ok", memory: null });
-      });
-
-      it("reads no heap", async () => {
-        await measureCase(LIFECYCLE, "steady", TIME_ONLY, cleanProbe());
-
-        expect(calls()).not.toContain(READ);
       });
     });
 
@@ -459,14 +462,17 @@ describe("measureCase", () => {
     });
 
     describe("when the case builds a state per call", () => {
-      it("holds as many states at each heap reading as the sample's calls, and none after", async () => {
+      it("holds as many states at each heap reading as the sample's calls", async () => {
+        await passOn("quiet-per-call");
+
+        expect(liveAtReads(calls())).toStrictEqual(repeated(START_CALLS, 4 * PAIRS));
+      });
+
+      it("tears every state down by the end of the pass", async () => {
         await passOn("quiet-per-call");
 
         const log = calls();
-        expect({
-          atReads: liveAtReads(log),
-          atEnd: count(log, " setup") - count(log, " teardown"),
-        }).toStrictEqual({ atReads: repeated(START_CALLS, 4 * PAIRS), atEnd: 0 });
+        expect(count(log, " setup") - count(log, " teardown")).toBe(0);
       });
 
       it("runs each empty sample at its body sample's halved count", async () => {
@@ -521,18 +527,15 @@ describe("measureCase", () => {
           flags: (bodyCalls: number, nth: number) => bodyCalls > 1 && nth === 0,
           callsPerSample: 1,
         },
-      ])(
-        "halves the calls per sample and takes 21 pairs again when $why",
-        async ({ flags, callsPerSample }) => {
-          const probe = { heapUsed: fakeHeap(40), detector: fakeDetector(flags) };
+      ])("halves the calls per sample when $why", async ({ flags, callsPerSample }) => {
+        const probe = { heapUsed: fakeHeap(40), detector: fakeDetector(flags) };
 
-          const result = await passOn("quiet", probe);
+        const result = await passOn("quiet", probe);
 
-          expect(result).toMatchObject({
-            memory: { stats: { median: 40, sampleCount: PAIRS }, sampling: { callsPerSample } },
-          });
-        },
-      );
+        expect(result).toMatchObject({
+          memory: { stats: { median: 40, sampleCount: PAIRS }, sampling: { callsPerSample } },
+        });
+      });
 
       it("halves the calls per sample when the empty sample of a pair is flagged", async () => {
         const probe = {
@@ -727,6 +730,27 @@ async function spawnChild(request: object): Promise<ChildRun> {
   };
 }
 
+/** A request to time the case `id` of the `memory.ts` fixture, then read its memory. */
+function measuringMemory(id: string): object {
+  return {
+    mode: "measure",
+    file: fixture("memory.ts"),
+    id,
+    ...SHORT_RUN,
+    time: true,
+    memory: true,
+  };
+}
+
+/** The median of a child result's memory statistics; throws when the result holds none. */
+function memoryMedian(result: unknown): number {
+  const median = property(property(property(result, "memory"), "stats"), "median");
+  if (typeof median !== "number") {
+    throw new Error(`no memory median in ${JSON.stringify(result).slice(0, 400)}`);
+  }
+  return median;
+}
+
 /** The JSON of the one newline-terminated line `fd3` holds; throws when it holds anything else. */
 function resultLine(fd3: string): unknown {
   const line = /^([^\n]*)\n$/.exec(fd3)?.[1];
@@ -769,6 +793,55 @@ describe("the child started on node", { timeout: SPAWN_TIMEOUT_MS }, () => {
       expect(resultLine(run.fd3)).toStrictEqual({
         status: "ok",
         cases: [{ id: "found", setupPerCall: false, name: "found", contender: null }],
+      });
+    });
+  });
+
+  describe("when a measure request asks time and memory", () => {
+    it.each([
+      { id: "zero", bytes: 0, within: 0 },
+      { id: "object", bytes: 40, within: 1 },
+      { id: "zero-per-call", bytes: 0, within: 0 },
+      { id: "object-per-call", bytes: 40, within: 1 },
+    ])(
+      "reads $id at $bytes bytes per call, within $within, after timing",
+      async ({ id, bytes, within }) => {
+        const run = await spawnChild(measuringMemory(id));
+
+        expect(Math.abs(memoryMedian(resultLine(run.fd3)) - bytes)).toBeLessThanOrEqual(within);
+      },
+    );
+
+    // Without the collection forced before each sample, a collection lands inside the samples
+    // of this body and the pass halves its calls per sample. That holds only while V8's young
+    // generation is small: at `--min-semi-space-size=16` the reading stays at 64 without the
+    // forced collection. Capping the semi-space at 1 MB keeps it small whatever size a Node
+    // release starts with, so the test keeps catching a removed collection.
+    it("reads a body allocating a 1024-element array per call at 64 calls per sample", async () => {
+      vi.stubEnv("NODE_OPTIONS", "--max-semi-space-size=1");
+
+      const run = await spawnChild(measuringMemory("array"));
+
+      expect(resultLine(run.fd3)).toMatchObject({
+        status: "ok",
+        memory: { sampling: { callsPerSample: 64 } },
+      });
+    });
+
+    describe("when every call collects", () => {
+      it("halves to one call per sample", async () => {
+        const run = await spawnChild(measuringMemory("collect"));
+
+        expect(resultLine(run.fd3)).toMatchObject({
+          status: "ok",
+          memory: { sampling: { callsPerSample: 1 } },
+        });
+      });
+
+      it("reads null statistics", async () => {
+        const run = await spawnChild(measuringMemory("collect"));
+
+        expect(resultLine(run.fd3)).toMatchObject({ status: "ok", memory: { stats: null } });
       });
     });
   });

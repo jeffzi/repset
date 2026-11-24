@@ -14,7 +14,7 @@ import {
 } from "../src/children.js";
 import { expectConfigError } from "./helpers/config-error.js";
 import { errorOf } from "./helpers/error-of.js";
-import { MELON } from "./helpers/fake-children.js";
+import { failureLine, FN_KIWI, MELON, TIME_ONLY } from "./helpers/fake-children.js";
 import { fixturePath } from "./helpers/fixture-path.js";
 import { requiresRealBunHere } from "./helpers/real-bun.js";
 import {
@@ -101,11 +101,6 @@ function echoing(written: string): ChildRequest {
   return { mode: "once", file: written, id: "apple" };
 }
 
-/** The result line of a child whose own failure is `error`. */
-function failureLine(error: object): string {
-  return `${JSON.stringify({ status: "failed", error })}\n`;
-}
-
 /** Runs `start` and returns what it resolved to with the milliseconds it took. */
 async function timed<T>(start: () => Promise<T>): Promise<[T, number]> {
   const started = performance.now();
@@ -113,51 +108,12 @@ async function timed<T>(start: () => Promise<T>): Promise<[T, number]> {
   return [outcome, performance.now() - started];
 }
 
-/** The fields of a child's own failure in phase fn, before its `teardownError`. */
-const FN_KIWI = { phase: "fn", message: "kiwi", stack: "at fn" } as const;
-
 /** The failure of a child that left no usable result line. */
 const NO_RESULT = { status: "failed", error: { phase: "child", stack: null } };
 
 /** The no-result failure whose error message matches `message`. */
 function noResultSaying(message: unknown): object {
   return { ...NO_RESULT, error: { ...NO_RESULT.error, message } };
-}
-
-/** What a measure request asks the child to read. */
-interface Asked {
-  readonly time: boolean;
-  readonly memory: boolean;
-}
-
-const TIME_ONLY: Asked = { time: true, memory: false };
-
-/** How the built-child tests start a child that loads a TypeScript benchmark file. */
-const BUILT_OPTIONS = { timeout: KILL_AFTER_MS, nodeImport: "tsx" } as const;
-
-/** A request to time the case `id` of the `memory.ts` fixture, then read its memory. */
-function measuringMemory(id: string): ChildRequest {
-  return {
-    mode: "measure",
-    file: benchFile("memory.ts"),
-    id,
-    minTime: 5,
-    minSamples: 8,
-    time: true,
-    memory: true,
-  };
-}
-
-/** The median of a measured outcome's memory statistics; throws when the outcome holds none. */
-function memoryMedian(outcome: Outcome): number {
-  const median: unknown =
-    outcome.status === "ok" && "memory" in outcome.result
-      ? outcome.result.memory?.stats?.median
-      : undefined;
-  if (typeof median !== "number") {
-    throw new Error(`no memory median in ${JSON.stringify(outcome).slice(0, 400)}`);
-  }
-  return median;
 }
 
 describe("findRuntime", { timeout: SPAWN_TIMEOUT_MS }, () => {
@@ -445,28 +401,24 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
     });
   });
 
-  describe("with the child entry on node", () => {
-    describe("when the request is valid", () => {
-      it("returns the measurement of one case", async () => {
-        const found = await findRuntime("node", LOOKUP);
+  describe("from the source child entry", () => {
+    it("returns the measurement of one case", async () => {
+      const outcome = await startChild(
+        NODE,
+        {
+          mode: "measure",
+          file: benchFile("lifecycle.ts"),
+          id: "steady",
+          minTime: 5,
+          minSamples: 8,
+          ...TIME_ONLY,
+        },
+        { timeout: KILL_AFTER_MS, nodeImport: "tsx" },
+      );
 
-        const outcome = await startChild(
-          found,
-          {
-            mode: "measure",
-            file: benchFile("lifecycle.ts"),
-            id: "steady",
-            minTime: 5,
-            minSamples: 8,
-            ...TIME_ONLY,
-          },
-          { timeout: KILL_AFTER_MS, nodeImport: "tsx" },
-        );
-
-        expect(outcome).toMatchObject({
-          status: "ok",
-          result: { status: "ok", time: { stats: { sampleCount: expect.any(Number) } } },
-        });
+      expect(outcome).toMatchObject({
+        status: "ok",
+        result: { status: "ok", time: { stats: { sampleCount: expect.any(Number) } } },
       });
     });
   });
@@ -479,47 +431,6 @@ describe("startChild", { timeout: SPAWN_TIMEOUT_MS }, () => {
       });
 
       expect(outcome).toMatchObject(THREE_CASES_LISTED);
-    });
-
-    describe("when the request asks time and memory", () => {
-      it.each([
-        { id: "zero", bytes: 0, within: 0 },
-        { id: "object", bytes: 40, within: 1 },
-        { id: "zero-per-call", bytes: 0, within: 0 },
-        { id: "object-per-call", bytes: 40, within: 1 },
-      ])(
-        "reads $id at $bytes bytes per call, within $within, after timing",
-        async ({ id, bytes, within }) => {
-          const outcome = await startBuiltChild(NODE, measuringMemory(id), BUILT_OPTIONS);
-
-          expect(Math.abs(memoryMedian(outcome) - bytes)).toBeLessThanOrEqual(within);
-        },
-      );
-
-      // Without the collection forced before each sample, a collection lands inside the samples
-      // of this body and the pass halves its calls per sample. That holds only while V8's young
-      // generation is small: at `--min-semi-space-size=16` the reading stays at 64 without the
-      // forced collection. Capping the semi-space at 1 MB keeps it small whatever size a Node
-      // release starts with, so the test keeps catching a removed collection.
-      it("reads a body allocating a 1024-element array per call at 64 calls per sample", async () => {
-        vi.stubEnv("NODE_OPTIONS", "--max-semi-space-size=1");
-
-        const outcome = await startBuiltChild(NODE, measuringMemory("array"), BUILT_OPTIONS);
-
-        expect(outcome).toMatchObject({
-          status: "ok",
-          result: { memory: { sampling: { callsPerSample: 64 } } },
-        });
-      });
-
-      it("halves to one call per sample and keeps no reading when every call collects", async () => {
-        const outcome = await startBuiltChild(NODE, measuringMemory("collect"), BUILT_OPTIONS);
-
-        expect(outcome).toMatchObject({
-          status: "ok",
-          result: { memory: { stats: null, sampling: { callsPerSample: 1 } } },
-        });
-      });
     });
   });
 

@@ -22,7 +22,7 @@ from typing import TypedDict
 import numpy as np
 from scipy import stats
 
-LEVELS = [0.95]
+LEVEL = 0.95
 SCIPY_EXACT_MAX_N = 53
 MIN_P_PAST_EXACT_MAX_N = 1e-6
 SCIPY_AGREEMENT_RTOL = 1e-12
@@ -172,7 +172,7 @@ def case(name: str, d: list[float]) -> Case:
         d: The case's differences.
 
     Returns:
-        The case, with an interval for each level in `LEVELS` that has an exact one at this n.
+        The case, with its interval at `LEVEL` when an exact one exists at this n.
 
     Raises:
         AssertionError: When scipy's exact p value disagrees with the untied tail at a critical
@@ -182,10 +182,9 @@ def case(name: str, d: list[float]) -> Case:
     w = walsh(d)
     m = len(w)
     intervals: list[Interval] = []
-    for level in LEVELS:
-        c = critical(len(d), level)
-        if c:
-            intervals.append({"level": level, "low": w[c - 1], "high": w[m - c]})
+    c = critical(len(d), LEVEL)
+    if c:
+        intervals.append({"level": LEVEL, "low": w[c - 1], "high": w[m - c]})
     return {
         "name": name,
         "differences": d,

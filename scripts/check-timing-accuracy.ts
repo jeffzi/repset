@@ -55,7 +55,7 @@ export interface RepsetReading {
 }
 
 /** The counts a baseline reading runs at, taken from a repset reading. */
-export type BaselineCounts = Pick<RepsetReading, "callsPerSample" | "sampleCount">;
+type BaselineCounts = Pick<RepsetReading, "callsPerSample" | "sampleCount">;
 
 /** The two sides of a pair: each takes one reading of a scenario. */
 export interface Readers {
@@ -111,14 +111,15 @@ function howRunEnded(subject: string, end: RunEnd): string {
 /**
  * Reads the failed result a run that exited 1 left in its report.
  *
+ * @param name - What the run read.
  * @param reportPath - The file the command wrote its report to.
  * @returns The report's first failed result, or `undefined` when the file is missing, unreadable,
  *   not a report, or holds no failed result.
  */
-function failedResult(reportPath: string): FailedResult | undefined {
+function failedResult(name: string, reportPath: string): FailedResult | undefined {
   let report: Report;
   try {
-    report = readReport(reportPath);
+    report = readReport(name, reportPath);
   } catch {
     return undefined;
   }
@@ -128,21 +129,22 @@ function failedResult(reportPath: string): FailedResult | undefined {
 /**
  * Reads the report one run of the repset command wrote.
  *
+ * @param name - What the run read, which every error names first.
  * @param reportPath - The file the command wrote its report to.
  * @returns The report.
- * @throws Error naming `reportPath` when the file is missing, unreadable, not JSON, or not a
- *   report.
+ * @throws Error naming `name` and `reportPath` when the file is missing, unreadable, not JSON, or
+ *   not a report.
  */
-function readReport(reportPath: string): Report {
+function readReport(name: string, reportPath: string): Report {
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(reportPath, "utf8"));
   } catch (error) {
-    throw new Error(`cannot read the report ${reportPath}: ${thrownMessage(error)}`, {
+    throw new Error(`${name}: cannot read the report ${reportPath}: ${thrownMessage(error)}`, {
       cause: error,
     });
   }
-  if (!isReport(parsed)) throw new Error(`${reportPath} is not a report`);
+  if (!isReport(parsed)) throw new Error(`${name}: ${reportPath} is not a report`);
   return parsed;
 }
 
@@ -195,12 +197,7 @@ function onlyResult(
   name: string,
   reportPath: string,
 ): { readonly report: Report; readonly result: Report["results"][number] } {
-  let report: Report;
-  try {
-    report = readReport(reportPath);
-  } catch (error) {
-    throw new Error(`${name}: ${thrownMessage(error)}`, { cause: error });
-  }
+  const report = readReport(name, reportPath);
   const [result, ...others] = report.results;
   if (result === undefined || others.length > 0) {
     throw new Error(`${name}: ${reportPath} holds ${String(report.results.length)} results, not 1`);
@@ -225,7 +222,7 @@ function onlyResult(
  *   a report holding exactly one result, or its measurement holds no time.
  * @throws Whatever `check` throws.
  */
-export function repsetReading(
+function repsetReading(
   name: string,
   end: RunEnd,
   reportPath: string,
@@ -233,7 +230,7 @@ export function repsetReading(
 ): RepsetReading {
   if (end.status !== 0) {
     // repset exits 1 when a case fails, and its report then says why.
-    const failed = end.status === 1 ? failedResult(reportPath) : undefined;
+    const failed = end.status === 1 ? failedResult(name, reportPath) : undefined;
     throw new Error(
       failed === undefined ? howRunEnded(`${name}: repset`, end) : caseFailure(name, failed),
     );

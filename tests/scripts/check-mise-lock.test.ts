@@ -24,9 +24,9 @@ function entry(version: string): Record<string, unknown> {
   return locked;
 }
 
-/** Renders a mise.lock with the given tools, in insertion order. */
+/** Renders a mise.lock with the given tools. */
 function lockfile(tools: Record<string, unknown>): string {
-  return stringify({ lockfile_version: 3, tools });
+  return stringify({ tools });
 }
 
 const TASK = "aqua:go-task/task";

@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import { describe, expect, it } from "vitest";
 
@@ -7,6 +8,9 @@ import { embedCode } from "../../scripts/embed-code.js";
 import { temporaryProject } from "../helpers/temporary-dir.js";
 
 const FENCE = "```";
+
+/** How long a test waits for writes an embed may still have pending after it rejected. */
+const PENDING_WRITES_MS = 100;
 
 /** A fresh directory holding each of `files`, removed when the test ends. */
 function createProject(files: Record<string, string>): string {
@@ -75,6 +79,30 @@ describe("embedCode", () => {
       );
     });
 
+    it("keeps the text before, between and after the blocks", async () => {
+      const dir = createProject({
+        "x.ts": "export const x = 1;\n",
+        "README.md": `# Title\n\n${codeBlock("./x.ts")}\n\nMiddle.\n\n${codeBlock("./x.ts")}\nEnd.\n`,
+      });
+      const block = `<!-- docs CODE src="./x.ts" -->\n${FENCE}ts\nexport const x = 1;\n${FENCE}\n<!-- /docs -->`;
+
+      await embedCode([join(dir, "README.md")]);
+
+      expect(read(dir, "README.md")).toBe(`# Title\n\n${block}\n\nMiddle.\n\n${block}\nEnd.\n`);
+    });
+
+    it("copies a source holding replacement patterns verbatim", async () => {
+      const source = 'export const s = "$& $<content> $1";';
+      const dir = createProject({
+        "x.ts": `${source}\n`,
+        "README.md": `${codeBlock("./x.ts")}\n`,
+      });
+
+      await embedCode([join(dir, "README.md")]);
+
+      expect(codeBlockContent(read(dir, "README.md"))).toBe(`${FENCE}ts\n${source}\n${FENCE}`);
+    });
+
     it("shows the header option first in the fence", async () => {
       const dir = createProject({
         "x.ts": "export const x = 1;\n",
@@ -92,8 +120,8 @@ describe("embedCode", () => {
   describe("when a CODE block's content is stale", () => {
     it("returns the markdown file as changed", async () => {
       const dir = createProject({
-        "docs/snippets/x.ts": "export const x = 1;\nexport const y = 2;\n",
-        "README.md": `# Title\n\n${codeBlock("./docs/snippets/x.ts", "stale")}\n`,
+        "x.ts": "export const x = 1;\n",
+        "README.md": `${codeBlock("./x.ts", "stale")}\n`,
       });
 
       const changed = await embedCode([join(dir, "README.md")]);
@@ -209,6 +237,7 @@ describe("embedCode", () => {
       const run = embedCode([join(dir, "a.md"), join(dir, "b.md")]);
 
       await expect(run).rejects.toThrow(join(dir, "b.md"));
+      await sleep(PENDING_WRITES_MS);
       expect(read(dir, "a.md")).toBe(VALID);
     });
   });

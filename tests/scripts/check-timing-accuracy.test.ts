@@ -1,17 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { runCheck } from "../../scripts/check-timing-accuracy.js";
-import type { Readers, RepsetReading } from "../../scripts/check-timing-accuracy.js";
-
-/** A repset reading whose timing lasted its `minTime`. */
-const READING: RepsetReading = {
-  median: 1000,
-  callsPerSample: 10,
-  sampleCount: 64,
-  timerResolutionNs: 40,
-  timingMs: 1010,
-  minTime: 1000,
-};
+import type { Readers } from "../../scripts/check-timing-accuracy.js";
+import { READING } from "../helpers/repset-reading.js";
 
 /** Readers for every scenario: baseline medians of 1000, and repset readings whose timing lasted their `minTime`. */
 const READERS: Readers = {

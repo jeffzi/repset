@@ -11,10 +11,11 @@ const FENCE = "```";
 
 /**
  * A `CODE` block: its attributes, then its content split into the newlines that open it, the text
- * between them, and the newlines that close it, so a rewrite keeps the layout as written.
+ * between them, and the newlines that close it, so a rewrite keeps the layout as written. Every
+ * group takes part in every match, empty when it holds nothing, so each is always a string.
  */
 const CODE_BLOCK =
-  /<!-- docs CODE(?<attributes>\s[\s\S]*?)?-->(?<before>\n*)(?<content>[\s\S]*?)(?<after>\n*)<!-- \/docs -->/gu;
+  /<!-- docs CODE(?<attributes>(?:\s[\s\S]*?)?)-->(?<before>\n*)(?<content>[\s\S]*?)(?<after>\n*)<!-- \/docs -->/gu;
 
 const ATTRIBUTE = /(?<name>[\w-]+)="(?<value>[^"]*)"/gu;
 
@@ -62,22 +63,27 @@ async function fence(markdownPath: string, attributes: string): Promise<string> 
 }
 
 async function embedFile(markdownPath: string, markdown: string): Promise<string> {
-  const blocks = [...markdown.matchAll(CODE_BLOCK)];
-  const fences = await Promise.all(
-    blocks.map(async ({ groups }) => fence(markdownPath, groups?.["attributes"] ?? "")),
+  const pending: Promise<string>[] = [];
+  // This pass only reads each block's attributes: a replacer, unlike `matchAll`'s groups, gets
+  // every capture as a string. Its output is dropped.
+  markdown.replace(CODE_BLOCK, (block: string, attributes: string) => {
+    pending.push(fence(markdownPath, attributes));
+    return block;
+  });
+  const fences = await Promise.all(pending);
+  let next = 0;
+  // A replacer function, unlike a replacement string, inserts its result without expanding `$`.
+  // It visits the blocks in the order the first pass did, so `next` indexes their fences.
+  return markdown.replace(
+    CODE_BLOCK,
+    (_block: string, ...captures: [string, string, string, string, ...unknown[]]) => {
+      const [attributes, before, content, after] = captures;
+      // A block holding no text, or text flush against a marker, gets the fence on its own lines.
+      const opening = content === "" || before === "" ? "\n" : before;
+      const closing = content === "" || after === "" ? "\n" : after;
+      return `<!-- docs CODE${attributes}-->${opening}${fences[next++]}${closing}<!-- /docs -->`;
+    },
   );
-  let embedded = "";
-  let end = 0;
-  for (const [index, block] of blocks.entries()) {
-    const { attributes = "", before = "", content = "", after = "" } = block.groups ?? {};
-    // A block holding no text, or text flush against a marker, gets the fence on its own lines.
-    const opening = content === "" || before === "" ? "\n" : before;
-    const closing = content === "" || after === "" ? "\n" : after;
-    embedded += markdown.slice(end, block.index);
-    embedded += `<!-- docs CODE${attributes}-->${opening}${fences[index]}${closing}<!-- /docs -->`;
-    end = block.index + block[0].length;
-  }
-  return embedded + markdown.slice(end);
 }
 
 /**

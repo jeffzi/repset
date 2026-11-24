@@ -2,17 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { runCheck } from "../../scripts/check-memory-timing.js";
 import type { Readers } from "../../scripts/check-memory-timing.js";
-import type { RepsetReading } from "../../scripts/check-timing-accuracy.js";
-
-/** A repset reading whose timing lasted its `minTime`. */
-const READING: RepsetReading = {
-  median: 1000,
-  callsPerSample: 10,
-  sampleCount: 64,
-  timerResolutionNs: 40,
-  timingMs: 1010,
-  minTime: 1000,
-};
+import { READING } from "../helpers/repset-reading.js";
 
 /** Readers for every body: the same reading with memory measured as without. */
 const READERS: Readers = {

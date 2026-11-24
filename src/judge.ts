@@ -15,7 +15,7 @@ import type {
   Result,
 } from "./report.js";
 import { ALPHA } from "./schedule.js";
-import { pairsOf, valueAt } from "./utils.js";
+import { pairsOf, quantile, valueAt } from "./utils.js";
 
 /**
  * The null distribution of the sum of the positive weights when each weight's sign is a fair coin
@@ -112,9 +112,7 @@ function walshAverages(differences: readonly number[]): number[] {
  * @throws RangeError When `differences` is empty.
  */
 export function hodgesLehmann(differences: readonly number[]): number {
-  const averages = walshAverages(differences);
-  const middle = averages.length - 1;
-  return (valueAt(averages, Math.floor(middle / 2)) + valueAt(averages, Math.ceil(middle / 2))) / 2;
+  return quantile(walshAverages(differences), 0.5);
 }
 
 /**

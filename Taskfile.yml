@@ -70,6 +70,15 @@ tasks:
       - task: build
       - "{{.MISE}} node --import tsx scripts/check-timing-accuracy.ts"
 
+  diagnose-bun-gap:
+    desc:
+      Build, then time repset, the baseline loop and its variants on Bun, one process at a time;
+      arguments after -- go to the script
+    deps: [_deps]
+    cmds:
+      - task: build
+      - "{{.MISE}} node --import tsx scripts/diagnose-bun-gap.ts {{.CLI_ARGS}}"
+
   check-memory-timing:
     desc: Build, then compare repset's timings on Node with and without memory measured
     deps: [_deps]

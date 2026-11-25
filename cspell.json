@@ -15,6 +15,7 @@
     "smol",
     "Taskfile",
     "taskkill",
+    "taskset",
     "unref",
     "unstub"
   ],

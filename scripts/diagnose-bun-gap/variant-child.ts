@@ -1,3 +1,6 @@
+// fallow-ignore-file code-duplication -- each variant is a deliberate near-copy of the baseline
+// child's loop that differs by one measured change; a shared helper would itself be a difference.
+
 // The Bun gap diagnosis's variant child: one body timed by one variant of the timing accuracy check's
 // baseline loop, at the calls per sample and sample count the driver gives. It prints one JSON line:
 // the median, the medians of the first and second half of the samples, p75 and p99, all in ns per
@@ -370,49 +373,38 @@ async function repsetSampler(state: State, gc: NodeJS.GCFunction): Promise<Float
   return run.spans.subarray(0, run.sampleCount);
 }
 
+/** The variant child's view of the timing loops: the state, then the exposed collector. */
+type TimeVariant = (state: State, gc: NodeJS.GCFunction) => Float64Array | Promise<Float64Array>;
+
 /**
- * Runs `variant` on `state`.
+ * Loads the built entry and the bench file, as repset's child loads them before it measures, then
+ * times `none`.
  *
- * @param variant - The variant to time.
  * @param state - The points the body moves.
  * @param gc - The engine's exposed collector.
  * @returns The timed spans in milliseconds, in the order they ran.
- * @throws Whatever the collector, the body or an import throws, unwrapped.
+ * @throws Whatever an import, the collector or the body throws, unwrapped.
  */
-async function timeVariant(
-  variant: Variant,
-  state: State,
-  gc: NodeJS.GCFunction,
-): Promise<Float64Array> {
-  switch (variant) {
-    case "none":
-      return none(state, gc);
-    case "clock-wrapper":
-      return clockWrapper(state, gc, performanceNow);
-    case "sample-function":
-      return sampleFunction(state, gc);
-    case "stored-result":
-      return storedResult(state, gc);
-    case "indirect-access":
-      return indirectAccess(state, { fn: body, state }, calls, gc);
-    case "clock-between-samples":
-      return clockBetweenSamples(state, gc);
-    case "timed-warmup":
-      return timedWarmup(state, gc);
-    case "all-six":
-      return allSix({ now: performanceNow, fn: body, state }, calls, gc);
-    case "repset-buffer":
-      return repsetBuffer(state, gc);
-    case "repset-loaded":
-      // The built entry and the bench file, as repset's child loads them before it measures.
-      await import("../../dist/index.js");
-      await import("../check-timing-accuracy/timing-accuracy.bench.js");
-      return none(state, gc);
-    default:
-      // `repset-sampler`, the last variant.
-      return repsetSampler(state, gc);
-  }
+async function repsetLoaded(state: State, gc: NodeJS.GCFunction): Promise<Float64Array> {
+  await import("../../dist/index.js");
+  await import("../check-timing-accuracy/timing-accuracy.bench.js");
+  return none(state, gc);
 }
+
+/** How each variant times the body. */
+const TIMERS: Readonly<Record<Variant, TimeVariant>> = {
+  none,
+  "clock-wrapper": (state, gc) => clockWrapper(state, gc, performanceNow),
+  "sample-function": sampleFunction,
+  "stored-result": storedResult,
+  "indirect-access": (state, gc) => indirectAccess(state, { fn: body, state }, calls, gc),
+  "clock-between-samples": clockBetweenSamples,
+  "timed-warmup": timedWarmup,
+  "all-six": (state, gc) => allSix({ now: performanceNow, fn: body, state }, calls, gc),
+  "repset-buffer": repsetBuffer,
+  "repset-loaded": repsetLoaded,
+  "repset-sampler": repsetSampler,
+};
 
 /**
  * Checks the arguments, times the variant and prints its line.
@@ -440,7 +432,7 @@ async function main(): Promise<void> {
   }
   const state = buildState();
   const cpuStart = lastCpu(process.pid, readUtf8);
-  const spans = await timeVariant(variantArg, state, gc);
+  const spans = await TIMERS[variantArg](state, gc);
   const cpuEnd = lastCpu(process.pid, readUtf8);
   globalThis.benchSink = positionSum(state);
   const half = Math.floor(spans.length / 2);

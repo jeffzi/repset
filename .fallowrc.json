@@ -5,6 +5,8 @@
     "scripts/*.ts",
     "scripts/check-timing-accuracy/baseline-child.ts",
     "scripts/check-timing-accuracy/timing-accuracy.bench.ts",
+    "scripts/diagnose-bun-gap/baseline-*.ts",
+    "scripts/diagnose-bun-gap/node-parent.ts",
     "examples/*.ts",
     "docs/snippets/*.ts",
     "tests/**/*.test-d.ts"

@@ -2,8 +2,9 @@ name: Bun gap diagnosis
 
 # Measurement only, never merged: times repset, the timing accuracy check's baseline loop and the
 # baseline variants on Bun, one process at a time, to find why repset reads above the baseline on
-# one-call scenarios. `runs-on` cannot choose the cloud, so the job is rerun until both clouds have
-# run it; the job log's "Set up job" header names the cloud.
+# one-call scenarios. `runs-on` cannot choose the machine, so the job is rerun until the CPU models
+# the diagnosis needs have run it; the "Machine" step names the CPU, and the job log's "Set up job"
+# header the cloud.
 on:
   push:
     branches: [fix-ci/bun-timing-gap]
@@ -21,6 +22,11 @@ concurrency:
   cancel-in-progress: false
 
 permissions: {}
+
+# The sides to time: the baseline, its A/A copy, `none`, one side per piece of the code around
+# `none`'s loop, and three sides that split repset's process.
+env:
+  SIDES: repset,baseline,baseline-again,none,baseline-args,baseline-async,baseline-table,baseline-proc,baseline-with-variants,baseline-child-modules,baseline-under-parent,repset-child-direct
 
 jobs:
   diagnose:
@@ -49,12 +55,12 @@ jobs:
         id: unpinned
         run: |
           mkdir -p out
-          task diagnose-bun-gap -- --out out/unpinned.jsonl
+          task diagnose-bun-gap -- --sides "$SIDES" --out out/unpinned.jsonl
 
       # Runs after a failed unpinned pass too; a skipped one means setup failed.
       - name: Pinned pass
         if: ${{ !cancelled() && steps.unpinned.outcome != 'skipped' }}
-        run: task diagnose-bun-gap -- --pin --out out/pinned.jsonl
+        run: task diagnose-bun-gap -- --pin --sides "$SIDES" --out out/pinned.jsonl
 
       # Always, so a failed pass or a job stopped at its timeout keeps every finished reading.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

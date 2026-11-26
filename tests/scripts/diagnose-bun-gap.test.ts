@@ -1,5 +1,8 @@
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
+import { benchName } from "../../scripts/check-timing-accuracy/bodies.js";
 import { runDiagnosis } from "../../scripts/diagnose-bun-gap.js";
 import type {
   ChildRun,
@@ -7,10 +10,63 @@ import type {
   Environment,
   RepsetSample,
 } from "../../scripts/diagnose-bun-gap.js";
+import { childRuntimeFlags } from "../../src/children.js";
+import { DEFAULT_MIN_SAMPLES, DEFAULT_MIN_TIME } from "../../src/measure/measure.js";
 import { errorOf } from "../helpers/error-of.js";
+import { ROOT } from "../helpers/fixture-path.js";
 import { wordsInOrder } from "../helpers/words-in-order.js";
 
 const OUT = "out.jsonl";
+const BENCH_FILE = join(ROOT, "scripts", "check-timing-accuracy", "timing-accuracy.bench.ts");
+
+/** The cases the bench file lists: one per body, plus one no body matches. */
+const LISTED_CASES = [
+  { id: "first", name: benchName("each"), contender: null, setupPerCall: false },
+  { id: "decoy", name: "banana", contender: null, setupPerCall: false },
+  { id: "second", name: benchName("inlined"), contender: null, setupPerCall: false },
+];
+
+/** A run of repset's child that wrote `result` on descriptor 3. */
+function directRun(result: unknown): ChildRun {
+  return { status: 0, stdout: "", result: `${JSON.stringify(result)}\n` };
+}
+
+/** A measuring child's result whose timing has `median` and `sampleCount`. */
+function measuredResult(median: number | null, sampleCount: number): unknown {
+  return {
+    status: "ok",
+    time: {
+      stats: { min: 1, p25: 2, median, p75: 4, p99: 5, max: 6, mean: 3, sampleCount },
+      sampling: {
+        timerResolutionNs: 1,
+        callsPerSample: 1,
+        callsPerSampleFixed: true,
+        warmupSampleCount: 0,
+        timingAttemptCount: 1,
+        timingMs: 1000,
+      },
+      checks: { ratioToEmptyBody: 3 },
+      gc: null,
+      rawSamples: null,
+    },
+    memory: null,
+  };
+}
+
+/** The result a child writes when the case's `fn` throws. */
+const FAILED_RESULT = {
+  status: "failed",
+  error: { phase: "fn", message: "plum", stack: null, teardownError: null },
+};
+
+/** The request a spawn hands repset's child, or `undefined` for any other spawn. */
+function directRequest(args: readonly string[]): Record<string, unknown> | undefined {
+  if (!args.some((arg) => /dist[/\\]child\.js$/u.test(arg))) return undefined;
+  const request: unknown = JSON.parse(args.at(-1) ?? "");
+  if (typeof request !== "object" || request === null) throw new TypeError("not a request");
+  return { ...request };
+}
+
 const COMMIT = "0123456789abcdef";
 const TIME = new Date("2026-01-02T03:04:05.000Z");
 
@@ -24,6 +80,16 @@ const VARIANT_PRINT = {
   sampleCount: 37,
   cpuStart: 2,
   cpuEnd: 3,
+};
+
+/** The reading fields a side that reports only its median and sample count leaves null. */
+const UNREPORTED = {
+  firstHalfMedian: null,
+  secondHalfMedian: null,
+  p75: null,
+  p99: null,
+  cpuStart: null,
+  cpuEnd: null,
 };
 
 /** An environment on a Linux runner with every file and variable present. */
@@ -43,10 +109,15 @@ const FILES: Readonly<Record<string, string>> = {
   "/sys/class/dmi/id/product_name": "Virtual Machine\n",
 };
 
+interface Spawn {
+  command: string;
+  args: readonly string[];
+}
+
 interface Harness {
   readonly dependencies: Dependencies;
   /** Every spawn, in order. */
-  readonly spawned: { command: string; args: readonly string[] }[];
+  readonly spawned: Spawn[];
   /** Every line appended to `OUT`, parsed. */
   readonly records: () => Record<string, unknown>[];
 }
@@ -60,7 +131,7 @@ interface HarnessOptions {
 
 /** Builds fake dependencies that answer every child as a healthy one does, unless `spawn` overrides it. */
 function harness(options: HarnessOptions = {}): Harness {
-  const spawned: { command: string; args: readonly string[] }[] = [];
+  const spawned: Spawn[] = [];
   const appended: string[] = [];
   const repsetCalls = new Map<string, number>();
   const files = options.files ?? FILES;
@@ -79,6 +150,9 @@ function harness(options: HarnessOptions = {}): Harness {
       if (override !== undefined) return override;
       if (command === "git") return { status: 0, stdout: `${COMMIT}\n` };
       if (command === "taskset") return { status: 0, stdout: "" };
+      const request = directRequest(args);
+      if (request?.["mode"] === "list") return directRun({ status: "ok", cases: LISTED_CASES });
+      if (request !== undefined) return directRun(measuredResult(950, 70));
       if (isBaselineChild(args)) {
         return { status: 0, stdout: `${JSON.stringify({ median: 1000 })}\n` };
       }
@@ -129,12 +203,41 @@ describe("runDiagnosis", () => {
       expect(header(records())?.["cyclesPerBody"]).toBe(6);
     });
 
-    it("runs 170 cycles per body, rounded up for all 13 sides, by default", () => {
+    it("runs 170 cycles per body, rounded up for all 22 sides, by default", () => {
       const { dependencies, records } = harness();
 
       runDiagnosis(["--out", OUT], dependencies);
 
-      expect(header(records())?.["cyclesPerBody"]).toBe(182);
+      expect(header(records())?.["cyclesPerBody"]).toBe(176);
+    });
+
+    it("rounds the default 170 cycles up to 180 over twelve sides", () => {
+      const { dependencies, records } = harness();
+
+      runDiagnosis(
+        [
+          "--sides",
+          [
+            "repset",
+            "baseline",
+            "baseline-again",
+            "none",
+            "baseline-args",
+            "baseline-async",
+            "baseline-table",
+            "baseline-proc",
+            "baseline-with-variants",
+            "baseline-child-modules",
+            "baseline-under-parent",
+            "repset-child-direct",
+          ].join(","),
+          "--out",
+          OUT,
+        ],
+        dependencies,
+      );
+
+      expect(header(records())?.["cyclesPerBody"]).toBe(180);
     });
 
     it("runs every side when --sides is not given", () => {
@@ -156,6 +259,40 @@ describe("runDiagnosis", () => {
         "repset-buffer",
         "repset-loaded",
         "repset-sampler",
+        "baseline-again",
+        "baseline-args",
+        "baseline-async",
+        "baseline-table",
+        "baseline-proc",
+        "baseline-with-variants",
+        "baseline-child-modules",
+        "baseline-under-parent",
+        "repset-child-direct",
+      ]);
+    });
+
+    it("runs the sides --sides names in the default order, whatever order it names them in", () => {
+      const { dependencies, records } = harness();
+
+      runDiagnosis(
+        [
+          "--cycles",
+          "1",
+          "--sides",
+          "repset-child-direct,baseline-under-parent,baseline-proc,baseline-again,none,repset",
+          "--out",
+          OUT,
+        ],
+        dependencies,
+      );
+
+      expect(header(records())?.["sides"]).toStrictEqual([
+        "repset",
+        "none",
+        "baseline-again",
+        "baseline-proc",
+        "baseline-under-parent",
+        "repset-child-direct",
       ]);
     });
 
@@ -163,10 +300,10 @@ describe("runDiagnosis", () => {
       const { dependencies } = harness();
 
       const error = errorOf(() => {
-        runDiagnosis(["--sides", "repset,banana", "--out", OUT], dependencies);
+        runDiagnosis(["--sides", "repset,baseline-banana", "--out", OUT], dependencies);
       });
 
-      expect(error.message).toMatch(wordsInOrder("banana"));
+      expect(error.message).toMatch(wordsInOrder("baseline-banana"));
     });
 
     it("rejects a run without --out", () => {
@@ -251,6 +388,176 @@ describe("runDiagnosis", () => {
     });
   });
 
+  describe("command lines", () => {
+    /** The first Bun spawn of the baseline child and the first spawn of `side`, from one cycle of both. */
+    function baselineAndSide(side: string): {
+      baseline: Spawn;
+      other: Spawn | undefined;
+      fileIndex: number;
+    } {
+      const { dependencies, spawned } = harness();
+      runDiagnosis(["--cycles", "1", "--sides", `baseline,${side}`, "--out", OUT], dependencies);
+      const children = spawned.filter(({ command }) => command !== "git");
+      const [baseline, other] = children;
+      if (baseline === undefined) throw new Error("no baseline spawn");
+      return {
+        baseline,
+        other,
+        fileIndex: baseline.args.findIndex((arg) => isBaselineChild([arg])),
+      };
+    }
+
+    it.each([
+      { side: "baseline-again", file: /[/\\]check-timing-accuracy[/\\]baseline-child\.ts$/u },
+      ...[
+        "baseline-args",
+        "baseline-async",
+        "baseline-table",
+        "baseline-proc",
+        "baseline-with-variants",
+        "baseline-child-modules",
+      ].map((side) => ({
+        side,
+        file: new RegExp(String.raw`[/\\]diagnose-bun-gap[/\\]${side}\.ts$`, "u"),
+      })),
+    ])("runs $side as the baseline child is run, on its own file", ({ side, file }) => {
+      const { baseline, other, fileIndex } = baselineAndSide(side);
+
+      expect(other).toStrictEqual({
+        command: ENVIRONMENT.bun.executable,
+        args: baseline.args.with(fileIndex, expect.stringMatching(file)),
+      });
+    });
+
+    it("runs baseline-under-parent as Node on node-parent, with the baseline child and its arguments", () => {
+      const { baseline, other, fileIndex } = baselineAndSide("baseline-under-parent");
+
+      expect(other).toStrictEqual({
+        command: process.execPath,
+        args: [
+          expect.stringMatching(/[/\\]diagnose-bun-gap[/\\]node-parent\.ts$/u),
+          ...baseline.args.slice(fileIndex),
+        ],
+      });
+    });
+  });
+
+  describe("repset-child-direct", () => {
+    it("starts Bun on dist/child.js with repset's child flags", () => {
+      const { dependencies, spawned } = harness();
+
+      runDiagnosis(["--cycles", "1", "--sides", "repset-child-direct", "--out", OUT], dependencies);
+
+      const entry = expect.stringMatching(/[/\\]dist[/\\]child\.js$/u);
+      expect(
+        spawned
+          .filter(({ args }) => directRequest(args) !== undefined)
+          .map(({ command, args }) => ({ command, args: args.slice(0, -1) })),
+      ).toStrictEqual(
+        Array.from({ length: 4 }, () => ({
+          command: ENVIRONMENT.bun.executable,
+          args: [...childRuntimeFlags("bun", undefined), entry],
+        })),
+      );
+    });
+
+    it("lists the bench file once per body, then measures each body's listed case", () => {
+      const { dependencies, spawned } = harness();
+
+      runDiagnosis(["--cycles", "1", "--sides", "repset-child-direct", "--out", OUT], dependencies);
+
+      const measure = (id: string): Record<string, unknown> => ({
+        mode: "measure",
+        file: BENCH_FILE,
+        id,
+        minTime: DEFAULT_MIN_TIME,
+        minSamples: DEFAULT_MIN_SAMPLES,
+        callsPerSample: 1,
+        time: true,
+        memory: false,
+      });
+      expect(spawned.map(({ args }) => directRequest(args)).filter(Boolean)).toStrictEqual([
+        { mode: "list", file: BENCH_FILE },
+        { mode: "list", file: BENCH_FILE },
+        measure("first"),
+        measure("second"),
+      ]);
+    });
+
+    it.each<{ failure: string; run: ChildRun }>([
+      { failure: "fails", run: directRun(FAILED_RESULT) },
+      {
+        failure: "lists no case for the body",
+        run: directRun({ status: "ok", cases: LISTED_CASES.slice(0, 2) }),
+      },
+      {
+        failure: "lists more than one case for the body",
+        run: directRun({
+          status: "ok",
+          cases: [...LISTED_CASES, { ...LISTED_CASES[2], id: "third" }],
+        }),
+      },
+    ])("stops at a list request that $failure, naming the side, body and list", ({ run }) => {
+      let lists = 0;
+      const { dependencies } = harness({
+        spawn: (_command, args) => {
+          if (directRequest(args)?.["mode"] !== "list") return undefined;
+          lists += 1;
+          return lists === 2 ? run : undefined;
+        },
+      });
+
+      const error = errorOf(() => {
+        runDiagnosis(
+          ["--cycles", "1", "--sides", "repset-child-direct", "--out", OUT],
+          dependencies,
+        );
+      });
+
+      expect(error.message).toMatch(wordsInOrder("repset-child-direct", "inlined", "list"));
+    });
+
+    it.each<{ failure: string; run: ChildRun }>([
+      {
+        failure: "cannot start",
+        run: { error: new Error("spawn ENOENT"), status: null, stdout: "" },
+      },
+      { failure: "writes no result", run: { status: 0, stdout: "" } },
+      {
+        failure: "writes a result that does not parse",
+        run: { status: 0, stdout: "", result: "{\n" },
+      },
+      { failure: "writes a failed result", run: directRun(FAILED_RESULT) },
+      { failure: "writes a median that is not a number", run: directRun(measuredResult(null, 70)) },
+      {
+        failure: "writes an infinite median",
+        run: {
+          status: 0,
+          stdout: "",
+          result: `${JSON.stringify(measuredResult(0, 70)).replace('"median":0', '"median":1e999')}\n`,
+        },
+      },
+    ])("stops at a measuring child that $failure, naming the side, body and cycle", ({ run }) => {
+      let inlinedMeasures = 0;
+      const { dependencies } = harness({
+        spawn: (_command, args) => {
+          if (directRequest(args)?.["id"] !== "second") return undefined;
+          inlinedMeasures += 1;
+          return inlinedMeasures === 2 ? run : undefined;
+        },
+      });
+
+      const error = errorOf(() => {
+        runDiagnosis(
+          ["--cycles", "2", "--sides", "repset-child-direct", "--out", OUT],
+          dependencies,
+        );
+      });
+
+      expect(error.message).toMatch(wordsInOrder("repset-child-direct", "inlined", "cycle", 1));
+    });
+  });
+
   describe("records", () => {
     it("writes the header first, from the machine and the run", () => {
       const { dependencies, records } = harness();
@@ -294,33 +601,31 @@ describe("runDiagnosis", () => {
     });
 
     it.each([
-      {
-        side: "repset",
-        expected: {
-          median: 1000,
-          sampleCount: 37,
-          firstHalfMedian: null,
-          secondHalfMedian: null,
-          p75: null,
-          p99: null,
-          cpuStart: null,
-          cpuEnd: null,
-        },
-      },
-      {
-        side: "baseline",
-        expected: {
-          median: 1000,
-          sampleCount: 64,
-          firstHalfMedian: null,
-          secondHalfMedian: null,
-          p75: null,
-          p99: null,
-          cpuStart: null,
-          cpuEnd: null,
-        },
-      },
+      { side: "repset", expected: { median: 1000, sampleCount: 37, ...UNREPORTED } },
+      { side: "baseline", expected: { median: 1000, sampleCount: 64, ...UNREPORTED } },
       { side: "none", expected: VARIANT_PRINT },
+      {
+        side: "baseline-args",
+        expected: { median: VARIANT_PRINT.median, sampleCount: 64, ...UNREPORTED },
+      },
+      {
+        side: "baseline-proc",
+        expected: {
+          median: VARIANT_PRINT.median,
+          sampleCount: 64,
+          ...UNREPORTED,
+          cpuStart: VARIANT_PRINT.cpuStart,
+          cpuEnd: VARIANT_PRINT.cpuEnd,
+        },
+      },
+      {
+        side: "baseline-under-parent",
+        expected: { median: 1000, sampleCount: 64, ...UNREPORTED },
+      },
+      {
+        side: "repset-child-direct",
+        expected: { median: 950, sampleCount: 70, ...UNREPORTED },
+      },
     ])("records a $side reading from what its process reports", ({ side, expected }) => {
       const { dependencies, records } = harness({
         repset: (_body, call) => ({ median: 1000, sampleCount: call === 0 ? 64 : 37 }),

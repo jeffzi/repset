@@ -7,7 +7,8 @@
  * - `none` times the body as the timing accuracy check's baseline child does.
  * - The next six each add one of repset's code differences to `none`; `all-six` adds all of them.
  * - `repset-buffer` holds the spans in a store sized as repset sizes its own; `repset-loaded` first
- *   loads the modules repset's child loads; `repset-sampler` times through repset's own sampler.
+ *   loads the built package entry (`dist/index.js`) and the bench file, not `dist/child.js` and its
+ *   modules; `repset-sampler` times through repset's own sampler.
  */
 export const VARIANTS = [
   "none",

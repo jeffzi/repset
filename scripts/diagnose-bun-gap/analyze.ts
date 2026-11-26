@@ -10,27 +10,12 @@
  * came from, such as `azure` or `aws`.
  */
 import { readFileSync } from "node:fs";
-import { parseArgs } from "node:util";
 
-import { isRecord, quantile, valueAt } from "../../src/utils.js";
+import { quantile, valueAt } from "../../src/utils.js";
 import { BODY_NAMES } from "../check-timing-accuracy/bodies.js";
 import type { BodyName } from "../check-timing-accuracy/bodies.js";
-import { HEADER_FIELDS, READING_FIELDS, hasFields } from "./line-shape.js";
-import type { Line } from "./line-shape.js";
-
-/** The first line of a run file: the machine, the tool versions and the run's settings. */
-export type Header = Line<"header", typeof HEADER_FIELDS>;
-
-/** One timing of one body on one side, in one cycle of the run. */
-export type Reading = Line<"reading", typeof READING_FIELDS>;
-
-/** One run file: where it came from, the cloud it is labelled with, and its records. */
-export interface Run {
-  file: string;
-  cloud: string;
-  header: Header;
-  readings: readonly Reading[];
-}
+import { parseArguments, parseRun } from "./parse-input.js";
+import type { Reading, Run } from "./parse-input.js";
 
 /** The mean of paired differences and its 95 % interval. */
 export interface Interval {
@@ -40,127 +25,37 @@ export interface Interval {
   high: number;
 }
 
-/** The command line: the level gap in ns and each file with its cloud label. */
-export interface Arguments {
-  levelGap: number;
-  inputs: { file: string; cloud: string }[];
-}
-
-const DEFAULT_LEVEL_GAP = 15;
 const Z_95 = 1.96;
 const EQUIVALENCE_NS = 1;
 const MIN_LEVEL_SHARE = 0.05;
 const REPSET = "repset";
 const BASELINE = "baseline";
 const NONE = "none";
+const BASELINE_AGAIN = "baseline-again";
+const ALPHA = 0.05;
+
+/**
+ * The sides the start-CPU breakdown leaves out: repset, and the baseline children that report no
+ * CPU.
+ */
+const SIDES_WITHOUT_CPU: ReadonlySet<string> = new Set([
+  REPSET,
+  BASELINE,
+  BASELINE_AGAIN,
+  "baseline-args",
+  "baseline-async",
+  "baseline-table",
+  "baseline-with-variants",
+  "baseline-child-modules",
+  "baseline-under-parent",
+  "repset-child-direct",
+]);
 
 /** A cloud label, and the word its machines' `sysVendor` contains. */
 const CLOUD_VENDORS: ReadonlyMap<string, string> = new Map([
   ["azure", "Microsoft"],
   ["aws", "Amazon"],
 ]);
-
-// ---------------------------------------------------------------------------
-// Parsing
-// ---------------------------------------------------------------------------
-
-function isHeader(value: unknown): value is Header {
-  return isRecord(value) && value["kind"] === "header" && hasFields(value, HEADER_FIELDS);
-}
-
-function isReading(value: unknown): value is Reading {
-  return isRecord(value) && value["kind"] === "reading" && hasFields(value, READING_FIELDS);
-}
-
-function isJson(text: string): boolean {
-  try {
-    JSON.parse(text);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function parseLine(file: string, number: number, line: string): Header | Reading {
-  let value: unknown;
-  try {
-    value = JSON.parse(line);
-  } catch (error) {
-    throw new Error(`${file} line ${number}: not valid JSON`, { cause: error });
-  }
-  if (isHeader(value) || isReading(value)) {
-    return value;
-  }
-  throw new Error(`${file} line ${number}: not a header or reading of the expected shape`);
-}
-
-/**
- * Validates the flags and splits each positional argument at its last `=` into a file and a cloud
- * label.
- *
- * @param argv - The arguments after the script path.
- * @returns The level gap, 15 ns unless `--level-gap` gives one, and each file with its cloud.
- * @throws Error naming the value when `--level-gap` is not a positive number.
- * @throws Error when no `<file>=<cloud>` argument is given.
- * @throws Error naming an argument that lacks `=`, a file or a cloud label.
- * @throws TypeError from `parseArgs` for an unknown option or an option missing its value.
- */
-export function parseArguments(argv: readonly string[]): Arguments {
-  const { values, positionals } = parseArgs({
-    args: [...argv],
-    options: { "level-gap": { type: "string" } },
-    allowPositionals: true,
-    strict: true,
-  });
-  const gapText = values["level-gap"];
-  const levelGap = gapText === undefined ? DEFAULT_LEVEL_GAP : Number(gapText);
-  if (!Number.isFinite(levelGap) || levelGap <= 0) {
-    throw new Error(`--level-gap takes a positive number of ns, got "${gapText}"`);
-  }
-  if (positionals.length === 0) {
-    throw new Error("usage: analyze.ts [--level-gap <ns>] <file>=<cloud> [<file>=<cloud> ...]");
-  }
-  const inputs = positionals.map((argument) => {
-    const at = argument.lastIndexOf("=");
-    const cloud = argument.slice(at + 1);
-    if (at < 1 || cloud === "") {
-      throw new Error(`expected <file>=<cloud>, got "${argument}"`);
-    }
-    return { file: argument.slice(0, at), cloud };
-  });
-  return { levelGap, inputs };
-}
-
-/**
- * Parses one run file. Text after the last newline that is not valid JSON is the unfinished line a
- * stopped run leaves, and is dropped.
- *
- * @param file - The file's path, named in errors.
- * @param cloud - The cloud label given for the file.
- * @param text - The file's contents.
- * @returns The run, with the header and every finished reading.
- * @throws Error naming the file and line of a line that is not valid JSON, not a header or
- *   reading of the expected shape, or a header after the first line.
- * @throws Error naming the file when its first line is not a header.
- */
-export function parseRun(file: string, cloud: string, text: string): Run {
-  const lines = text.split("\n");
-  const last = lines.pop() ?? "";
-  if (isJson(last)) {
-    lines.push(last);
-  }
-  const [first, ...rest] = lines.map((line, index) => parseLine(file, index + 1, line));
-  if (!isHeader(first)) {
-    throw new Error(`${file}: the first line is not a header`);
-  }
-  const readings = rest.map((record, index) => {
-    if (!isReading(record)) {
-      throw new Error(`${file} line ${index + 2}: a second header`);
-    }
-    return record;
-  });
-  return { file, cloud, header: first, readings };
-}
 
 // ---------------------------------------------------------------------------
 // Statistics
@@ -317,6 +212,10 @@ function cloudWarning({ file, cloud, header }: Run): string[] {
   return agrees ? [] : [`warning: ${file} is tagged ${cloud}, but its sysVendor is ${vendor}`];
 }
 
+function pinningOf(pinned: boolean): "pinned" | "unpinned" {
+  return pinned ? "pinned" : "unpinned";
+}
+
 function describe(attempt: Attempt): string {
   return `${attempt.name}: ${[...attempt.clouds].join("+")}, ${[...attempt.cpus].join("+")}`;
 }
@@ -349,9 +248,22 @@ function pairedDifferences(group: Group, side: string, other: string, onLevel0 =
   });
 }
 
+/** The pair count, then the mean and its interval from two pairs on: one pair has no spread. */
+function intervalText({ n, mean, low, high }: Interval): string {
+  return n < 2
+    ? `n=${n}`
+    : `n=${n} mean=${mean.toFixed(2)} 95% [${low.toFixed(2)}, ${high.toFixed(2)}]`;
+}
+
+/** Whether the interval holds zero; false when a bound is NaN. */
+function holdsZero({ low, high }: Interval): boolean {
+  return low <= 0 && high >= 0;
+}
+
 function pairLine(group: Group, side: string, other: string): string {
-  const { n, mean, low, high } = pairedInterval(pairedDifferences(group, side, other));
-  const containsZero = low <= 0 && high >= 0;
+  const interval = pairedInterval(pairedDifferences(group, side, other));
+  const { low, high } = interval;
+  const containsZero = holdsZero(interval);
   let verdict = "";
   if (side === REPSET) {
     const within = low >= -EQUIVALENCE_NS && high <= EQUIVALENCE_NS && containsZero;
@@ -359,8 +271,34 @@ function pairLine(group: Group, side: string, other: string): string {
   } else if (side === NONE && other === BASELINE) {
     verdict = containsZero ? " control pass" : " control FAIL";
   }
-  const interval = `95% [${low.toFixed(2)}, ${high.toFixed(2)}]`;
-  return `  ${side} - ${other}: n=${n} mean=${mean.toFixed(2)} ${interval}${verdict}`;
+  return `  ${side} - ${other}: ${intervalText(interval)}${verdict}`;
+}
+
+function baselineLine(group: Group, side: string, onLevel0: boolean): string {
+  const cycles = onLevel0 ? "level 0" : "all cycles";
+  const interval = pairedInterval(pairedDifferences(group, side, BASELINE, onLevel0));
+  return `  ${side} - baseline ${cycles}: ${intervalText(interval)}`;
+}
+
+function baselineLines(group: Group, sides: readonly string[]): string[] {
+  if (!sides.includes(BASELINE)) {
+    return [];
+  }
+  return sides.flatMap((side) =>
+    side === BASELINE ? [] : [baselineLine(group, side, false), baselineLine(group, side, true)],
+  );
+}
+
+/** The A/A control: two baseline children that run the same code must read alike. */
+function againControl(group: Group): "pass" | "fail" | "control absent" {
+  const sides = sidesOf(group);
+  if (!sides.includes(BASELINE_AGAIN) || !sides.includes(BASELINE)) {
+    return "control absent";
+  }
+  const interval = pairedInterval(pairedDifferences(group, BASELINE_AGAIN, BASELINE));
+  // Under two pairs there is no interval to test: no control, rather than a failed one.
+  if (interval.n < 2) return "control absent";
+  return holdsZero(interval) ? "pass" : "fail";
 }
 
 function pairLines(group: Group): string[] {
@@ -374,6 +312,8 @@ function pairLines(group: Group): string[] {
   return [
     "paired differences (ns):",
     ...pairs.map(([side, other]) => pairLine(group, side, other)),
+    ...baselineLines(group, sides),
+    `  A/A baseline-again - baseline: ${againControl(group)}`,
   ];
 }
 
@@ -443,7 +383,7 @@ function levelDetailLines(group: Group): string[] {
     const readings = group.entries
       .filter((entry) => entry.level === level)
       .map(({ reading }) => reading);
-    const variants = readings.filter(({ side }) => side !== REPSET && side !== BASELINE);
+    const variants = readings.filter(({ side }) => !SIDES_WITHOUT_CPU.has(side));
     const repsetReadings = readings.filter(({ side }) => side === REPSET);
     lines.push(`level ${level}:`);
     if (variants.length > 0) {
@@ -467,7 +407,7 @@ function hasSteadyOffset(group: Group): boolean {
 
 function rollUpLine(attempt: Attempt): string {
   const groups = [...attempt.groups.values()];
-  const pinnings = new Set(groups.map(({ pinned }) => (pinned ? "pinned" : "unpinned")));
+  const pinnings = new Set(groups.map(({ pinned }) => pinningOf(pinned)));
   const pairs = BODY_NAMES.map((body) => {
     const inBody = groups.filter((group) => group.body === body);
     const count = inBody.reduce(
@@ -484,9 +424,37 @@ function rollUpLine(attempt: Attempt): string {
   return `attempt ${describe(attempt)}, ${[...pinnings].join("+")}, pairs ${pairs.join(" ")}, forms ${shown}`;
 }
 
+function hasBaselineOffset(group: Group): boolean {
+  const { low, high } = pairedInterval(pairedDifferences(group, NONE, BASELINE, true));
+  return (low > 0 || high < 0) && againControl(group) === "pass";
+}
+
+/**
+ * Whether repset leaves level 0 more often than baseline: the two-sided two-proportion p the level
+ * lines print is under 0.05, and repset's share is the larger.
+ */
+function hasRepsetLevels(group: Group): boolean {
+  const a = offLevel0(group, REPSET);
+  const b = offLevel0(group, BASELINE);
+  return (
+    a.off / a.total > b.off / b.total &&
+    twoProportionP(a.off, a.total, b.off, b.total) < ALPHA &&
+    againControl(group) === "pass"
+  );
+}
+
+function groupsLine(label: string, attempt: Attempt, qualifies: (group: Group) => boolean): string {
+  const names = [...attempt.groups.values()]
+    .filter((group) => qualifies(group))
+    .map(({ pinned, body }) => `${pinningOf(pinned)} ${body}`);
+  return `  ${label}: ${names.length === 0 ? "none" : names.join(", ")}`;
+}
+
 /**
  * Builds the report: cloud label warnings, then per attempt, pinning and body the paired
- * differences, speed levels and per-level details, then one roll-up line per attempt.
+ * differences, the comparisons with baseline and its A/A control, speed levels and per-level
+ * details, then per attempt a roll-up line and the groups with a baseline offset or with repset
+ * levels.
  *
  * @param runs - The parsed run files.
  * @param levelGap - The largest difference in ns between neighboring medians on one level.
@@ -499,14 +467,22 @@ export function report(runs: readonly Run[], levelGap: number): string {
     lines.push("", `== attempt ${describe(attempt)} ==`);
     for (const group of attempt.groups.values()) {
       lines.push(
-        `-- ${group.pinned ? "pinned" : "unpinned"}, ${group.body} --`,
+        `-- ${pinningOf(group.pinned)}, ${group.body} --`,
         ...pairLines(group),
         ...levelLines(group, levelGap),
         ...levelDetailLines(group),
       );
     }
   }
-  lines.push("", "== roll-up ==", ...attempts.map((attempt) => rollUpLine(attempt)));
+  lines.push(
+    "",
+    "== roll-up ==",
+    ...attempts.flatMap((attempt) => [
+      rollUpLine(attempt),
+      groupsLine("baseline offset", attempt, hasBaselineOffset),
+      groupsLine("repset levels", attempt, hasRepsetLevels),
+    ]),
+  );
   return `${lines.join("\n")}\n`;
 }
 

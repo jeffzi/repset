@@ -3,12 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   levelCuts,
   pairedInterval,
-  parseArguments,
-  parseRun,
   report,
   twoProportionP,
 } from "../../../scripts/diagnose-bun-gap/analyze.js";
-import type { Header, Reading, Run } from "../../../scripts/diagnose-bun-gap/analyze.js";
+import { parseArguments, parseRun } from "../../../scripts/diagnose-bun-gap/parse-input.js";
+import type { Header, Reading, Run } from "../../../scripts/diagnose-bun-gap/parse-input.js";
 import { errorOf } from "../../helpers/error-of.js";
 import { wordsInOrder } from "../../helpers/words-in-order.js";
 
@@ -477,6 +476,144 @@ describe("report", () => {
 
       expect(text).toContain("  repset sampleCount: min 100 median 175 max 300\nlevel 1:\n");
       expect(text).toContain("level 1:\n  repset sampleCount: min 50 median 50 max 50\n");
+    });
+  });
+
+  describe("when comparing every side with baseline", () => {
+    it("gives the paired interval over all cycles both sides read", () => {
+      const readings = cycles({ baseline: [100, 100, 100, 200], spin: [101, 103, 200, 102] });
+
+      const text = report([run(readings)], GAP);
+
+      expect(text).toContain("  spin - baseline all cycles: n=4 mean=1.50 95% [-77.72, 80.72]\n");
+    });
+
+    it("gives the paired interval over the cycles where both sides sit on level 0", () => {
+      const readings = cycles({ baseline: [100, 100, 100, 200], spin: [101, 103, 200, 102] });
+
+      const text = report([run(readings)], GAP);
+
+      expect(text).toContain("  spin - baseline level 0: n=2 mean=2.00 95% [0.04, 3.96]\n");
+    });
+
+    it("prints only the count for a comparison with one pair", () => {
+      const readings = cycles({ baseline: [100, 200], spin: [101, 102] });
+
+      const text = report([run(readings)], GAP);
+
+      expect(text).toContain("  spin - baseline level 0: n=1\n");
+    });
+
+    it("prints no comparison with baseline in a group without baseline", () => {
+      const readings = cycles({ repset: [101, 102], none: [100, 100] });
+
+      const text = report([run(readings)], GAP);
+
+      expect(text).not.toMatch(/ - baseline (all cycles|level 0):/u);
+    });
+  });
+
+  describe("when checking baseline-again against baseline", () => {
+    it.each([
+      { case: "an interval around zero", again: [101, 99, 102, 98], verdict: "pass" },
+      { case: "an interval off zero", again: [103, 103, 104, 104], verdict: "fail" },
+    ])("prints $verdict for $case", ({ again, verdict }) => {
+      const readings = cycles({ baseline: [100, 100, 100, 100], "baseline-again": again });
+
+      const text = report([run(readings)], GAP);
+
+      expect(text).toContain(`  A/A baseline-again - baseline: ${verdict}\n`);
+    });
+
+    it.each([
+      { case: "baseline-again", medians: { baseline: [100, 100] } },
+      { case: "baseline", medians: { "baseline-again": [100, 100] } },
+      { case: "a second pair", medians: { baseline: [100], "baseline-again": [100] } },
+    ])("prints control absent in a group without $case", ({ medians }) => {
+      const text = report([run(cycles(medians))], GAP);
+
+      expect(text).toContain("  A/A baseline-again - baseline: control absent\n");
+    });
+  });
+
+  describe("when breaking a level down by start CPU", () => {
+    it("counts baseline-proc but not the sides that report no CPU", () => {
+      const readings = [
+        reading({ side: "none", cpuStart: 0, cpuEnd: 0 }),
+        reading({ side: "baseline-again", cpuStart: 3, cpuEnd: 3 }),
+        reading({ side: "baseline-proc", cpuStart: 5, cpuEnd: 5 }),
+      ];
+
+      const text = report([run(readings)], GAP);
+
+      expect(text).toContain(
+        "  variants by cpuStart: 0 1, 5 1; cpuStart != cpuEnd 0; halves on one level 2\n",
+      );
+    });
+  });
+
+  describe("when rolling up baseline offsets", () => {
+    const flat = [100, 100, 100, 100];
+    const around = [101, 99, 102, 98];
+    const off = [103, 103, 104, 104];
+
+    it("lists each group whose none - baseline on level 0 excludes zero", () => {
+      const medians = { baseline: flat, none: off, "baseline-again": around };
+      const runs = [
+        run(cycles(medians), { file: "runs/a.jsonl" }),
+        run(cycles(medians), { file: "runs/b.jsonl", header: { pinned: false } }),
+      ];
+
+      const text = report(runs, GAP);
+
+      expect(text).toMatch(/^ {2}baseline offset: pinned each, unpinned each$/mu);
+    });
+
+    it.each([
+      { case: "none - baseline contains zero", none: around, again: around },
+      { case: "the baseline-again control fails", none: off, again: off },
+    ])("prints none when $case", ({ none, again }) => {
+      const readings = cycles({ baseline: flat, none, "baseline-again": again });
+
+      const text = report([run(readings)], GAP);
+
+      expect(text).toMatch(/^ {2}baseline offset: none$/mu);
+    });
+  });
+
+  describe("when rolling up repset levels", () => {
+    /** Twenty medians, the first `count` of them on the slow level. */
+    function slow(count: number): number[] {
+      return Array.from({ length: 20 }, (_, cycle) => (cycle < count ? 200 : 100));
+    }
+
+    /** `values`, each moved by one nanosecond, up and down in turn. */
+    function jitter(values: readonly number[], shift = 0): number[] {
+      return values.map((value, cycle) => value + shift + (cycle % 2 === 0 ? 1 : -1));
+    }
+
+    it("lists a group whose repset leaves level 0 more often at two-sided p < 0.05", () => {
+      const readings = cycles({
+        repset: slow(10),
+        baseline: slow(2),
+        "baseline-again": jitter(slow(2)),
+      });
+
+      const text = report([run(readings)], GAP);
+
+      expect(text).toMatch(/^ {2}repset levels: pinned each$/mu);
+    });
+
+    it.each([
+      { case: "repset leaves level 0 less often", repset: slow(0), baseline: slow(10), shift: 0 },
+      { case: "the two-sided p is 0.05 or more", repset: slow(8), baseline: slow(3), shift: 0 },
+      { case: "the baseline-again control fails", repset: slow(10), baseline: slow(2), shift: 5 },
+    ])("prints none when $case", ({ repset, baseline, shift }) => {
+      const readings = cycles({ repset, baseline, "baseline-again": jitter(baseline, shift) });
+
+      const text = report([run(readings)], GAP);
+
+      expect(text).toMatch(/^ {2}repset levels: none$/mu);
     });
   });
 

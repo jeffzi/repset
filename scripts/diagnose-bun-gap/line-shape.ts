@@ -69,7 +69,7 @@ export const READING_FIELDS = {
 
 /**
  * A parsed readings-file line: its `kind` plus one property per entry of `Fields`, typed by the
- * field's kind. `Header` and `Reading` in `analyze.ts` are built from it.
+ * field's kind. `Header` and `Reading` in `parse-input.ts` are built from it.
  */
 export type Line<Kind extends string, Fields extends Record<string, FieldKind>> = { kind: Kind } & {
   -readonly [Name in keyof Fields]: FieldTypes[Fields[Name]];

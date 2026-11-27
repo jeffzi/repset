@@ -35,6 +35,23 @@ export function benchName(body: BodyName): string {
   return `timing-accuracy/${body}`;
 }
 
+/** The environment variable a baseline case reads its calls per sample from. */
+export const BASELINE_CALLS_VAR = "TIMING_BASELINE_CALLS";
+
+/** The environment variable a baseline case reads its sample count from. */
+export const BASELINE_SAMPLES_VAR = "TIMING_BASELINE_SAMPLES";
+
+/**
+ * The name the timing accuracy bench registers `body`'s baseline case under, which the repset
+ * side's `^timing-accuracy/<body>$` filter never matches.
+ *
+ * @param body - The body the case times.
+ * @returns The bench name, `timing-accuracy-baseline/` followed by the body's name.
+ */
+export function baselineName(body: BodyName): string {
+  return `timing-accuracy-baseline/${body}`;
+}
+
 /**
  * Builds a state of {@link SIZE} points at x = 0 whose velocities cycle through
  * {@link VELOCITY_LEVELS} multiples of {@link VELOCITY_STEP}, starting at 0.

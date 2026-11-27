@@ -1,8 +1,10 @@
 /**
  * The timing accuracy check: for each scenario, one per runtime, count mode and body, it pairs one
- * run of the built repset command with one run of the baseline loop in
- * `check-timing-accuracy/baseline-child.ts`, back to back, and judges the pairs with
- * `check-timing-accuracy/verdict.ts`.
+ * run of the built repset command with one run of the baseline loop, back to back, and judges the
+ * pairs with `check-timing-accuracy/verdict.ts`. The baseline is the body's bare loop, registered
+ * as its own case in `check-timing-accuracy/timing-accuracy.bench.ts` and run inside repset's own
+ * child entry, `dist/child.js`, started as repset's parent starts its child: both sides load the
+ * same code and differ only in the code around the timed body call.
  *
  *   node --import tsx scripts/check-timing-accuracy.ts
  *
@@ -13,16 +15,26 @@
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
+import type { OnceRequest } from "../src/child-protocol.js";
+import { readResult } from "../src/child-result.js";
 import { childRuntimeFlags, findRuntime, howItEnded } from "../src/children.js";
 import { CALLS_PER_SAMPLE } from "../src/command-line.js";
 import type { SamplingReport } from "../src/measure/measure.js";
 import { RUNTIMES, type Runtime } from "../src/measure/runtime.js";
 import { DEFAULT_TIMEOUT } from "../src/options.js";
 import type { FailedResult, MeasuredResult, Report } from "../src/report.js";
+import { RESULT_FD } from "../src/result-fd.js";
 import { isRecord, property, thrownMessage, valueAt } from "../src/utils.js";
-import { BODY_NAMES, type BodyName, benchName } from "./check-timing-accuracy/bodies.js";
+import {
+  BASELINE_CALLS_VAR,
+  BASELINE_SAMPLES_VAR,
+  BODY_NAMES,
+  type BodyName,
+  baselineName,
+  benchName,
+} from "./check-timing-accuracy/bodies.js";
 import {
   judgeScenario,
   type Pairs,
@@ -67,6 +79,20 @@ export interface Readers {
 /** How one spawned run ended: its exit status, or the signal that killed it. */
 type RunEnd = Pick<SpawnSyncReturns<string>, "status" | "signal">;
 
+/** How one run of a baseline case ended and what it wrote. */
+export interface BaselineRun extends RunEnd {
+  /** What the child wrote on its result file descriptor. */
+  readonly written: string;
+  readonly stdout: string;
+  readonly stderr: string;
+}
+
+/** What starts one run of a baseline case on repset's child entry. */
+export interface BaselineSpawn {
+  readonly request: OnceRequest;
+  readonly env: NodeJS.ProcessEnv;
+}
+
 /** One round of a scenario: its pairs, and the repset readings behind them in pair order. */
 interface Round {
   readonly pairs: Pairs;
@@ -76,7 +102,7 @@ interface Round {
 const CLI = join("dist", "cli.js");
 const BENCH_FILE = join("scripts", "check-timing-accuracy", "timing-accuracy.bench.ts");
 const TS_LOADER = "tsx";
-const BASELINE_CHILD = join("scripts", "check-timing-accuracy", "baseline-child.ts");
+const CHILD_ENTRY = join("dist", "child.js");
 
 /** The pairs one round of a timing check takes. */
 export const PAIRS = 12;
@@ -252,21 +278,14 @@ function repsetReading(
 }
 
 /**
- * Checks one run of the baseline child and reads the median from its `{"median": <ns per call>}`
- * line.
+ * Reads the median from a baseline child's `{"median": <ns per call>}` line.
  *
- * @param scenario - The scenario the run read.
- * @param end - The child's exit status and the signal that killed it.
+ * @param name - What the run read, which the error names first.
  * @param stdout - What the child printed.
- * @returns The median the child printed, in nanoseconds per call.
- * @throws Error naming the scenario and how the child ended when it exited non-zero or a signal
- *   killed it.
- * @throws Error naming the scenario when the child printed something that is not JSON or holds no
- *   finite numeric median.
+ * @returns The median, in nanoseconds per call.
+ * @throws Error naming `name` when `stdout` is not JSON or holds no finite numeric median.
  */
-function checkedBaselineMedian(scenario: Scenario, end: RunEnd, stdout: string): number {
-  const name = scenarioName(scenario);
-  if (end.status !== 0) throw new Error(howRunEnded(`${name}: the baseline child`, end));
+function printedMedian(name: string, stdout: string): number {
   let printed: unknown;
   try {
     printed = JSON.parse(stdout);
@@ -278,6 +297,59 @@ function checkedBaselineMedian(scenario: Scenario, end: RunEnd, stdout: string):
     throw new Error(`${name}: the baseline child printed no finite median`);
   }
   return median;
+}
+
+/**
+ * Builds what starts one run of `body`'s baseline case: the `once` request for its case in the
+ * bench file, and this process's environment with the counts the case reads.
+ *
+ * @param body - The body the case times.
+ * @param counts - The calls per sample and sample count to run at.
+ * @returns The request and the environment.
+ */
+export function baselineSpawn(body: BodyName, counts: BaselineCounts): BaselineSpawn {
+  return {
+    request: { mode: "once", file: resolve(BENCH_FILE), id: baselineName(body) },
+    env: {
+      ...process.env,
+      [BASELINE_CALLS_VAR]: String(counts.callsPerSample),
+      [BASELINE_SAMPLES_VAR]: String(counts.sampleCount),
+    },
+  };
+}
+
+/** A once request for reading a baseline case's result line, whose shape only the mode decides. */
+const BASELINE_RESULT_REQUEST: OnceRequest = { mode: "once", file: resolve(BENCH_FILE), id: "" };
+
+/**
+ * Checks one run of a baseline case and reads the median from its `{"median": <ns per call>}`
+ * line on stdout.
+ *
+ * @param name - What the run read, which every error names first.
+ * @param run - How the child ended and what it wrote.
+ * @returns The median the case printed, in nanoseconds per call.
+ * @throws Error naming `name`, how the child ended and its stderr when it exited non-zero or a
+ *   signal killed it.
+ * @throws Error naming `name` and the case's failure when its result line is a failure, or what
+ *   was wrong when the line is not an ok result.
+ * @throws Error naming `name` when stdout is not JSON or holds no finite numeric median.
+ */
+export function baselineMedian(name: string, run: BaselineRun): number {
+  if (run.status !== 0) {
+    throw new Error(
+      `${howRunEnded(`${name}: the baseline child`, run)}. Its stderr:\n${run.stderr}`,
+    );
+  }
+  const result = readResult(run.written, BASELINE_RESULT_REQUEST);
+  if (typeof result === "string") {
+    throw new Error(`${name}: the baseline child wrote no usable result: ${result}`);
+  }
+  if (result.status === "failed") {
+    throw new Error(
+      `${name}: the baseline case failed in phase ${result.error.phase}: ${result.error.message}`,
+    );
+  }
+  return printedMedian(name, run.stdout);
 }
 
 /**
@@ -381,34 +453,45 @@ async function findExecutables(): Promise<Executables> {
 }
 
 /**
- * Runs the baseline child once on `scenario`'s runtime executable, started with the flags repset's
- * own children start with (Node loading tsx to run TypeScript), and reads its median.
+ * Runs `scenario`'s baseline case once, as repset's parent starts its child: `dist/child.js` on the
+ * scenario's runtime executable, with the flags repset's own children start with (Node loading tsx
+ * to run TypeScript), a `once` request for the case, the counts in the environment, and stdout,
+ * stderr and the result file descriptor piped. It reads the median the case printed.
  *
  * @param executables - Each runtime's executable.
  * @param scenario - The scenario to read.
  * @param counts - The calls per sample and sample count to run at.
- * @returns The median the child printed, in nanoseconds per call.
- * @throws Error naming the scenario when the child cannot start, ends badly or prints no finite
- *   median.
+ * @returns The median the case printed, in nanoseconds per call.
+ * @throws Error naming the scenario when the child cannot start, ends badly, writes a result line
+ *   other than an ok one, or prints no finite median.
  */
 function readBaseline(
   executables: Executables,
   scenario: Scenario,
   counts: BaselineCounts,
 ): number {
+  const { request, env } = baselineSpawn(scenario.body, counts);
   const args = [
     ...childRuntimeFlags(scenario.runtime, TS_LOADER),
-    BASELINE_CHILD,
-    scenario.body,
-    String(counts.callsPerSample),
-    String(counts.sampleCount),
+    resolve(CHILD_ENTRY),
+    JSON.stringify(request),
   ];
   const run = spawnSync(executables[scenario.runtime], args, {
     encoding: "utf8",
-    stdio: ["ignore", "pipe", "inherit"],
+    env,
+    // `stdio` is positional: the result descriptor exists in the child only when every slot below
+    // it is filled.
+    stdio: ["ignore", ...Array.from({ length: RESULT_FD }, () => "pipe" as const)],
   });
-  throwSpawnError(scenarioName(scenario), run.error);
-  return checkedBaselineMedian(scenario, run, run.stdout);
+  const name = scenarioName(scenario);
+  throwSpawnError(name, run.error);
+  return baselineMedian(name, {
+    status: run.status,
+    signal: run.signal,
+    written: run.output[RESULT_FD] ?? "",
+    stdout: run.stdout,
+    stderr: run.stderr,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -619,7 +702,7 @@ function scenarioReport(
  * Runs the timing accuracy check over every scenario, one reading at a time, printing each once
  * judged.
  *
- * @param readers - The two sides' readers; the real ones run `dist/cli.js` and the baseline child.
+ * @param readers - The two sides' readers; the real ones run `dist/cli.js` and the baseline case in `dist/child.js`.
  * @param print - Where each scenario's lines go.
  * @returns 1 when any scenario failed or any calibrated reading's timing lasted under `minTime`, 0
  *   otherwise.

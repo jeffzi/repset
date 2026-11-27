@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 
+import { report } from "../../../scripts/diagnose-bun-gap/analyze.js";
+import { parseArguments, parseRun } from "../../../scripts/diagnose-bun-gap/parse-input.js";
+import type { Header, Reading, Run } from "../../../scripts/diagnose-bun-gap/parse-input.js";
 import {
   levelCuts,
   pairedInterval,
-  report,
   twoProportionP,
-} from "../../../scripts/diagnose-bun-gap/analyze.js";
-import { parseArguments, parseRun } from "../../../scripts/diagnose-bun-gap/parse-input.js";
-import type { Header, Reading, Run } from "../../../scripts/diagnose-bun-gap/parse-input.js";
+} from "../../../scripts/diagnose-bun-gap/statistics.js";
 import { errorOf } from "../../helpers/error-of.js";
 import { wordsInOrder } from "../../helpers/words-in-order.js";
 
@@ -32,6 +32,7 @@ function header(overrides: Partial<Header> = {}): Header {
     cyclesPerBody: 4,
     sides: ["repset", "baseline", "none"],
     sampleCounts: { each: 64, inlined: 64 },
+    job: null,
     ...overrides,
   };
 }
@@ -191,6 +192,15 @@ describe("parseRun", () => {
       expect(parsed).toStrictEqual(run([reading({ cycle: 0 }), reading({ cycle: 1 })]));
     });
 
+    it("reads a header without a job as a job of null", () => {
+      const older = Object.fromEntries(Object.entries(header()).filter(([key]) => key !== "job"));
+      const text = jsonLines(older, reading());
+
+      const parsed = parseRun(FILE, "azure", text);
+
+      expect(parsed.header.job).toBeNull();
+    });
+
     it("keeps a complete last line that lacks its newline", () => {
       const text = jsonLines(header()) + JSON.stringify(reading());
 
@@ -305,6 +315,20 @@ describe("report", () => {
         "== attempt runs/d.jsonl: azure, Intel Xeon ==",
         "-- pinned, each --",
         "== roll-up ==",
+      ]);
+    });
+
+    it("keeps the jobs of one run attempt apart", () => {
+      const runs = [
+        run(cycles({ repset: [100] }), { file: "runs/a.jsonl", header: { job: 0 } }),
+        run(cycles({ repset: [100] }), { file: "runs/b.jsonl", header: { job: 1 } }),
+      ];
+
+      const text = report(runs, GAP);
+
+      expect(text.split("\n").filter((line) => line.startsWith("== attempt"))).toStrictEqual([
+        "== attempt 7/1 job 0: azure, Intel Xeon ==",
+        "== attempt 7/1 job 1: azure, Intel Xeon ==",
       ]);
     });
 
@@ -536,7 +560,72 @@ describe("report", () => {
     });
   });
 
+  describe("when checking child-baseline-again against child-baseline", () => {
+    it("gives the paired interval of child-baseline-again - child-baseline", () => {
+      const readings = cycles({
+        "child-baseline": [100, 100, 100, 100],
+        "child-baseline-again": [103, 103, 104, 104],
+      });
+
+      const text = report([run(readings)], GAP);
+
+      expect(text).toContain(
+        "  child-baseline-again - child-baseline: n=4 mean=3.50 95% [2.93, 4.07]\n",
+      );
+    });
+
+    it.each([
+      { case: "an interval around zero", again: [101, 99, 102, 98], verdict: "pass" },
+      { case: "an interval off zero", again: [103, 103, 104, 104], verdict: "fail" },
+    ])("prints $verdict for $case", ({ again, verdict }) => {
+      const readings = cycles({
+        "child-baseline": [100, 100, 100, 100],
+        "child-baseline-again": again,
+      });
+
+      const text = report([run(readings)], GAP);
+
+      expect(text).toContain(`  A/A child-baseline-again - child-baseline: ${verdict}\n`);
+    });
+
+    it("prints control absent in a group without child-baseline-again", () => {
+      const readings = cycles({ "child-baseline": [100, 100] });
+
+      const text = report([run(readings)], GAP);
+
+      expect(text).toContain("  A/A child-baseline-again - child-baseline: control absent\n");
+    });
+  });
+
+  describe("when comparing child-baseline's levels with repset-child-direct's", () => {
+    it("tests child-baseline's share off level 0 against repset-child-direct's", () => {
+      const readings = cycles({
+        "child-baseline": [100, 100, 100, 100, 100],
+        "repset-child-direct": [100, 100, 100, 200, 200],
+      });
+
+      const text = report([run(readings)], GAP);
+
+      expect(text).toContain(
+        "  child-baseline vs repset-child-direct: off level 0 0.0% vs 40.0%, p=0.1138\n",
+      );
+    });
+  });
+
   describe("when breaking a level down by start CPU", () => {
+    it.each(["child-baseline", "child-baseline-again"])("does not count %s", (side) => {
+      const readings = [
+        reading({ side: "none", cpuStart: 0, cpuEnd: 0 }),
+        reading({ side, cpuStart: 3, cpuEnd: 3 }),
+      ];
+
+      const text = report([run(readings)], GAP);
+
+      expect(text).toContain(
+        "  variants by cpuStart: 0 1; cpuStart != cpuEnd 0; halves on one level 1\n",
+      );
+    });
+
     it("counts baseline-proc but not the sides that report no CPU", () => {
       const readings = [
         reading({ side: "none", cpuStart: 0, cpuEnd: 0 }),
@@ -667,5 +756,105 @@ describe("report", () => {
 
       expect(text).toMatch(new RegExp(String.raw`^attempt .*, forms ${forms}$`, "mu"));
     });
+  });
+
+  describe("when rolling up coverage", () => {
+    const EPYC_7763 = "AMD EPYC 7763 64-Core Processor";
+    const flat = [100, 100, 100, 100];
+    const around = [101, 99, 102, 98];
+    const off = [103, 103, 104, 104];
+
+    /** A finished pass of `job`, child-baseline-again taking `each` and `inlined` on its bodies. */
+    function pass(
+      pinned: boolean,
+      options: { job?: number; cpuModel?: string; each?: number[]; inlined?: number[] } = {},
+    ): Run {
+      const job = options.job ?? 0;
+      const again = (medians: number[] | undefined): Record<string, number[]> => ({
+        "child-baseline": flat,
+        "child-baseline-again": medians ?? around,
+      });
+      return run([...cycles(again(options.each)), ...cycles(again(options.inlined), "inlined")], {
+        file: `runs/${job}-${pinned ? "pinned" : "unpinned"}.jsonl`,
+        header: {
+          pinned,
+          job,
+          cpuModel: options.cpuModel ?? EPYC_7763,
+          sides: ["child-baseline", "child-baseline-again"],
+        },
+      });
+    }
+
+    /** `finished` with its last reading dropped, as a pass stopped part way through. */
+    function unfinished(finished: Run): Run {
+      return { ...finished, readings: finished.readings.slice(0, -1) };
+    }
+
+    it.each([
+      {
+        case: "both passes finished and the unpinned inlined control passes",
+        runs: [pass(false), pass(true)],
+        coverage: "both passes finished yes, unpinned inlined child A/A pass, counts yes",
+      },
+      {
+        case: "the pinned pass is missing",
+        runs: [pass(false)],
+        coverage: "both passes finished no, unpinned inlined child A/A pass, counts no",
+      },
+      {
+        case: "the unpinned pass is missing",
+        runs: [pass(true)],
+        coverage: "both passes finished no, unpinned inlined child A/A control absent, counts no",
+      },
+      {
+        case: "the pinned pass stopped part way through",
+        runs: [pass(false), unfinished(pass(true))],
+        coverage: "both passes finished no, unpinned inlined child A/A pass, counts no",
+      },
+      {
+        case: "the unpinned inlined control fails",
+        runs: [pass(false, { inlined: off }), pass(true)],
+        coverage: "both passes finished yes, unpinned inlined child A/A fail, counts no",
+      },
+      {
+        case: "only the other groups' controls fail",
+        runs: [pass(false, { each: off }), pass(true, { inlined: off })],
+        coverage: "both passes finished yes, unpinned inlined child A/A pass, counts yes",
+      },
+    ])("names the CPU and the coverage conditions when $case", ({ runs, coverage }) => {
+      const text = report(runs, GAP);
+
+      expect(text).toMatch(
+        new RegExp(
+          String.raw`^attempt 7/1 job 0: azure, ${EPYC_7763}, .*\n {2}coverage: ${coverage}$`,
+          "mu",
+        ),
+      );
+    });
+
+    it("marks a required model covered only by a job that counts", () => {
+      const runs = [
+        pass(false, { job: 0 }),
+        pass(true, { job: 0 }),
+        pass(false, { job: 1, cpuModel: "AMD EPYC 9V74 80-Core Processor" }),
+      ];
+
+      const text = report(runs, GAP);
+
+      expect(text).toMatch(
+        /^coverage EPYC 7763: covered\ncoverage EPYC 9V74 or 9V45: uncovered$/mu,
+      );
+    });
+
+    it.each(["AMD EPYC 9V74 80-Core Processor", "AMD EPYC 9V45 96-Core Processor"])(
+      "marks EPYC 9V74 or 9V45 covered by a counting %s job",
+      (cpuModel) => {
+        const runs = [pass(false, { cpuModel }), pass(true, { cpuModel })];
+
+        const text = report(runs, GAP);
+
+        expect(text).toMatch(/^coverage EPYC 9V74 or 9V45: covered$/mu);
+      },
+    );
   });
 });

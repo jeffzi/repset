@@ -54,6 +54,11 @@ function parseLine(file: string, number: number, line: string): Header | Reading
   } catch (error) {
     throw new Error(`${file} line ${number}: not valid JSON`, { cause: error });
   }
+  // Files written before the header carried the matrix job have no `job`; they ran outside a
+  // matrix, which `job: null` says.
+  if (isRecord(value) && value["kind"] === "header" && !("job" in value)) {
+    value = { ...value, job: null };
+  }
   if (isHeader(value) || isReading(value)) {
     return value;
   }
@@ -99,7 +104,7 @@ export function parseArguments(argv: readonly string[]): Arguments {
 
 /**
  * Parses one run file. Text after the last newline that is not valid JSON is the unfinished line a
- * stopped run leaves, and is dropped.
+ * stopped run leaves, and is dropped. A header without `job` reads as `job: null`.
  *
  * @param file - The file's path, named in errors.
  * @param cloud - The cloud label given for the file.

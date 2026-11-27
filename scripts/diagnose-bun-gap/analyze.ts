@@ -11,27 +11,20 @@
  */
 import { readFileSync } from "node:fs";
 
-import { quantile, valueAt } from "../../src/utils.js";
-import { BODY_NAMES } from "../check-timing-accuracy/bodies.js";
-import type { BodyName } from "../check-timing-accuracy/bodies.js";
-import { parseArguments, parseRun } from "./parse-input.js";
-import type { Reading, Run } from "./parse-input.js";
+import { quantile } from "../../src/utils.js";
+import { BODY_NAMES, type BodyName } from "../check-timing-accuracy/bodies.js";
+import { type Reading, type Run, parseArguments, parseRun } from "./parse-input.js";
+import { type Interval, levelCuts, levelOf, pairedInterval, twoProportionP } from "./statistics.js";
 
-/** The mean of paired differences and its 95 % interval. */
-export interface Interval {
-  n: number;
-  mean: number;
-  low: number;
-  high: number;
-}
-
-const Z_95 = 1.96;
 const EQUIVALENCE_NS = 1;
 const MIN_LEVEL_SHARE = 0.05;
 const REPSET = "repset";
 const BASELINE = "baseline";
 const NONE = "none";
 const BASELINE_AGAIN = "baseline-again";
+const CHILD_BASELINE = "child-baseline";
+const CHILD_BASELINE_AGAIN = "child-baseline-again";
+const REPSET_CHILD_DIRECT = "repset-child-direct";
 const ALPHA = 0.05;
 
 /**
@@ -48,7 +41,9 @@ const SIDES_WITHOUT_CPU: ReadonlySet<string> = new Set([
   "baseline-with-variants",
   "baseline-child-modules",
   "baseline-under-parent",
-  "repset-child-direct",
+  REPSET_CHILD_DIRECT,
+  CHILD_BASELINE,
+  CHILD_BASELINE_AGAIN,
 ]);
 
 /** A cloud label, and the word its machines' `sysVendor` contains. */
@@ -57,79 +52,11 @@ const CLOUD_VENDORS: ReadonlyMap<string, string> = new Map([
   ["aws", "Amazon"],
 ]);
 
-// ---------------------------------------------------------------------------
-// Statistics
-// ---------------------------------------------------------------------------
-
-/**
- * Computes the mean of paired differences and its 95 % interval, mean ± 1.96 × sd/√n with sd the
- * sample standard deviation.
- *
- * @param differences - One difference per pair.
- * @returns The pair count, the mean and the interval's bounds; the bounds are NaN under two pairs.
- */
-export function pairedInterval(differences: readonly number[]): Interval {
-  const n = differences.length;
-  const mean = differences.reduce((total, value) => total + value, 0) / n;
-  const variance = differences.reduce((total, value) => total + (value - mean) ** 2, 0) / (n - 1);
-  const half = Z_95 * Math.sqrt(variance / n);
-  return { n, mean, low: mean - half, high: mean + half };
-}
-
-/**
- * Splits values into speed levels: sorted, a new level starts wherever two neighbors differ by
- * more than the gap.
- *
- * @param values - The values to split, in any order.
- * @param gap - The largest difference between neighbors on one level.
- * @returns The ascending cuts, each midway between the two neighbors it separates; a value above
- *   `k` cuts sits on level `k`.
- */
-export function levelCuts(values: readonly number[], gap: number): number[] {
-  const sorted = values.toSorted((a, b) => a - b);
-  return sorted.slice(1).flatMap((high, index) => {
-    const low = valueAt(sorted, index);
-    return high - low > gap ? [(low + high) / 2] : [];
-  });
-}
-
-function levelOf(value: number, cuts: readonly number[]): number {
-  return cuts.filter((cut) => value > cut).length;
-}
-
-/** The complementary error function for x ≥ 0, to 1.5e-7: Handbook of Mathematical Functions, formula 7.1.26. */
-function complementaryError(x: number): number {
-  const t = 1 / (1 + 0.327_591_1 * x);
-  const poly =
-    t *
-    (0.254_829_592 +
-      t * (-0.284_496_736 + t * (1.421_413_741 + t * (-1.453_152_027 + t * 1.061_405_429))));
-  return poly * Math.exp(-x * x);
-}
-
-/**
- * Tests whether two shares differ, with the two-sided two-proportion z-test on the pooled
- * proportion.
- *
- * @param offA - The count of hits in the first sample.
- * @param totalA - The size of the first sample.
- * @param offB - The count of hits in the second sample.
- * @param totalB - The size of the second sample.
- * @returns The p-value; 1 when the pooled proportion is 0 or 1, as no difference is possible.
- */
-export function twoProportionP(offA: number, totalA: number, offB: number, totalB: number): number {
-  const pooled = (offA + offB) / (totalA + totalB);
-  if (pooled === 0 || pooled === 1) {
-    return 1;
-  }
-  const standardError = Math.sqrt(pooled * (1 - pooled) * (1 / totalA + 1 / totalB));
-  const z = (offA / totalA - offB / totalB) / standardError;
-  return complementaryError(Math.abs(z) / Math.SQRT2);
-}
-
-// ---------------------------------------------------------------------------
-// Grouping and the report
-// ---------------------------------------------------------------------------
+/** The CPU models coverage requires one counting job on, each with the model names that cover it. */
+const REQUIRED_MODELS: readonly { label: string; models: readonly string[] }[] = [
+  { label: "EPYC 7763", models: ["EPYC 7763"] },
+  { label: "EPYC 9V74 or 9V45", models: ["EPYC 9V74", "EPYC 9V45"] },
+];
 
 /** A reading with its speed level, keyed by its file and cycle so pairs never span two files. */
 interface Entry {
@@ -150,6 +77,7 @@ interface Attempt {
   clouds: Set<string>;
   cpus: Set<string>;
   groups: Map<string, Group>;
+  runs: Run[];
 }
 
 function getOrAdd<K, V>(map: Map<K, V>, key: K, make: () => V): V {
@@ -165,15 +93,18 @@ function getOrAdd<K, V>(map: Map<K, V>, key: K, make: () => V): V {
 function groupRuns(runs: readonly Run[], levelGap: number): Attempt[] {
   const attempts = new Map<string, Attempt>();
   for (const { file, cloud, header, readings } of runs) {
-    const { runId, runAttempt, pinned } = header;
+    const { runId, runAttempt, pinned, job } = header;
     const named = runId !== null && runAttempt !== null;
-    const name = named ? `${runId}/${runAttempt}` : file;
+    const jobName = job === null ? "" : ` job ${job}`;
+    const name = named ? `${runId}/${runAttempt}${jobName}` : file;
     const attempt = getOrAdd(attempts, `${named}\0${name}`, () => ({
       name,
       clouds: new Set<string>(),
       cpus: new Set<string>(),
       groups: new Map<string, Group>(),
+      runs: [],
     }));
+    attempt.runs.push({ file, cloud, header, readings });
     attempt.clouds.add(cloud);
     attempt.cpus.add(header.cpuModel ?? "unknown");
     for (const reading of readings) {
@@ -289,13 +220,17 @@ function baselineLines(group: Group, sides: readonly string[]): string[] {
   );
 }
 
-/** The A/A control: two baseline children that run the same code must read alike. */
-function againControl(group: Group): "pass" | "fail" | "control absent" {
+/** An A/A control: two baseline children that run the same code must read alike. */
+function againControl(
+  group: Group,
+  again = BASELINE_AGAIN,
+  original = BASELINE,
+): "pass" | "fail" | "control absent" {
   const sides = sidesOf(group);
-  if (!sides.includes(BASELINE_AGAIN) || !sides.includes(BASELINE)) {
+  if (!sides.includes(again) || !sides.includes(original)) {
     return "control absent";
   }
-  const interval = pairedInterval(pairedDifferences(group, BASELINE_AGAIN, BASELINE));
+  const interval = pairedInterval(pairedDifferences(group, again, original));
   // Under two pairs there is no interval to test: no control, rather than a failed one.
   if (interval.n < 2) return "control absent";
   return holdsZero(interval) ? "pass" : "fail";
@@ -309,11 +244,15 @@ function pairLines(group: Group): string[] {
   if (sides.includes(NONE) && sides.includes(BASELINE)) {
     pairs.push([NONE, BASELINE]);
   }
+  if (sides.includes(CHILD_BASELINE_AGAIN) && sides.includes(CHILD_BASELINE)) {
+    pairs.push([CHILD_BASELINE_AGAIN, CHILD_BASELINE]);
+  }
   return [
     "paired differences (ns):",
     ...pairs.map(([side, other]) => pairLine(group, side, other)),
     ...baselineLines(group, sides),
     `  A/A baseline-again - baseline: ${againControl(group)}`,
+    `  A/A child-baseline-again - child-baseline: ${againControl(group, CHILD_BASELINE_AGAIN, CHILD_BASELINE)}`,
   ];
 }
 
@@ -343,7 +282,11 @@ function levelLines(group: Group, levelGap: number): string[] {
     const counts = levelCounts(entriesOf(group, side), group.cuts);
     lines.push(`  ${side}: ${counts.map((count, level) => `level ${level} ${count}`).join(", ")}`);
   }
-  for (const [side, other] of comparisons(sides)) {
+  const shares = comparisons(sides);
+  if (sides.includes(CHILD_BASELINE) && sides.includes(REPSET_CHILD_DIRECT)) {
+    shares.push([CHILD_BASELINE, REPSET_CHILD_DIRECT]);
+  }
+  for (const [side, other] of shares) {
     const a = offLevel0(group, side);
     const b = offLevel0(group, other);
     const p = twoProportionP(a.off, a.total, b.off, b.total);
@@ -424,6 +367,51 @@ function rollUpLine(attempt: Attempt): string {
   return `attempt ${describe(attempt)}, ${[...pinnings].join("+")}, pairs ${pairs.join(" ")}, forms ${shown}`;
 }
 
+/** Whether every side the header names has a reading in every cycle of every body. */
+function isFinished({ header, readings }: Run): boolean {
+  const read = new Set(readings.map(({ side, body, cycle }) => `${side}\0${body}\0${cycle}`));
+  const cycles = Array.from({ length: header.cyclesPerBody }, (_, cycle) => cycle);
+  return header.sides.every((side) =>
+    BODY_NAMES.every((body) => cycles.every((cycle) => read.has(`${side}\0${body}\0${cycle}`))),
+  );
+}
+
+/**
+ * Whether a job counts toward coverage: its unpinned and its pinned pass both finished, and the
+ * child-baseline A/A control passes on unpinned `inlined`.
+ */
+function coverageOf(attempt: Attempt): { finished: boolean; control: string; counts: boolean } {
+  const finished = [false, true].every((pinned) =>
+    attempt.runs.some((run) => run.header.pinned === pinned && isFinished(run)),
+  );
+  const group = attempt.groups.get("false/inlined");
+  const control =
+    group === undefined
+      ? "control absent"
+      : againControl(group, CHILD_BASELINE_AGAIN, CHILD_BASELINE);
+  return { finished, control, counts: finished && control === "pass" };
+}
+
+function yesNo(value: boolean): "yes" | "no" {
+  return value ? "yes" : "no";
+}
+
+function coverageLine(attempt: Attempt): string {
+  const { finished, control, counts } = coverageOf(attempt);
+  return `  coverage: both passes finished ${yesNo(finished)}, unpinned inlined child A/A ${control}, counts ${yesNo(counts)}`;
+}
+
+function requiredLines(attempts: readonly Attempt[]): string[] {
+  return REQUIRED_MODELS.map(({ label, models }) => {
+    const covered = attempts.some(
+      (attempt) =>
+        coverageOf(attempt).counts &&
+        [...attempt.cpus].some((cpu) => models.some((model) => cpu.includes(model))),
+    );
+    return `coverage ${label}: ${covered ? "covered" : "uncovered"}`;
+  });
+}
+
 function hasBaselineOffset(group: Group): boolean {
   const { low, high } = pairedInterval(pairedDifferences(group, NONE, BASELINE, true));
   return (low > 0 || high < 0) && againControl(group) === "pass";
@@ -451,10 +439,10 @@ function groupsLine(label: string, attempt: Attempt, qualifies: (group: Group) =
 }
 
 /**
- * Builds the report: cloud label warnings, then per attempt, pinning and body the paired
- * differences, the comparisons with baseline and its A/A control, speed levels and per-level
- * details, then per attempt a roll-up line and the groups with a baseline offset or with repset
- * levels.
+ * Builds the report: cloud label warnings, then per attempt (a run attempt's matrix job), pinning
+ * and body the paired differences, the comparisons with baseline, the A/A controls, speed levels
+ * and per-level details, then per attempt a roll-up line, its coverage conditions and the groups
+ * with a baseline offset or with repset levels, then whether each required CPU model is covered.
  *
  * @param runs - The parsed run files.
  * @param levelGap - The largest difference in ns between neighboring medians on one level.
@@ -479,9 +467,11 @@ export function report(runs: readonly Run[], levelGap: number): string {
     "== roll-up ==",
     ...attempts.flatMap((attempt) => [
       rollUpLine(attempt),
+      coverageLine(attempt),
       groupsLine("baseline offset", attempt, hasBaselineOffset),
       groupsLine("repset levels", attempt, hasRepsetLevels),
     ]),
+    ...requiredLines(attempts),
   );
   return `${lines.join("\n")}\n`;
 }

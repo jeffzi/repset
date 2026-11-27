@@ -47,6 +47,7 @@ export const HEADER_FIELDS = {
   cyclesPerBody: "number",
   sides: "strings",
   sampleCounts: "counts",
+  job: "number?",
 } as const satisfies Record<string, FieldKind>;
 
 /** The fields of a reading line after `kind`; the `Reading` type derives from it. */

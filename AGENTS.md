@@ -27,9 +27,17 @@ this file. It is gitignored for personal, machine-specific preferences and never
   the installed `repset --version` once, which loads the command's static imports. CI runs it.
 - `task check-timing-accuracy` — build, then compare repset's timings with a baseline loop that
   times the same bodies with nothing around the body call, run inside repset's own child entry
-  (`dist/child.js`) as a case of the same bench file. It exits 1 when repset and the baseline differ
-  significantly in the same direction in both rounds, or a calibrated reading's timing lasted under
-  its `minTime`.
+  (`dist/child.js`) as a case of the same bench file. It exits 1 when a calibrated reading's timing
+  lasted under its `minTime`, or when repset and the baseline differ significantly in the same
+  direction in both rounds, judged by one of two rules. Run bare, alone on a quiet machine, it uses
+  the strict rule: any such difference fails. With `--ci` (`task check-timing-accuracy -- --ci`),
+  which CI passes, including the release workflow that calls `ci.yml`, a Bun scenario fails only
+  when each round's mean paired difference also exceeds 4% of its baseline median; Node has no
+  margin and stays strict. The 4% Bun margin comes from shared runners, where unchanged code reads
+  Bun differences of up to 2.78%. Its cost: in CI, a change that inflates a Bun scenario by less
+  than 4% passes. Locally on macOS the one-call readings move in whole 41.67 ns clock steps, about
+  4.3% of a 958 ns reading, and an inflation smaller than one step cannot move a reading, so no run
+  catches a Bun one-call inflation smaller than both.
 - `task check-memory-timing` — build, then compare repset's timings on Node with `--measure time`
   and with `--measure time,memory`, in alternating pairs. It exits 1 when a body's timing with
   memory measured differs significantly from its timing alone, in the same direction, in both
@@ -38,6 +46,9 @@ this file. It is gitignored for personal, machine-specific preferences and never
   CI runs both timing checks, one after the other, on every pull request and release; `task check`
   runs neither. A shared runner resolves only gaps above its own noise: before a release, also run
   both alone on a quiet machine, which resolves the smaller ones.
+
+  Both checks judge each round by the mean of its paired differences, so a slowdown that hits only
+  some processes can pass: one slow process on the other side of a pair cancels it.
 
 ## Tools (mise)
 

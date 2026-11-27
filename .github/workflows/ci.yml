@@ -77,9 +77,15 @@ jobs:
         with:
           install_args: --locked node bun aqua:go-task/task
 
+      # The runner type decides how noisy the timings are, and `runs-on` does not choose it.
+      - name: Runner CPU
+        run: |
+          grep -m 1 'model name' /proc/cpuinfo
+          printf 'vCPUs: %s\n' "$(nproc)"
+
       - name: Timing accuracy
         id: timing-accuracy
-        run: task check-timing-accuracy
+        run: task check-timing-accuracy -- --ci
 
       # Runs after a failed timing accuracy step too, so one run reports both checks. A skipped
       # timing accuracy step means setup failed, and this step cannot run without it either.

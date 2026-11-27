@@ -143,9 +143,11 @@ export interface CheckRule {
 /**
  * The margin `--ci` judges Bun scenarios at.
  *
- * It is the smallest whole percent at or above 2.78%, plus one point. 2.78% is the largest relative
- * mean (mean paired difference over baseline median) of a Bun scenario that fails the strict rule
- * on unchanged code in the saved logs of GitHub-hosted Linux runners. Those runners' CPUs are Intel
+ * It is the smallest whole percent at or above 2.78%, plus one point. A scenario that fails the
+ * strict rule passes once the margin reaches the smaller of its two rounds' relative means (mean
+ * paired difference over baseline median), and 2.78% is the largest such value among the Bun
+ * scenarios that fail the strict rule on unchanged code in the saved logs of GitHub-hosted Linux
+ * runners; single rounds read more, up to 3.88%. Those runners' CPUs are Intel
  * Xeon 6975P-C, Intel Xeon Platinum 8370C, and AMD EPYC 7763, 9V74 and 9V45, plus two runs whose
  * CPU was not printed; every such Bun failure is on the three AMD EPYC models. A runner type that
  * fails Bun scenarios beyond this margin on unchanged code needs the margin sized again.

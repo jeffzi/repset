@@ -33,11 +33,12 @@ this file. It is gitignored for personal, machine-specific preferences and never
   the strict rule: any such difference fails. With `--ci` (`task check-timing-accuracy -- --ci`),
   which CI passes, including the release workflow that calls `ci.yml`, a Bun scenario fails only
   when each round's mean paired difference also exceeds 4% of its baseline median; Node has no
-  margin and stays strict. The 4% Bun margin comes from shared runners, where unchanged code reads
-  Bun differences of up to 2.78%. Its cost: in CI, a change that inflates a Bun scenario by less
-  than 4% passes. Locally on macOS the one-call readings move in whole 41.67 ns clock steps, about
-  4.3% of a 958 ns reading, and an inflation smaller than one step cannot move a reading, so no run
-  catches a Bun one-call inflation smaller than both.
+  margin and stays strict. The 4% Bun margin is one point above 2.78%, the margin every Bun scenario
+  that failed the strict rule on unchanged code on shared runners needed to pass: the smaller of its
+  two rounds' relative means. Its cost: in CI, a change that inflates a Bun scenario by less than 4%
+  passes. Locally on macOS the one-call readings move in whole 41.67 ns clock steps, about 4.3% of a
+  958 ns reading, and an inflation smaller than one step cannot move a reading, so no run catches a
+  Bun one-call inflation smaller than both.
 - `task check-memory-timing` — build, then compare repset's timings on Node with `--measure time`
   and with `--measure time,memory`, in alternating pairs. It exits 1 when a body's timing with
   memory measured differs significantly from its timing alone, in the same direction, in both

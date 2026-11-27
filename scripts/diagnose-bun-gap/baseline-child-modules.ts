@@ -4,7 +4,7 @@
 // The Bun gap diagnosis's `baseline-child-modules` child: the timing accuracy check's baseline child
 // plus side-effect imports of the built modules repset's child entry imports (`src/child.ts`), so
 // they load without running, as they load beside a benchmark in repset's child. Everything else is
-// `../check-timing-accuracy/baseline-child.ts` statement for statement. It prints
+// `baseline-child.ts` statement for statement. It prints
 // `{"median": <ns per call>}` on stdout.
 //
 //   bun --expose-gc baseline-child-modules.ts <body> <calls per sample> <samples>

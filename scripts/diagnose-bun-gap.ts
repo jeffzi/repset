@@ -144,8 +144,8 @@ const PIECE_NAMES: ReadonlySet<string> = new Set(BASELINE_PIECES);
 const DEFAULT_CYCLES = 170;
 
 const BENCH_FILE = join("scripts", "check-timing-accuracy", "timing-accuracy.bench.ts");
-const BASELINE_CHILD = join("scripts", "check-timing-accuracy", "baseline-child.ts");
 const DIAGNOSE_DIR = join("scripts", "diagnose-bun-gap");
+const BASELINE_CHILD = join(DIAGNOSE_DIR, "baseline-child.ts");
 const VARIANT_CHILD = join(DIAGNOSE_DIR, "variant-child.ts");
 const NODE_PARENT = join(DIAGNOSE_DIR, "node-parent.ts");
 // Repset's child reads absolute paths only: its request names an absolute `file`.

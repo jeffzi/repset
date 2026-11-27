@@ -3,7 +3,7 @@
 
 // The Bun gap diagnosis's `baseline-proc` child: the timing accuracy check's baseline child plus a
 // read of `/proc/<pid>/stat` before and after timing, as the variant child reads it. Everything else
-// is `../check-timing-accuracy/baseline-child.ts` statement for statement. It prints
+// is `baseline-child.ts` statement for statement. It prints
 // `{"median": <ns per call>, "cpuStart": <cpu | null>, "cpuEnd": <cpu | null>}` on stdout.
 //
 //   bun --expose-gc baseline-proc.ts <body> <calls per sample> <samples>

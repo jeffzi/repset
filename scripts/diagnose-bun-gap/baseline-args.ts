@@ -4,7 +4,7 @@
 // The Bun gap diagnosis's `baseline-args` child: the timing accuracy check's baseline child with its
 // arguments parsed as the variant child parses them, into module constants under
 // `import.meta.main` with the body falling back to `each`, and checked in a function before timing.
-// Everything else is `../check-timing-accuracy/baseline-child.ts` statement for statement. It
+// Everything else is `baseline-child.ts` statement for statement. It
 // prints `{"median": <ns per call>}` on stdout.
 //
 //   bun --expose-gc baseline-args.ts <body> <calls per sample> <samples>

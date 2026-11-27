@@ -9,7 +9,7 @@
 //   <node --import tsx | bun> --expose-gc variant-child.ts <variant> <body> <calls> <samples>
 //
 // Importing it runs nothing. Each variant is written out in full: `none` is a copy of
-// `../check-timing-accuracy/baseline-child.ts`'s loop, and every other variant differs from `none` by
+// `baseline-child.ts`'s loop, and every other variant differs from `none` by
 // the one change its name says, so a shared helper would itself be a difference.
 import { readFileSync } from "node:fs";
 

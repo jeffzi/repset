@@ -3,7 +3,7 @@
 
 // The Bun gap diagnosis's `baseline-table` child: the timing accuracy check's baseline child calling
 // `run` through a one-entry table, as the variant child calls its timer through `TIMERS`. Everything
-// else is `../check-timing-accuracy/baseline-child.ts` statement for statement. It prints
+// else is `baseline-child.ts` statement for statement. It prints
 // `{"median": <ns per call>}` on stdout.
 //
 //   bun --expose-gc baseline-table.ts <body> <calls per sample> <samples>

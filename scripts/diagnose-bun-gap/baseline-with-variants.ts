@@ -4,7 +4,7 @@
 // The Bun gap diagnosis's `baseline-with-variants` child: the timing accuracy check's baseline child
 // plus a side-effect import of the variant child, so the variant child's other code and its imports
 // load without running (it parses arguments and times only under `import.meta.main`). Everything
-// else is `../check-timing-accuracy/baseline-child.ts` statement for statement. It prints
+// else is `baseline-child.ts` statement for statement. It prints
 // `{"median": <ns per call>}` on stdout.
 //
 //   bun --expose-gc baseline-with-variants.ts <body> <calls per sample> <samples>

@@ -4,7 +4,7 @@
 // The Bun gap diagnosis's `baseline-async` child: the timing accuracy check's baseline child with
 // its `noInline` load, state, timing and output moved into an `async` `main` that awaits `run`, as
 // the variant child times from an `async` `main`. Everything else is
-// `../check-timing-accuracy/baseline-child.ts` statement for statement. It prints
+// `baseline-child.ts` statement for statement. It prints
 // `{"median": <ns per call>}` on stdout.
 //
 //   bun --expose-gc baseline-async.ts <body> <calls per sample> <samples>

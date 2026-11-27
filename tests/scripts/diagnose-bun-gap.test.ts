@@ -408,7 +408,7 @@ describe("runDiagnosis", () => {
     }
 
     it.each([
-      { side: "baseline-again", file: /[/\\]check-timing-accuracy[/\\]baseline-child\.ts$/u },
+      { side: "baseline-again", file: /[/\\]diagnose-bun-gap[/\\]baseline-child\.ts$/u },
       ...[
         "baseline-args",
         "baseline-async",

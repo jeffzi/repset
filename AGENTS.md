@@ -26,9 +26,10 @@ this file. It is gitignored for personal, machine-specific preferences and never
 - `task check-package` — pack the package, install it in an empty app, import every entry and run
   the installed `repset --version` once, which loads the command's static imports. CI runs it.
 - `task check-timing-accuracy` — build, then compare repset's timings with a baseline loop that
-  times the same bodies with nothing around the body call. It exits 1 when repset and the baseline
-  differ significantly in the same direction in both rounds, or a calibrated reading's timing lasted
-  under its `minTime`.
+  times the same bodies with nothing around the body call, run inside repset's own child entry
+  (`dist/child.js`) as a case of the same bench file. It exits 1 when repset and the baseline differ
+  significantly in the same direction in both rounds, or a calibrated reading's timing lasted under
+  its `minTime`.
 - `task check-memory-timing` — build, then compare repset's timings on Node with `--measure time`
   and with `--measure time,memory`, in alternating pairs. It exits 1 when a body's timing with
   memory measured differs significantly from its timing alone, in the same direction, in both

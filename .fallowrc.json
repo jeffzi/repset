@@ -3,7 +3,6 @@
   "entry": ["src/child.ts"],
   "supportEntry": [
     "scripts/*.ts",
-    "scripts/check-timing-accuracy/baseline-child.ts",
     "scripts/check-timing-accuracy/timing-accuracy.bench.ts",
     "examples/*.ts",
     "docs/snippets/*.ts",

@@ -1,9 +1,18 @@
+import { isAbsolute } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
-import { runCheck } from "../../scripts/check-timing-accuracy.js";
-import type { Readers } from "../../scripts/check-timing-accuracy.js";
+import { baselineMedian, baselineSpawn, runCheck } from "../../scripts/check-timing-accuracy.js";
+import type { BaselineRun, Readers } from "../../scripts/check-timing-accuracy.js";
+import {
+  BASELINE_CALLS_VAR,
+  BASELINE_SAMPLES_VAR,
+  baselineName,
+} from "../../scripts/check-timing-accuracy/bodies.js";
 import { judgeScenario } from "../../scripts/check-timing-accuracy/verdict.js";
 import type { Pairs } from "../../scripts/check-timing-accuracy/verdict.js";
+import { errorOf } from "../helpers/error-of.js";
+import { failureLine, FN_KIWI } from "../helpers/fake-children.js";
 import { READING } from "../helpers/repset-reading.js";
 import { wordsInOrder } from "../helpers/words-in-order.js";
 
@@ -40,6 +49,69 @@ describe("judgeScenario", () => {
 
       expect(verdict.passed).toBe(true);
     });
+  });
+});
+
+/** The name a baseline run's errors start with. */
+const SCENARIO_NAME = "node fixed each";
+
+/** A baseline run that ended cleanly: exit 0, an ok result line and a median of 1234.5 ns on stdout. */
+const CLEAN_RUN: BaselineRun = {
+  status: 0,
+  signal: null,
+  written: `${JSON.stringify({ status: "ok" })}\n`,
+  stdout: `${JSON.stringify({ median: 1234.5 })}\n`,
+  stderr: "",
+};
+
+describe("baselineMedian", () => {
+  describe("when the run ended cleanly", () => {
+    it("returns the median it printed", () => {
+      const median = baselineMedian(SCENARIO_NAME, CLEAN_RUN);
+
+      expect(median).toBe(1234.5);
+    });
+  });
+
+  describe("when the run did not end cleanly", () => {
+    it.each([
+      {
+        ending: "a non-zero exit",
+        run: { ...CLEAN_RUN, status: 1, written: "", stderr: "banana exploded" },
+        inserted: "banana exploded",
+      },
+      {
+        ending: "a failed result line",
+        run: { ...CLEAN_RUN, written: failureLine({ ...FN_KIWI, teardownError: null }) },
+        inserted: FN_KIWI.message,
+      },
+      {
+        ending: "an exit 0 with no result line",
+        run: { ...CLEAN_RUN, written: "" },
+        inserted: SCENARIO_NAME,
+      },
+      {
+        ending: "stdout holding no median",
+        run: { ...CLEAN_RUN, stdout: `${JSON.stringify({ mean: 1234.5 })}\n` },
+        inserted: SCENARIO_NAME,
+      },
+    ])("throws naming the scenario on $ending", ({ run, inserted }) => {
+      const error = errorOf(() => baselineMedian(SCENARIO_NAME, run));
+
+      expect(error.message.slice(0, SCENARIO_NAME.length)).toBe(SCENARIO_NAME);
+      expect(error.message).toContain(inserted);
+    });
+  });
+});
+
+describe("baselineSpawn", () => {
+  it("asks for the body's baseline case with each count in its own variable", () => {
+    const { request, env } = baselineSpawn("inlined", { callsPerSample: 7, sampleCount: 64 });
+
+    expect(request.id).toBe(baselineName("inlined"));
+    expect(isAbsolute(request.file)).toBe(true);
+    expect(env[BASELINE_CALLS_VAR]).toBe("7");
+    expect(env[BASELINE_SAMPLES_VAR]).toBe("64");
   });
 });
 

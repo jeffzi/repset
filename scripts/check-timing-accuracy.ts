@@ -6,7 +6,10 @@
  * child entry, `dist/child.js`, started as repset's parent starts its child: both sides load the
  * same code and differ only in the code around the timed body call.
  *
- *   node --import tsx scripts/check-timing-accuracy.ts
+ *   node --import tsx scripts/check-timing-accuracy.ts [--ci]
+ *
+ * With no argument, every scenario is judged at margin 0. `--ci` judges Bun scenarios at a margin
+ * sized for shared CI runners; see `BUN_CI_MARGIN`.
  *
  * Run it from the repository root, as the Taskfile does: every path it hands a child is relative to
  * the current directory. It reads `dist/`, so build first. Nothing in it runs two children at once:
@@ -16,6 +19,7 @@ import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { parseArgs } from "node:util";
 
 import type { OnceRequest } from "../src/child-protocol.js";
 import { readResult } from "../src/child-result.js";
@@ -26,7 +30,7 @@ import { RUNTIMES, type Runtime } from "../src/measure/runtime.js";
 import { DEFAULT_TIMEOUT } from "../src/options.js";
 import type { FailedResult, MeasuredResult, Report } from "../src/report.js";
 import { RESULT_FD } from "../src/result-fd.js";
-import { isRecord, property, thrownMessage, valueAt } from "../src/utils.js";
+import { isRecord, property, thrownMessage } from "../src/utils.js";
 import {
   BASELINE_CALLS_VAR,
   BASELINE_SAMPLES_VAR,
@@ -36,9 +40,14 @@ import {
   benchName,
 } from "./check-timing-accuracy/bodies.js";
 import {
+  pairPlace,
+  roundLines,
+  scenarioLine,
+  type SideLabels,
+} from "./check-timing-accuracy/round-lines.js";
+import {
   judgeScenario,
   type Pairs,
-  type RoundSummary,
   type ScenarioVerdict,
 } from "./check-timing-accuracy/verdict.js";
 
@@ -117,6 +126,54 @@ const SCENARIOS: readonly Scenario[] = RUNTIMES.flatMap((runtime) =>
 
 function scenarioName(scenario: Scenario): string {
   return `${scenario.runtime} ${scenario.countMode} ${scenario.body}`;
+}
+
+// ---------------------------------------------------------------------------
+// The rule
+// ---------------------------------------------------------------------------
+
+/** The verdict rule the command line selects: a label to print and each runtime's margin. */
+export interface CheckRule {
+  /** What the run prints before the scenarios to name the rule. */
+  readonly label: string;
+  /** Each runtime's margin, as a fraction of the baseline median; see `judgeScenario`. */
+  readonly margins: Readonly<Record<Runtime, number>>;
+}
+
+/**
+ * The margin `--ci` judges Bun scenarios at.
+ *
+ * It is the smallest whole percent at or above 2.78%, plus one point. 2.78% is the largest relative
+ * mean (mean paired difference over baseline median) of a Bun scenario that fails the strict rule
+ * on unchanged code in the saved logs of GitHub-hosted Linux runners. Those runners' CPUs are Intel
+ * Xeon 6975P-C, Intel Xeon Platinum 8370C, and AMD EPYC 7763, 9V74 and 9V45, plus two runs whose
+ * CPU was not printed; every such Bun failure is on the three AMD EPYC models. A runner type that
+ * fails Bun scenarios beyond this margin on unchanged code needs the margin sized again.
+ *
+ * Node has no CI margin: no saved Node scenario fails the strict rule on unchanged code.
+ */
+const BUN_CI_MARGIN = 0.04;
+
+const STRICT_RULE: CheckRule = { label: "strict", margins: { node: 0, bun: 0 } };
+
+const CI_RULE: CheckRule = {
+  label: `CI, Bun margin ${String(BUN_CI_MARGIN * 100)}%`,
+  margins: { node: 0, bun: BUN_CI_MARGIN },
+};
+
+/**
+ * Reads the check's command-line arguments into the rule it judges by.
+ *
+ * @param args - The arguments after the script's path.
+ * @returns The CI rule when `args` holds `--ci`, the strict rule when it is empty.
+ * @throws TypeError naming the argument when `args` holds anything but `--ci`.
+ */
+export function readArguments(args: readonly string[]): CheckRule {
+  const { values } = parseArgs({
+    args: [...args],
+    options: { ci: { type: "boolean" } },
+  });
+  return values.ci === true ? CI_RULE : STRICT_RULE;
 }
 
 // ---------------------------------------------------------------------------
@@ -541,98 +598,7 @@ function takeRound(scenario: Scenario, readers: Readers): Round {
 // Report layout
 // ---------------------------------------------------------------------------
 
-/**
- * Formats a number with two decimals and an explicit sign.
- *
- * @param value - The number to format.
- * @returns `value` with two decimals, prefixed `+` when it is zero or positive.
- */
-function formatSigned(value: number): string {
-  return `${value >= 0 ? "+" : ""}${value.toFixed(2)}`;
-}
-
-function roundLabel(roundIndex: number): string {
-  return roundIndex === 0 ? "first" : "confirmation";
-}
-
-/**
- * Prefixes one line of a timing check's output with the name of what it judged.
- *
- * @param name - The scenario's or body's name.
- * @param text - The rest of the line.
- * @returns `<name>  <text>`.
- */
-export function scenarioLine(name: string, text: string): string {
-  return `${name}  ${text}`;
-}
-
-function pairPlace(name: string, roundIndex: number, pairIndex: number): string {
-  return scenarioLine(name, `${roundLabel(roundIndex)} round, pair ${String(pairIndex + 1)}:`);
-}
-
-/** What a round's summary and pair lines call each side of its pairs. */
-export interface SideLabels {
-  readonly baseline: string;
-  readonly repset: string;
-}
-
 const CHECK_SIDES: SideLabels = { baseline: "baseline", repset: "repset" };
-
-/**
- * Lays out one round's summary: both medians, the gap, the mean paired difference, whose sign is
- * the direction the verdict tests, and the p-value.
- *
- * @param name - The scenario's or body's name.
- * @param roundIndex - 0 for the first round, 1 for the confirmation.
- * @param summary - The verdict's summary of the round.
- * @param sides - What the line calls the baseline side and the repset side.
- * @returns The summary line.
- */
-function summaryLine(
-  name: string,
-  roundIndex: number,
-  summary: RoundSummary,
-  sides: SideLabels,
-): string {
-  return scenarioLine(
-    name,
-    `${roundLabel(roundIndex)} round  ${sides.baseline} ${summary.baselineMedian.toFixed(1)} ns  ${sides.repset} ${summary.repsetMedian.toFixed(1)} ns  gap ${formatSigned(summary.gap * 100)}%  mean diff ${formatSigned(summary.meanDifference)} ns  p=${summary.pValue.toFixed(4)}`,
-  );
-}
-
-/**
- * Lays out every round taken: for each, its summary line, then one line per pair with both medians
- * at full precision.
- *
- * @param name - The scenario's or body's name.
- * @param verdict - The verdict judging the rounds.
- * @param rounds - Each round's pairs: the first round's, then the confirmation round's when it was
- *   taken.
- * @param sides - What the summary lines and the pair lines call the baseline side and the repset
- *   side.
- * @returns Each round's summary line followed by its pair lines in pair order, round after round.
- * @throws Error naming `name` when a confirmation round was taken but `verdict` holds no
- *   confirmation summary.
- * @throws RangeError when a round's `repset` medians are fewer than its `baseline` ones.
- */
-export function roundLines(
-  name: string,
-  verdict: ScenarioVerdict,
-  rounds: readonly Pairs[],
-  sides: SideLabels,
-): string[] {
-  return rounds.flatMap((pairs, roundIndex) => {
-    const summary = roundIndex === 0 ? verdict.first : verdict.confirmation;
-    if (summary === undefined) {
-      throw new Error(`${name}: the confirmation round has no confirmation summary`);
-    }
-    const pairLines = pairs.baseline.map((baseline, pairIndex) => {
-      const repset = valueAt(pairs.repset, pairIndex);
-      return `${pairPlace(name, roundIndex, pairIndex)}  ${sides.baseline} ${String(baseline)}  ${sides.repset} ${String(repset)}`;
-    });
-    return [summaryLine(name, roundIndex, summary, sides), ...pairLines];
-  });
-}
 
 /**
  * Lists the readings of a calibrated scenario whose timing lasted under `minTime`.
@@ -702,8 +668,10 @@ function scenarioReport(
  * Runs the timing accuracy check over every scenario, one reading at a time, printing each once
  * judged.
  *
- * @param readers - The two sides' readers; the real ones run `dist/cli.js` and the baseline case in `dist/child.js`.
- * @param print - Where each scenario's lines go.
+ * @param readers - The two sides' readers; the real ones run `dist/cli.js` and the baseline case in
+ *   `dist/child.js`.
+ * @param print - Where the rule's line, then each scenario's lines go.
+ * @param rule - The margin each runtime's scenarios are judged at, and the line that names it.
  * @returns 1 when any scenario failed or any calibrated reading's timing lasted under `minTime`, 0
  *   otherwise.
  * @throws Error naming the scenario when a reading cannot be trusted; the real repset reader's
@@ -713,16 +681,21 @@ function scenarioReport(
  *   repset medians than baseline ones.
  * @throws Error when a confirmation round was taken but the verdict holds no confirmation summary.
  */
-export function runCheck(readers: Readers, print: (text: string) => void = console.log): 0 | 1 {
+export function runCheck(readers: Readers, print: (text: string) => void, rule: CheckRule): 0 | 1 {
+  print(`rule: ${rule.label}`);
   let failed = false;
   for (const scenario of SCENARIOS) {
     const first = takeRound(scenario, readers);
     const rounds = [first];
-    const verdict = judgeScenario(first.pairs, () => {
-      const confirmation = takeRound(scenario, readers);
-      rounds.push(confirmation);
-      return confirmation.pairs;
-    });
+    const verdict = judgeScenario(
+      first.pairs,
+      () => {
+        const confirmation = takeRound(scenario, readers);
+        rounds.push(confirmation);
+        return confirmation.pairs;
+      },
+      rule.margins[scenario.runtime],
+    );
     const printed = scenarioReport(scenario, verdict, rounds);
     failed ||= !verdict.passed || printed.floorBreaks.length > 0;
     print(printed.lines.join("\n"));
@@ -731,9 +704,14 @@ export function runCheck(readers: Readers, print: (text: string) => void = conso
 }
 
 if (import.meta.main) {
+  const rule = readArguments(process.argv.slice(2));
   const executables = await findExecutables();
-  process.exitCode = runCheck({
-    repset: readRepset,
-    baseline: (scenario, counts) => readBaseline(executables, scenario, counts),
-  });
+  process.exitCode = runCheck(
+    {
+      repset: readRepset,
+      baseline: (scenario, counts) => readBaseline(executables, scenario, counts),
+    },
+    console.log,
+    rule,
+  );
 }

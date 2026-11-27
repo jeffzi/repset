@@ -68,7 +68,7 @@ tasks:
     deps: [_deps]
     cmds:
       - task: build
-      - "{{.MISE}} node --import tsx scripts/check-timing-accuracy.ts"
+      - "{{.MISE}} node --import tsx scripts/check-timing-accuracy.ts {{.CLI_ARGS}}"
 
   check-memory-timing:
     desc: Build, then compare repset's timings on Node with and without memory measured

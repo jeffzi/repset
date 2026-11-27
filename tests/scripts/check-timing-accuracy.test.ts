@@ -2,7 +2,12 @@ import { isAbsolute } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { baselineMedian, baselineSpawn, runCheck } from "../../scripts/check-timing-accuracy.js";
+import {
+  baselineMedian,
+  baselineSpawn,
+  readArguments,
+  runCheck,
+} from "../../scripts/check-timing-accuracy.js";
 import type { BaselineRun, Readers } from "../../scripts/check-timing-accuracy.js";
 import {
   BASELINE_CALLS_VAR,
@@ -184,10 +189,26 @@ describe("baselineSpawn", () => {
   });
 });
 
+/** Runs the check under the rule `args` select, returning its status and everything it printed. */
+function checkWith(
+  readers: Readers,
+  args: readonly string[],
+): { status: 0 | 1; printed: string[] } {
+  const printed: string[] = [];
+  const status = runCheck(
+    readers,
+    (text) => {
+      printed.push(text);
+    },
+    readArguments(args),
+  );
+  return { status, printed };
+}
+
 describe("runCheck", () => {
   describe("when every scenario passes", () => {
     it("returns 0", () => {
-      const status = runCheck(READERS, () => undefined);
+      const { status } = checkWith(READERS, []);
 
       expect(status).toBe(0);
     });
@@ -200,7 +221,7 @@ describe("runCheck", () => {
         baseline: () => 1000,
       };
 
-      const status = runCheck(readers, () => undefined);
+      const { status } = checkWith(readers, []);
 
       expect(status).toBe(1);
     });
@@ -213,7 +234,7 @@ describe("runCheck", () => {
         baseline: () => 1000,
       };
 
-      const status = runCheck(readers, () => undefined);
+      const { status } = checkWith(readers, []);
 
       expect(status).toBe(1);
     });
@@ -233,7 +254,6 @@ describe("runCheck", () => {
         },
         baseline: () => baseline,
       };
-      const printed: string[] = [];
       const pairLines = (name: string, round: string, repset: number): unknown[] =>
         Array.from({ length: 12 }, (_, index) =>
           expect.stringMatching(
@@ -241,11 +261,9 @@ describe("runCheck", () => {
           ),
         );
 
-      runCheck(readers, (text) => {
-        printed.push(text);
-      });
+      const { printed } = checkWith(readers, []);
 
-      expect(printed.map((text) => text.split("\n").slice(0, 26))).toStrictEqual(
+      expect(printed.slice(1).map((text) => text.split("\n").slice(0, 26))).toStrictEqual(
         names.map((name) =>
           [expect.any(String)].concat(
             pairLines(name, "first", firstRepset),
@@ -256,4 +274,76 @@ describe("runCheck", () => {
       );
     });
   });
+});
+
+describe("readArguments", () => {
+  it("throws naming an unknown argument", () => {
+    const error = errorOf(() => readArguments(["--banana"]));
+
+    expect(error.message).toContain("--banana");
+  });
+});
+
+/** Readers whose repset medians sit `gaps` (ns) above baselines of 1000, per runtime. */
+function readersWithGaps(gaps: { node: number; bun: number }): Readers {
+  return {
+    repset: (scenario) => ({ ...READING, median: 1000 + gaps[scenario.runtime] }),
+    baseline: () => 1000,
+  };
+}
+
+describe("runCheck with the rule the arguments select", () => {
+  it.each([
+    { rule: "strict", args: [], gaps: { node: 0, bun: 30 }, expected: 1 },
+    { rule: "CI", args: ["--ci"], gaps: { node: 0, bun: 30 }, expected: 0 },
+    { rule: "CI", args: ["--ci"], gaps: { node: 0, bun: 50 }, expected: 1 },
+    { rule: "CI", args: ["--ci"], gaps: { node: 30, bun: 0 }, expected: 1 },
+  ])(
+    "under the $rule rule returns $expected when repset reads node +$gaps.node ns and bun +$gaps.bun ns above 1000",
+    ({ args, gaps, expected }) => {
+      const { status } = checkWith(readersWithGaps(gaps), args);
+
+      expect(status).toBe(expected);
+    },
+  );
+
+  it("names the strict rule before the scenarios", () => {
+    const { printed } = checkWith(READERS, []);
+
+    expect(printed[0]).toMatch(/\bstrict\b/u);
+  });
+
+  it("names the CI rule with the Bun margin before the scenarios", () => {
+    const { printed } = checkWith(READERS, ["--ci"]);
+
+    expect(printed[0]).toContain("4%");
+  });
+});
+
+describe("runCheck summary lines", () => {
+  it.each([
+    { direction: "higher", near: 1050, far: 1400, relative: "(+19.58%)" },
+    { direction: "lower", near: 950, far: 600, relative: "(-19.58%)" },
+  ])(
+    "show each round's mean paired difference relative to its baseline median as a signed percent with repset $direction",
+    ({ near, far, relative }) => {
+      // Seven pairs 50 ns apart and five 400 ns apart: a 5% median gap, a mean difference of about 196 ns.
+      let calls = 0;
+      const readers: Readers = {
+        repset: () => ({ ...READING, median: calls++ % 12 < 7 ? near : far }),
+        baseline: () => 1000,
+      };
+
+      const { printed } = checkWith(readers, []);
+
+      const summaries = printed.slice(1).map((text) => {
+        // Line 0 is the first round's summary; 12 pair lines follow it, so line 13 is the confirmation's.
+        const lines = text.split("\n");
+        return [lines[0], lines[13]];
+      });
+      expect(summaries).toStrictEqual(
+        summaries.map(() => [expect.stringContaining(relative), expect.stringContaining(relative)]),
+      );
+    },
+  );
 });

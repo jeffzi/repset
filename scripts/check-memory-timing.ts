@@ -18,14 +18,8 @@ import {
   type MemoryBodyName,
   memoryBenchName,
 } from "./check-memory-timing-bodies.js";
-import {
-  PAIRS,
-  readRepsetRun,
-  type RepsetReading,
-  roundLines,
-  scenarioLine,
-  type SideLabels,
-} from "./check-timing-accuracy.js";
+import { PAIRS, readRepsetRun, type RepsetReading } from "./check-timing-accuracy.js";
+import { roundLines, scenarioLine, type SideLabels } from "./check-timing-accuracy/round-lines.js";
 import { judgeScenario, type Pairs } from "./check-timing-accuracy/verdict.js";
 
 /** The two sides of a pair: each takes one reading of a body. */

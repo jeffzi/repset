@@ -33,7 +33,20 @@ function pairsOf(differences: readonly number[]): Pairs {
 
 const REPSET_HIGHER = pairsOf(Array.from({ length: 12 }, () => 100));
 
+/** A confirmation round callback that fails the test when the scenario takes it. */
+function noConfirmation(): Pairs {
+  throw new Error("the confirmation round was taken");
+}
+
 describe("judgeScenario", () => {
+  it("passes a first round that is not significant without a confirmation round", () => {
+    const notSignificant = pairsOf([100, 100, 100, 100, 100, 100, 100, -90, -90, -90, -90, -90]);
+
+    const verdict = judgeScenario(notSignificant, noConfirmation);
+
+    expect(verdict.passed).toBe(true);
+  });
+
   describe("when a significant first round is not confirmed", () => {
     it.each([
       {
@@ -48,6 +61,62 @@ describe("judgeScenario", () => {
       const verdict = judgeScenario(REPSET_HIGHER, () => pairsOf(differences));
 
       expect(verdict.passed).toBe(true);
+    });
+  });
+
+  describe("when given a margin", () => {
+    /** A margin of 10%: a mean difference of 100 ns against the baselines of 1000. */
+    const MARGIN = 0.1;
+
+    /** A significant round whose twelve pairs all differ by `difference` (ns). */
+    function steadyRound(difference: number): Pairs {
+      return pairsOf(Array.from({ length: 12 }, () => difference));
+    }
+
+    it.each([
+      { position: "inside it with repset higher", difference: 80 },
+      { position: "exactly at it with repset higher", difference: 100 },
+      { position: "inside it with repset lower", difference: -80 },
+      { position: "exactly at it with repset lower", difference: -100 },
+    ])(
+      "passes without a confirmation round when the first round's mean sits $position",
+      ({ difference }) => {
+        const verdict = judgeScenario(steadyRound(difference), noConfirmation, MARGIN);
+
+        expect(verdict.passed).toBe(true);
+      },
+    );
+
+    it.each([
+      { position: "inside it with repset higher", first: 150, confirmation: 80 },
+      { position: "exactly at it with repset higher", first: 150, confirmation: 100 },
+      { position: "inside it with repset lower", first: -150, confirmation: -80 },
+      { position: "exactly at it with repset lower", first: -150, confirmation: -100 },
+    ])(
+      "passes when a first round beyond it is confirmed by a round $position",
+      ({ first, confirmation }) => {
+        const verdict = judgeScenario(steadyRound(first), () => steadyRound(confirmation), MARGIN);
+
+        expect(verdict.passed).toBe(true);
+      },
+    );
+
+    it.each([
+      { direction: "higher", difference: 150 },
+      { direction: "lower", difference: -150 },
+    ])("fails when both rounds sit beyond it with repset $direction", ({ difference }) => {
+      const verdict = judgeScenario(steadyRound(difference), () => steadyRound(difference), MARGIN);
+
+      expect(verdict.passed).toBe(false);
+    });
+
+    it("fails when both rounds' mean differences sit beyond it while their medians sit inside it", () => {
+      // Repset medians 1050 against 1000 (a 5% gap), but a mean difference of about 196 ns.
+      const skewed = pairsOf([50, 50, 50, 50, 50, 50, 50, 400, 400, 400, 400, 400]);
+
+      const verdict = judgeScenario(skewed, () => skewed, MARGIN);
+
+      expect(verdict.passed).toBe(false);
     });
   });
 });

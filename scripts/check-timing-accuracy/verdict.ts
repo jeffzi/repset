@@ -100,28 +100,45 @@ function summarizeRound(pairs: Pairs): RoundSummary {
   };
 }
 
+// Multiplies rather than divides by the baseline median: a zero median would make the ratio NaN,
+// and NaN compares false, so a real difference would read as within the margin.
+function beyondMargin(summary: RoundSummary, margin: number): boolean {
+  return Math.abs(summary.meanDifference) > margin * summary.baselineMedian;
+}
+
 /**
  * Judge one scenario, confirming a significant first round with a confirmation round.
  *
- * A first round at p >= 0.05 passes outright and `confirmationRound` is never called. Otherwise the
- * scenario fails only when the confirmation round alone reads p < 0.05 with its paired differences
- * summing to the same sign as the first round's. The direction is the sign the p-value tested,
- * never the gap's: the two sides' medians can tie while most pairs differ one way.
+ * A round is beyond the margin when its mean paired difference, in absolute value, is strictly
+ * greater than `margin` times its baseline median; a mean exactly at the margin is within it.
+ *
+ * A first round at p >= 0.05, or within the margin, passes outright and `confirmationRound` is
+ * never called. Otherwise the scenario fails only when the confirmation round alone reads p < 0.05
+ * with its paired differences summing to the same sign as the first round's, and is beyond the
+ * margin too. The direction is the sign the p-value tested, never the gap's: the two sides' medians
+ * can tie while most pairs differ one way.
  *
  * @param first - The scenario's first round of pairs.
  * @param confirmationRound - Produces a new round of pairs; called at most once.
+ * @param margin - The fraction (>= 0) of the baseline median a round's mean paired difference must
+ * exceed to count against repset. At 0, every significant difference counts.
  * @returns The verdict, carrying the confirmation summary only when a confirmation round was taken.
  * @throws RangeError when a round's arrays are empty or differ in length; any error from
  * `confirmationRound` propagates.
  */
-export function judgeScenario(first: Pairs, confirmationRound: () => Pairs): ScenarioVerdict {
+export function judgeScenario(
+  first: Pairs,
+  confirmationRound: () => Pairs,
+  margin = 0,
+): ScenarioVerdict {
   const firstSummary = summarizeRound(first);
-  if (firstSummary.pValue >= SIGNIFICANCE) {
+  if (firstSummary.pValue >= SIGNIFICANCE || !beyondMargin(firstSummary, margin)) {
     return { passed: true, first: firstSummary };
   }
   const confirmationSummary = summarizeRound(confirmationRound());
   const differenceConfirmed =
     confirmationSummary.pValue < SIGNIFICANCE &&
-    Math.sign(confirmationSummary.meanDifference) === Math.sign(firstSummary.meanDifference);
+    Math.sign(confirmationSummary.meanDifference) === Math.sign(firstSummary.meanDifference) &&
+    beyondMargin(confirmationSummary, margin);
   return { passed: !differenceConfirmed, first: firstSummary, confirmation: confirmationSummary };
 }

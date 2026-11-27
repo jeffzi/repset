@@ -2,9 +2,9 @@ name: Bun gap diagnosis
 
 # Measurement only, never merged: times repset, the timing accuracy check's baseline loop and the
 # baseline variants on Bun, one process at a time, to find why repset reads above the baseline on
-# one-call scenarios. `runs-on` cannot choose the machine, so the job is rerun until the CPU models
-# the diagnosis needs have run it; the "Machine" step names the CPU, and the job log's "Set up job"
-# header the cloud.
+# one-call scenarios. `runs-on` cannot choose the machine, so one run starts six jobs at once, each on
+# its own runner, and the CPU models they land on are recorded with no rerun; the "Machine" step
+# names the CPU, and the job log's "Set up job" header the cloud.
 on:
   push:
     branches: [fix-ci/bun-timing-gap]
@@ -23,18 +23,25 @@ concurrency:
 
 permissions: {}
 
-# The sides to time: the baseline, its A/A copy, `none`, one side per piece of the code around
-# `none`'s loop, and three sides that split repset's process.
+# The sides to time: repset, the pre-fix baseline, the baseline run inside repset's child and its
+# A/A copy, `none`, and repset's child started directly.
 env:
-  SIDES: repset,baseline,baseline-again,none,baseline-args,baseline-async,baseline-table,baseline-proc,baseline-with-variants,baseline-child-modules,baseline-under-parent,repset-child-direct
+  SIDES: repset,baseline,child-baseline,child-baseline-again,none,repset-child-direct
 
 jobs:
   diagnose:
-    name: Bun gap diagnosis, unpinned then pinned
+    name: Bun gap diagnosis, job ${{ matrix.job }}, unpinned then pinned
     permissions:
       contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 330
+    # Six runners at once; every job is recorded, so one failing stops none of the others.
+    strategy:
+      fail-fast: false
+      matrix:
+        job: [0, 1, 2, 3, 4, 5]
+    env:
+      JOB: ${{ matrix.job }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -51,21 +58,33 @@ jobs:
           printf 'sys_vendor: %s\n' "$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null || printf unreadable)"
           printf 'product_name: %s\n' "$(cat /sys/class/dmi/id/product_name 2>/dev/null || printf unreadable)"
 
+      # The fixed check itself, beside the CPU model the "Machine" step printed. Its output and exit
+      # status go to out/; a failing check is a reading, so the step never fails the job.
+      - name: Timing accuracy check
+        # `shell: bash` adds pipefail, so the status below is the check's and not tee's.
+        shell: bash
+        run: |
+          mkdir -p out
+          status=0
+          task check-timing-accuracy 2>&1 | tee out/check-timing-accuracy.txt || status=$?
+          printf '%s\n' "$status" >out/check-timing-accuracy.status
+          printf 'check-timing-accuracy exited %s\n' "$status"
+
       - name: Unpinned pass
         id: unpinned
         run: |
           mkdir -p out
-          task diagnose-bun-gap -- --sides "$SIDES" --out out/unpinned.jsonl
+          task diagnose-bun-gap -- --job "$JOB" --sides "$SIDES" --out out/unpinned.jsonl
 
       # Runs after a failed unpinned pass too; a skipped one means setup failed.
       - name: Pinned pass
         if: ${{ !cancelled() && steps.unpinned.outcome != 'skipped' }}
-        run: task diagnose-bun-gap -- --pin --sides "$SIDES" --out out/pinned.jsonl
+        run: task diagnose-bun-gap -- --pin --job "$JOB" --sides "$SIDES" --out out/pinned.jsonl
 
       # Always, so a failed pass or a job stopped at its timeout keeps every finished reading.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: readings-${{ github.run_id }}-${{ github.run_attempt }}
+          name: readings-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.job }}
           path: out/
           if-no-files-found: warn

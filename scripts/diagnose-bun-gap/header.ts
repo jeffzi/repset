@@ -57,5 +57,6 @@ export function headerRecord(
     cyclesPerBody: options.cyclesPerBody,
     sides: options.sides,
     sampleCounts,
+    job: options.job,
   };
 }

@@ -2,7 +2,12 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { benchName } from "../../scripts/check-timing-accuracy/bodies.js";
+import {
+  BASELINE_CALLS_VAR,
+  BASELINE_SAMPLES_VAR,
+  baselineName,
+  benchName,
+} from "../../scripts/check-timing-accuracy/bodies.js";
 import { runDiagnosis } from "../../scripts/diagnose-bun-gap.js";
 import type {
   ChildRun,
@@ -25,6 +30,16 @@ const LISTED_CASES = [
   { id: "decoy", name: "banana", contender: null, setupPerCall: false },
   { id: "second", name: benchName("inlined"), contender: null, setupPerCall: false },
 ];
+
+/** How a spawn sets up the child: its descriptors and environment. */
+type SpawnOptions = Parameters<Dependencies["spawn"]>[2];
+
+/** A run of a baseline case through repset's child: an ok result on descriptor 3 and its median on stdout. */
+const ONCE_RUN: ChildRun = {
+  status: 0,
+  stdout: `${JSON.stringify({ median: 1100 })}\n`,
+  result: `${JSON.stringify({ status: "ok" })}\n`,
+};
 
 /** A run of repset's child that wrote `result` on descriptor 3. */
 function directRun(result: unknown): ChildRun {
@@ -126,7 +141,18 @@ interface HarnessOptions {
   readonly environment?: Partial<Environment>;
   readonly files?: Readonly<Record<string, string>>;
   readonly repset?: (body: string, call: number) => RepsetSample;
-  readonly spawn?: (command: string, args: readonly string[]) => ChildRun | undefined;
+  readonly spawn?: (
+    command: string,
+    args: readonly string[],
+    options?: SpawnOptions,
+  ) => ChildRun | undefined;
+}
+
+/** How a healthy repset child answers `request`, by its mode. */
+function directAnswer(request: Record<string, unknown>): ChildRun {
+  if (request["mode"] === "list") return directRun({ status: "ok", cases: LISTED_CASES });
+  if (request["mode"] === "once") return ONCE_RUN;
+  return directRun(measuredResult(950, 70));
 }
 
 /** Builds fake dependencies that answer every child as a healthy one does, unless `spawn` overrides it. */
@@ -144,15 +170,14 @@ function harness(options: HarnessOptions = {}): Harness {
       },
       file: (path) => files[path],
     },
-    spawn: (command, args) => {
+    spawn: (command, args, spawnOptions) => {
       spawned.push({ command, args });
-      const override = options.spawn?.(command, args);
+      const override = options.spawn?.(command, args, spawnOptions);
       if (override !== undefined) return override;
       if (command === "git") return { status: 0, stdout: `${COMMIT}\n` };
       if (command === "taskset") return { status: 0, stdout: "" };
       const request = directRequest(args);
-      if (request?.["mode"] === "list") return directRun({ status: "ok", cases: LISTED_CASES });
-      if (request !== undefined) return directRun(measuredResult(950, 70));
+      if (request !== undefined) return directAnswer(request);
       if (isBaselineChild(args)) {
         return { status: 0, stdout: `${JSON.stringify({ median: 1000 })}\n` };
       }
@@ -180,6 +205,12 @@ function isBaselineChild(args: readonly string[]): boolean {
   return args.some((arg) => arg.endsWith("baseline-child.ts"));
 }
 
+/** Repset readings whose first, unrecorded one per body fixes the sample count: 37 or 41. */
+function firstReadings(body: string, call: number): RepsetSample {
+  if (call > 0) return { median: 1000, sampleCount: 99 };
+  return { median: 1000, sampleCount: body === "each" ? 37 : 41 };
+}
+
 /** The records of kind `reading`, in file order. */
 function readings(records: readonly Record<string, unknown>[]): Record<string, unknown>[] {
   return records.filter((record) => record["kind"] === "reading");
@@ -203,12 +234,12 @@ describe("runDiagnosis", () => {
       expect(header(records())?.["cyclesPerBody"]).toBe(6);
     });
 
-    it("runs 170 cycles per body, rounded up for all 22 sides, by default", () => {
+    it("runs 170 cycles per body, rounded up for all 24 sides, by default", () => {
       const { dependencies, records } = harness();
 
       runDiagnosis(["--out", OUT], dependencies);
 
-      expect(header(records())?.["cyclesPerBody"]).toBe(176);
+      expect(header(records())?.["cyclesPerBody"]).toBe(192);
     });
 
     it("rounds the default 170 cycles up to 180 over twelve sides", () => {
@@ -260,6 +291,8 @@ describe("runDiagnosis", () => {
         "repset-loaded",
         "repset-sampler",
         "baseline-again",
+        "child-baseline",
+        "child-baseline-again",
         "baseline-args",
         "baseline-async",
         "baseline-table",
@@ -304,6 +337,17 @@ describe("runDiagnosis", () => {
       });
 
       expect(error.message).toMatch(wordsInOrder("baseline-banana"));
+    });
+
+    it.each(["-1", "1.5"])("rejects a --job of %s, naming the option and the value", (job) => {
+      const { dependencies } = harness();
+
+      const error = errorOf(() => {
+        runDiagnosis([`--job=${job}`, "--out", OUT], dependencies);
+      });
+
+      expect(error.message).toContain("--job");
+      expect(error.message).toContain(job);
     });
 
     it("rejects a run without --out", () => {
@@ -352,11 +396,6 @@ describe("runDiagnosis", () => {
   });
 
   describe("sample count", () => {
-    const firstReadings = (body: string, call: number): RepsetSample => {
-      if (call > 0) return { median: 1000, sampleCount: 99 };
-      return { median: 1000, sampleCount: body === "each" ? 37 : 41 };
-    };
-
     it("runs every baseline and variant process of a body at the count of its first, unrecorded repset reading", () => {
       const { dependencies, spawned } = harness({ repset: firstReadings });
 
@@ -558,6 +597,83 @@ describe("runDiagnosis", () => {
     });
   });
 
+  describe("child-baseline", () => {
+    /** The once requests' spawns of one cycle of `side`, and the counts each spawn's environment held. */
+    function onceSpawns(side: string): {
+      spawns: Spawn[];
+      counts: [string | undefined, string | undefined][];
+    } {
+      const counts: [string | undefined, string | undefined][] = [];
+      const { dependencies, spawned } = harness({
+        repset: firstReadings,
+        spawn: (_command, args, options) => {
+          if (directRequest(args)?.["mode"] !== "once") return undefined;
+          counts.push([options?.env?.[BASELINE_CALLS_VAR], options?.env?.[BASELINE_SAMPLES_VAR]]);
+          return undefined;
+        },
+      });
+      runDiagnosis(["--cycles", "1", "--sides", side, "--out", OUT], dependencies);
+      return {
+        spawns: spawned.filter(({ args }) => directRequest(args)?.["mode"] === "once"),
+        counts,
+      };
+    }
+
+    it.each(["child-baseline", "child-baseline-again"])(
+      "runs %s as Bun on dist/child.js with repset's child flags",
+      (side) => {
+        const { spawns } = onceSpawns(side);
+
+        const entry = expect.stringMatching(/[/\\]dist[/\\]child\.js$/u);
+        expect(
+          spawns.map(({ command, args }) => ({ command, args: args.slice(0, -1) })),
+        ).toStrictEqual(
+          Array.from({ length: 2 }, () => ({
+            command: ENVIRONMENT.bun.executable,
+            args: [...childRuntimeFlags("bun", undefined), entry],
+          })),
+        );
+      },
+    );
+
+    it("asks the child to run each body's baseline case once, from the absolute bench file", () => {
+      const { spawns } = onceSpawns("child-baseline");
+
+      expect(spawns.map(({ args }) => directRequest(args))).toStrictEqual([
+        { mode: "once", file: BENCH_FILE, id: baselineName("each") },
+        { mode: "once", file: BENCH_FILE, id: baselineName("inlined") },
+      ]);
+    });
+
+    it("runs each body's baseline case at one call per sample and the body's fixed count", () => {
+      const { counts } = onceSpawns("child-baseline");
+
+      expect(counts).toStrictEqual([
+        ["1", "37"],
+        ["1", "41"],
+      ]);
+    });
+
+    it("stops at a child whose result is a failure, naming the side, body and cycle", () => {
+      let inlinedRuns = 0;
+      const { dependencies } = harness({
+        spawn: (_command, args) => {
+          if (directRequest(args)?.["id"] !== baselineName("inlined")) return undefined;
+          inlinedRuns += 1;
+          return inlinedRuns === 2
+            ? { ...ONCE_RUN, result: `${JSON.stringify(FAILED_RESULT)}\n` }
+            : undefined;
+        },
+      });
+
+      const error = errorOf(() => {
+        runDiagnosis(["--cycles", "2", "--sides", "child-baseline", "--out", OUT], dependencies);
+      });
+
+      expect(error.message).toMatch(wordsInOrder("child-baseline", "inlined", "cycle", 1));
+    });
+  });
+
   describe("records", () => {
     it("writes the header first, from the machine and the run", () => {
       const { dependencies, records } = harness();
@@ -580,7 +696,19 @@ describe("runDiagnosis", () => {
         cyclesPerBody: 1,
         sides: ["repset"],
         sampleCounts: { each: 37, inlined: 37 },
+        job: null,
       });
+    });
+
+    it("records the --job matrix index in the header", () => {
+      const { dependencies, records } = harness();
+
+      runDiagnosis(
+        ["--cycles", "1", "--sides", "repset", "--job", "3", "--out", OUT],
+        dependencies,
+      );
+
+      expect(header(records())?.["job"]).toBe(3);
     });
 
     it("writes null for each machine or run detail it cannot read", () => {
@@ -625,6 +753,10 @@ describe("runDiagnosis", () => {
       {
         side: "repset-child-direct",
         expected: { median: 950, sampleCount: 70, ...UNREPORTED },
+      },
+      {
+        side: "child-baseline",
+        expected: { median: 1100, sampleCount: 64, ...UNREPORTED },
       },
     ])("records a $side reading from what its process reports", ({ side, expected }) => {
       const { dependencies, records } = harness({

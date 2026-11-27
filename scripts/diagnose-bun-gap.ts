@@ -1,12 +1,15 @@
 /**
  * The Bun gap diagnosis: on Bun only, it times each body of the timing accuracy check at one call
  * per sample with repset, with the check's baseline child, with every baseline variant of
- * `diagnose-bun-gap/variant-child.ts`, with the baseline children of `diagnose-bun-gap/` that each
- * add one piece of repset's child, with the baseline child under a Node parent, and with repset's
- * child started directly, and appends one JSON line per process to the `--out` file.
+ * `diagnose-bun-gap/variant-child.ts`, with the check's baseline case run through repset's child
+ * entry, with the baseline children of `diagnose-bun-gap/` that each add one piece of repset's
+ * child, with the baseline child under a Node parent, and with repset's child started directly, and
+ * appends one JSON line per process to the `--out` file.
  *
  *   node --import tsx scripts/diagnose-bun-gap.ts --out <file> [--cycles <n>] [--sides <list>]
- *     [--pin]
+ *     [--pin] [--job <n>]
+ *
+ * `--job` is the index of the CI matrix job the run belongs to, which the header records.
  *
  * Run it from the repository root, as the Taskfile does: every path it hands a child is relative to
  * the current directory, except repset's child entry and the bench file its requests name, which
@@ -14,23 +17,19 @@
  * Nothing in it runs two children at once: the diagnosis is a measurement, and a second process
  * would move every reading.
  */
-import { spawnSync } from "node:child_process";
-import { appendFileSync, readFileSync } from "node:fs";
-import { availableParallelism, release } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 import type { ChildRequest, MeasureRequest } from "../src/child-protocol.js";
 import { isFailed, readResult, type ResultByMode } from "../src/child-result.js";
-import { childRuntimeFlags, findRuntime, howItEnded } from "../src/children.js";
+import { childRuntimeFlags, howItEnded } from "../src/children.js";
 import { DEFAULT_MIN_SAMPLES, DEFAULT_MIN_TIME } from "../src/measure/measure.js";
-import { DEFAULT_TIMEOUT } from "../src/options.js";
-import { RESULT_FD } from "../src/result-fd.js";
 import { property, thrownMessage, valueAt } from "../src/utils.js";
-import { readRepsetRun } from "./check-timing-accuracy.js";
+import { baselineMedian, baselineSpawn } from "./check-timing-accuracy.js";
 import { BODY_NAMES, type BodyName, benchName } from "./check-timing-accuracy/bodies.js";
 import { headerRecord } from "./diagnose-bun-gap/header.js";
+import { liveDependencies } from "./diagnose-bun-gap/live-dependencies.js";
 import { VARIANTS } from "./diagnose-bun-gap/variants.js";
 
 /** How one child process ended and what it printed on stdout. */
@@ -40,14 +39,21 @@ export interface ChildRun {
   readonly status: number | null;
   readonly signal?: NodeJS.Signals | null;
   readonly stdout: string;
-  /** What the child wrote on file descriptor {@link RESULT_FD}, when the spawn asked for it. */
+  /** What the child wrote on file descriptor 3, when the spawn asked for it. */
   readonly result?: string | undefined;
+  /** What the child wrote on stderr, when the spawn asked for its result. */
+  readonly stderr?: string | undefined;
 }
 
-/** How a spawn sets up the child's descriptors. */
-interface SpawnOptions {
-  /** Whether the child gets a pipe on file descriptor {@link RESULT_FD}, read into `result`. */
+/** How a spawn sets up the child's descriptors and environment. */
+export interface SpawnOptions {
+  /**
+   * Whether the child gets a pipe on file descriptor 3, read into `result`, and
+   * one on stderr, read into `stderr`.
+   */
   readonly result: boolean;
+  /** The child's environment; the driver's own when absent. */
+  readonly env?: NodeJS.ProcessEnv | undefined;
 }
 
 /** Runs `command` with `args` to its end, one process at a time. */
@@ -112,6 +118,8 @@ export interface Options {
   readonly sides: readonly Side[];
   readonly out: string;
   readonly pin: boolean;
+  /** The index of the CI matrix job the run belongs to; `null` outside a matrix. */
+  readonly job: number | null;
 }
 
 /** The baseline children of `diagnose-bun-gap/`, each the baseline child plus one piece. */
@@ -131,6 +139,8 @@ const SIDES = [
   "baseline",
   ...VARIANTS,
   "baseline-again",
+  "child-baseline",
+  "child-baseline-again",
   ...BASELINE_PIECES,
   "baseline-under-parent",
   "repset-child-direct",
@@ -143,7 +153,6 @@ const PIECE_NAMES: ReadonlySet<string> = new Set(BASELINE_PIECES);
 
 const DEFAULT_CYCLES = 170;
 
-const BENCH_FILE = join("scripts", "check-timing-accuracy", "timing-accuracy.bench.ts");
 const DIAGNOSE_DIR = join("scripts", "diagnose-bun-gap");
 const BASELINE_CHILD = join(DIAGNOSE_DIR, "baseline-child.ts");
 const VARIANT_CHILD = join(DIAGNOSE_DIR, "variant-child.ts");
@@ -197,14 +206,30 @@ function pickSides(list: string): Side[] {
 }
 
 /**
+ * Reads the `--job` matrix index.
+ *
+ * @param value - The flag's value, or `undefined` when it is absent.
+ * @returns The index, or `null` when the flag is absent.
+ * @throws Error naming the value when it is not a non-negative integer.
+ */
+function jobOption(value: string | undefined): number | null {
+  if (value === undefined) return null;
+  if (!/^\d+$/u.test(value)) {
+    throw new Error(`bad --job '${value}': expected a non-negative integer`);
+  }
+  return Number(value);
+}
+
+/**
  * Validates the flags and rounds the cycle count so that every side holds every position equally
  * often.
  *
  * @param argv - The arguments after the script path.
  * @returns The options, with the cycles per body rounded up to a multiple of the number of sides,
  *   so each side holds each position equally often.
- * @throws Error when `--out` is missing, `--cycles` is not a positive integer, `--sides` names an
- *   unknown side or none, or an argument is not an option this script takes.
+ * @throws Error when `--out` is missing, `--cycles` is not a positive integer, `--job` is not a
+ *   non-negative integer, `--sides` names an unknown side or none, or an argument is not an option
+ *   this script takes.
  */
 function parseOptions(argv: readonly string[]): Options {
   const { values } = parseArgs({
@@ -214,6 +239,7 @@ function parseOptions(argv: readonly string[]): Options {
       sides: { type: "string" },
       out: { type: "string" },
       pin: { type: "boolean" },
+      job: { type: "string" },
     },
     strict: true,
   });
@@ -228,6 +254,7 @@ function parseOptions(argv: readonly string[]): Options {
     sides,
     out: values.out,
     pin: values.pin ?? false,
+    job: jobOption(values.job),
   };
 }
 
@@ -295,6 +322,42 @@ function nullableField(printed: unknown, key: string): number | null {
   return property(printed, key) === null ? null : numberField(printed, key);
 }
 
+/** Starts the bun executable on `args`, after the flags repset's own children start with. */
+function spawnOnBun(
+  dependencies: Dependencies,
+  args: readonly string[],
+  options?: SpawnOptions,
+): ChildRun {
+  return dependencies.spawn(
+    dependencies.environment.bun.executable,
+    [...childRuntimeFlags("bun", undefined), ...args],
+    options,
+  );
+}
+
+/**
+ * Starts repset's child entry on Bun with `request`, as repset's parent starts it, with a pipe for
+ * the result on file descriptor 3.
+ *
+ * @param dependencies - The spawner and the bun executable.
+ * @param request - What the child is asked to do.
+ * @param env - The child's environment; the driver's own when absent.
+ * @returns The run of a child that started.
+ * @throws Error when the child could not start.
+ */
+function spawnChildEntry(
+  dependencies: Dependencies,
+  request: ChildRequest,
+  env?: NodeJS.ProcessEnv,
+): ChildRun {
+  const run = spawnOnBun(dependencies, [CHILD_ENTRY, JSON.stringify(request)], {
+    result: true,
+    env,
+  });
+  assertStarted(run);
+  return run;
+}
+
 /**
  * Starts one bun child on `script` with `args`, with the flags repset's own children start with.
  *
@@ -305,15 +368,12 @@ function nullableField(printed: unknown, key: string): number | null {
  * @throws Error when the child fails as {@link childOutput} says.
  */
 function runBunChild(dependencies: Dependencies, script: string, args: readonly string[]): unknown {
-  const flags = childRuntimeFlags("bun", undefined);
-  return childOutput(
-    dependencies.spawn(dependencies.environment.bun.executable, [...flags, script, ...args]),
-  );
+  return childOutput(spawnOnBun(dependencies, [script, ...args]));
 }
 
 /**
  * Starts repset's child entry on Bun with `request`, as repset's parent starts it, and reads the
- * result it writes on file descriptor {@link RESULT_FD}.
+ * result it writes on file descriptor 3.
  *
  * @param dependencies - The spawner and the bun executable.
  * @param request - What the child is asked to do.
@@ -325,12 +385,7 @@ function runRepsetChild<R extends ChildRequest>(
   dependencies: Dependencies,
   request: R,
 ): ResultByMode[R["mode"]] {
-  const run = dependencies.spawn(
-    dependencies.environment.bun.executable,
-    [...childRuntimeFlags("bun", undefined), CHILD_ENTRY, JSON.stringify(request)],
-    { result: true },
-  );
-  assertStarted(run);
+  const run = spawnChildEntry(dependencies, request);
   const read = readResult(run.result ?? "", request);
   if (typeof read === "string") throw new Error(`${exitOf("the child", run)}: ${read}`);
   if (isFailed(read)) {
@@ -386,6 +441,32 @@ function readRepsetChild(dependencies: Dependencies, id: string): Measured {
   return { median: stats.median, sampleCount: stats.sampleCount, ...NOT_REPORTED };
 }
 
+/**
+ * Times `body`'s baseline case at one call per sample through repset's child entry on Bun, as the
+ * timing accuracy check reads its baseline.
+ *
+ * @param dependencies - The spawner and the bun executable.
+ * @param body - The body whose baseline case to run.
+ * @param sampleCount - The sample count to run the case at.
+ * @returns The median the case printed, in nanoseconds per call.
+ * @throws Error when the child could not start, or as {@link baselineMedian} says.
+ */
+function readChildBaseline(
+  dependencies: Dependencies,
+  body: BodyName,
+  sampleCount: number,
+): number {
+  const { request, env } = baselineSpawn(body, { callsPerSample: 1, sampleCount });
+  const run = spawnChildEntry(dependencies, request, env);
+  return baselineMedian("repset's child entry", {
+    status: run.status,
+    signal: run.signal ?? null,
+    written: run.result ?? "",
+    stdout: run.stdout,
+    stderr: run.stderr ?? "",
+  });
+}
+
 /** What every reading of one body shares, fixed before the first cycle. */
 interface BodySetup {
   /** The sample count baseline and variant children run at. */
@@ -421,7 +502,32 @@ function readSide(
     if (setup.caseId === undefined) throw new Error("no case id was listed for the body");
     return readRepsetChild(dependencies, setup.caseId);
   }
-  const args = [body, "1", String(sampleCount)];
+  if (side === "child-baseline" || side === "child-baseline-again") {
+    const median = readChildBaseline(dependencies, body, sampleCount);
+    return { median, sampleCount, ...NOT_REPORTED };
+  }
+  return readScriptSide(dependencies, side, [body, "1", String(sampleCount)], sampleCount);
+}
+
+/**
+ * Starts the side's own script on Bun — the baseline child (`baseline-child.ts`), a baseline piece or the variant
+ * child — or the baseline child under a Node parent, and turns what it prints into one reading's
+ * fields.
+ *
+ * @param dependencies - The spawner and the bun executable.
+ * @param side - The side to read: one that starts a script of its own.
+ * @param args - The body, the calls per sample and the sample count, as the scripts take them.
+ * @param sampleCount - The sample count the script runs at.
+ * @returns What the script reported, with `null` for what its side does not report.
+ * @throws Error when the child fails as {@link childOutput} says or prints a field of the wrong
+ *   type.
+ */
+function readScriptSide(
+  dependencies: Dependencies,
+  side: Side,
+  args: readonly string[],
+  sampleCount: number,
+): Measured {
   if (side === "baseline" || side === "baseline-again") {
     const printed = runBunChild(dependencies, BASELINE_CHILD, args);
     return { median: numberField(printed, "median"), sampleCount, ...NOT_REPORTED };
@@ -528,67 +634,6 @@ export function runDiagnosis(argv: readonly string[], dependencies: Dependencies
   }
 }
 
-/**
- * Runs repset once on Bun on `body`, with its count fixed at one call per sample.
- *
- * @param body - The body to time.
- * @returns The run's median and sample count.
- * @throws Error naming the body when the run fails or its count is not fixed at 1.
- */
-function readRepsetOnBun(body: BodyName): RepsetSample {
-  const name = `repset ${body}`;
-  return readRepsetRun(
-    name,
-    [BENCH_FILE, "--runtime", "bun", "--filter", `^${benchName(body)}$`],
-    (_result, sampling) => {
-      if (!sampling.callsPerSampleFixed || sampling.callsPerSample !== 1) {
-        const reported = `${String(sampling.callsPerSample)} ${sampling.callsPerSampleFixed ? "fixed" : "calibrated"}`;
-        throw new Error(`${name}: expected a count fixed at 1, the process reports ${reported}`);
-      }
-    },
-    1,
-  );
-}
-
-function spawnText(command: string, args: readonly string[], options?: SpawnOptions): ChildRun {
-  const withResult = options?.result === true;
-  const run = spawnSync(command, args, {
-    encoding: "utf8",
-    stdio: withResult ? ["ignore", "pipe", "pipe", "pipe"] : ["ignore", "pipe", "inherit"],
-  });
-  return {
-    error: run.error,
-    status: run.status,
-    signal: run.signal,
-    stdout: run.stdout,
-    result: withResult ? (run.output[RESULT_FD] ?? "") : undefined,
-  };
-}
-
-function readOptionalFile(path: string): string | undefined {
-  try {
-    return readFileSync(path, "utf8");
-  } catch {
-    return undefined;
-  }
-}
-
 if (import.meta.main) {
-  const bun = await findRuntime("bun", { timeout: DEFAULT_TIMEOUT });
-  runDiagnosis(process.argv.slice(2), {
-    readers: { repset: readRepsetOnBun, file: readOptionalFile },
-    spawn: spawnText,
-    append: (path, text) => {
-      appendFileSync(path, text);
-    },
-    environment: {
-      bun: { executable: bun.executable, version: bun.version },
-      variables: process.env,
-      pid: process.pid,
-      cpuCount: availableParallelism(),
-      kernel: release(),
-      nodeVersion: process.versions.node,
-      now: () => new Date(),
-    },
-  });
+  runDiagnosis(process.argv.slice(2), await liveDependencies());
 }

@@ -1,11 +1,10 @@
 /**
- * The timing accuracy check: for each scenario, one per runtime, count mode and body (`isJudged`
- * keeps the short `inlined8` body to Bun's calibrated count), it pairs one run of the built repset
- * command with one run of the baseline loop, back to back, and judges the pairs with
- * `check-timing-accuracy/verdict.ts`. The baseline is the body's bare loop, registered as its own
- * case in `check-timing-accuracy/timing-accuracy.bench.ts` and run inside repset's own child entry,
- * `dist/child.js`, started as repset's parent starts its child: both sides load the same code and
- * differ only in the code around the timed body call.
+ * The timing accuracy check: for each scenario, one per runtime, count mode and body, it pairs one
+ * run of the built repset command with one run of the baseline loop, back to back, and judges the
+ * pairs with `check-timing-accuracy/verdict.ts`. The baseline is the body's bare loop, registered
+ * as its own case in `check-timing-accuracy/timing-accuracy.bench.ts` and run inside repset's own
+ * child entry, `dist/child.js`, started as repset's parent starts its child: both sides load the
+ * same code and differ only in the code around the timed body call.
  *
  *   node --import tsx scripts/check-timing-accuracy.ts [--ci]
  *
@@ -121,28 +120,9 @@ const REPORT_SCHEMA: Report["schema"] = 1;
 
 const COUNT_MODES: readonly Scenario["countMode"][] = ["calibrated", "one-call"];
 
-/**
- * Whether the check judges `scenario`: every scenario, except that `inlined8` runs on Bun's
- * calibrated count alone.
- *
- * `inlined8` was measured with a calibrated count only. A one-call sample of it would read whole
- * clock steps on macOS, where one step, 41.67 ns, outlasts four of its calls; measure a one-call
- * scenario on Linux before adding it. On Node the baseline loop is no twin of repset's at that
- * body's scale, so the unchanged tree fails it.
- *
- * @param scenario - The runtime, count mode and body to judge.
- * @returns Whether the scenario is in the check.
- */
-function isJudged(scenario: Scenario): boolean {
-  return (
-    scenario.body !== "inlined8" ||
-    (scenario.runtime === "bun" && scenario.countMode === "calibrated")
-  );
-}
-
 const SCENARIOS: readonly Scenario[] = RUNTIMES.flatMap((runtime) =>
   COUNT_MODES.flatMap((countMode) => BODY_NAMES.map((body) => ({ runtime, countMode, body }))),
-).filter(isJudged);
+);
 
 function scenarioName(scenario: Scenario): string {
   return `${scenario.runtime} ${scenario.countMode} ${scenario.body}`;

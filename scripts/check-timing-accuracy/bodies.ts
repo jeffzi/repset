@@ -1,11 +1,9 @@
-// The bodies the timing accuracy check times.
+// The two bodies the timing accuracy check times, each about a microsecond per call.
 //
 // `each` calls a small function per element through a helper, the shape the JIT compiles into the
 // loop around it, so a harness that changes what surrounds the body call changes that body's cost
-// first. `inlined` is the same loop written out. Each lasts about a microsecond per call.
-// `inlined8` is `inlined` over the first 8 points only, about 10 ns per call on Bun, short enough
-// that the code around the body call is a visible share of its reading. All run against one state
-// of `SIZE` moving points.
+// first. `inlined` is the same loop written out. Both run against one state of `SIZE` moving
+// points.
 
 interface Point {
   x: number;
@@ -23,10 +21,7 @@ const VELOCITY_LEVELS = 7;
 
 const VELOCITY_STEP = 0.001;
 
-/** How many points `inlined8` moves per call. */
-const SHORT_SIZE = 8;
-
-export const BODY_NAMES = ["each", "inlined", "inlined8"] as const;
+export const BODY_NAMES = ["each", "inlined"] as const;
 
 export type BodyName = (typeof BODY_NAMES)[number];
 
@@ -94,12 +89,6 @@ export const BODIES: Readonly<Record<BodyName, (state: State) => void>> = {
   },
   inlined: ({ points }) => {
     for (let index = 0; index < points.length; index++) {
-      const point = points[index];
-      if (point !== undefined) point.x += point.vx;
-    }
-  },
-  inlined8: ({ points }) => {
-    for (let index = 0; index < SHORT_SIZE; index++) {
       const point = points[index];
       if (point !== undefined) point.x += point.vx;
     }

@@ -206,31 +206,6 @@ function checkWith(
 }
 
 describe("runCheck", () => {
-  it("judges every runtime, count mode and body, with inlined8 on bun calibrated alone", () => {
-    const judged = new Set<string>();
-    const readers: Readers = {
-      repset: (scenario) => {
-        judged.add(`${scenario.runtime} ${scenario.countMode} ${scenario.body}`);
-        return READING;
-      },
-      baseline: () => 1000,
-    };
-
-    checkWith(readers, []);
-
-    expect([...judged].toSorted()).toStrictEqual([
-      "bun calibrated each",
-      "bun calibrated inlined",
-      "bun calibrated inlined8",
-      "bun one-call each",
-      "bun one-call inlined",
-      "node calibrated each",
-      "node calibrated inlined",
-      "node one-call each",
-      "node one-call inlined",
-    ]);
-  });
-
   describe("when every scenario passes", () => {
     it("returns 0", () => {
       const { status } = checkWith(READERS, []);

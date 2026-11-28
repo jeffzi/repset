@@ -635,6 +635,37 @@ describe("measureCase", () => {
         }).toMatchObject({ result: { status: "failed", error: { phase: "fn" } }, alive: 0 });
       });
 
+      it.each([
+        { reading: "a sample's first", throwsOn: 1 },
+        { reading: "a sample's second", throwsOn: 2 },
+      ])("fails in phase child when $reading heap reading throws", async ({ throwsOn }) => {
+        let reads = 0;
+        const probe = {
+          heapUsed: () => {
+            reads++;
+            if (reads === throwsOn) throw new Error("apricot");
+            return 0;
+          },
+          detector: fakeDetector(),
+        };
+
+        const result = await passOn("quiet", probe);
+
+        expect(result).toMatchObject({
+          status: "failed",
+          error: { phase: "child", message: "apricot" },
+        });
+      });
+
+      it.each([
+        { id: "async-setup-per-call", phase: "setup" },
+        { id: "async-fn-per-call", phase: "fn" },
+      ])("fails $id in phase $phase when it returns a promise", async ({ id, phase }) => {
+        const result = await passOn(id);
+
+        expect(result).toMatchObject({ status: "failed", error: { phase } });
+      });
+
       it("fails in phase child when the collection detector cannot be loaded", async () => {
         const probe = {
           heapUsed: fakeHeap(0),

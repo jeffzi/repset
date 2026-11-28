@@ -258,6 +258,21 @@ describe("sampleSharedState", () => {
       expect(result.callsPerSample).toBe(400);
     });
 
+    it("runs a count warmup asks for that equals the cap", () => {
+      // The cap at 2^-22 ms is ceil(200 × 2^-22 / 1e-7) = 477 calls. One call spans no clock change,
+      // so warmup asks for 100; 100 calls span 42 resolutions, so it asks for ceil(20000 / 42) = 477.
+      const resolution = 2 ** -22;
+      const fake = harness((sample) => {
+        if (sample === 0) return 0;
+        if (sample === 1) return (42 * resolution) / 100;
+        return 0.01;
+      });
+
+      const result = run(fake, resolution, { minTime: 1 });
+
+      expect(result.callsPerSample).toBe(477);
+    });
+
     describe("when warmup's count would pass the cap", () => {
       it("fails naming the count asked for and the cap", () => {
         const fake = harness(() => 0);

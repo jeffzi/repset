@@ -52,6 +52,71 @@ describe("judgeScenario", () => {
     expect(verdict.passed).toBe(true);
   });
 
+  it("reports the first round's gap as the medians' difference over the baseline median", () => {
+    // Repset medians 1050 against 1000, while the mean paired difference is about 196 ns.
+    const skewed = pairsOf([50, 50, 50, 50, 50, 50, 50, 400, 400, 400, 400, 400]);
+
+    const verdict = judgeScenario(skewed, () => skewed);
+
+    expect(verdict.first.gap).toBeCloseTo(0.05, 10);
+  });
+
+  it("reports the first round's exact sign-flip p over the paired differences", () => {
+    // Four of the 4096 sign flips reach the observed |sum| of 1050; a sign test would give 26/4096.
+    const mostlyHigher = pairsOf([100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, -50]);
+
+    const verdict = judgeScenario(mostlyHigher, () => mostlyHigher);
+
+    expect(verdict.first.pValue).toBe(4 / 4096);
+  });
+
+  describe("when every pair differs by a millionth of its per-call resolution or less", () => {
+    it.each([
+      { position: "within the limit", difference: 2e-6 },
+      { position: "exactly at the limit", difference: 4e-6 },
+    ])("passes with p 1, $position", ({ difference }) => {
+      const nearTies: Pairs = {
+        baseline: Array.from({ length: 12 }, () => 0),
+        repset: Array.from({ length: 12 }, () => difference),
+        perCallResolutions: Array.from({ length: 12 }, () => 4),
+      };
+
+      const verdict = judgeScenario(nearTies, noConfirmation);
+
+      expect(verdict).toMatchObject({ passed: true, first: { pValue: 1 } });
+    });
+  });
+
+  describe("when every pair differs by just over a millionth of its per-call resolution", () => {
+    it("fails a confirmed round", () => {
+      const justOver: Pairs = {
+        baseline: Array.from({ length: 12 }, () => 0),
+        repset: Array.from({ length: 12 }, () => 8e-6),
+        perCallResolutions: Array.from({ length: 12 }, () => 4),
+      };
+
+      const verdict = judgeScenario(justOver, () => justOver);
+
+      expect(verdict.passed).toBe(false);
+    });
+  });
+
+  it.each([
+    { arrays: "a shorter repset", repset: 11, resolutions: 12 },
+    { arrays: "more per-call resolutions", repset: 12, resolutions: 13 },
+  ])("throws a RangeError naming each length for $arrays", ({ repset, resolutions }) => {
+    const unpaired: Pairs = {
+      baseline: Array.from({ length: 12 }, () => 1000),
+      repset: Array.from({ length: repset }, () => 1100),
+      perCallResolutions: Array.from({ length: resolutions }, () => 4),
+    };
+
+    const error = errorOf(() => judgeScenario(unpaired, noConfirmation));
+
+    expect(error).toBeInstanceOf(RangeError);
+    expect(error.message).toMatch(wordsInOrder(12, repset, resolutions));
+  });
+
   describe("when a significant first round is not confirmed", () => {
     it.each([
       {

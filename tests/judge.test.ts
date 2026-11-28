@@ -13,6 +13,7 @@ import { errorOf } from "./helpers/error-of.js";
 import { measured, memoryOf, runtimeOf } from "./helpers/fake-children.js";
 import { repeated } from "./helpers/repeated.js";
 import { bytesPerCall, nsPerCall } from "./helpers/report-results.js";
+import { wordsInOrder } from "./helpers/words-in-order.js";
 
 /** What a contender's child gave in one repetition: its median, or its median at a calls per sample. */
 type Timing = number | { readonly median: number; readonly callsPerSample: number };
@@ -230,6 +231,25 @@ describe("contestOf", () => {
     });
   });
 
+  it("lists pairs by their first contender's place in the ranking, then their second's", () => {
+    // Emitted slowest first; eight repetitions prove all six pairs, ranking a, b, c, d.
+    const contest = judgedOf({
+      d: repeated(400, 8),
+      c: repeated(300, 8),
+      b: repeated(200, 8),
+      a: repeated(100, 8),
+    });
+
+    expect(contest.pairs.map((pair) => [pair.a, pair.b])).toStrictEqual([
+      ["concat/a", "concat/b"],
+      ["concat/a", "concat/c"],
+      ["concat/a", "concat/d"],
+      ["concat/b", "concat/c"],
+      ["concat/b", "concat/d"],
+      ["concat/c", "concat/d"],
+    ]);
+  });
+
   it("sorts a contender proven faster ahead of one with a lower median", () => {
     const callsPerSample = 1_000_000;
     const at = (median: number): Timing => ({ median, callsPerSample });
@@ -377,6 +397,7 @@ describe("contestOf", () => {
     it.each([
       { why: "the first ran one the second did not", join: span(1, 8), loop: span(1, 7) },
       { why: "the second ran one the first did not", join: span(1, 7), loop: span(1, 8) },
+      { why: "the first ran two the second did not", join: span(1, 9), loop: span(1, 7) },
     ])(
       "throws a RangeError naming each and the repetitions only it ran when $why",
       ({ join, loop }) => {
@@ -390,6 +411,20 @@ describe("contestOf", () => {
         expect(error).toBeInstanceOf(RangeError);
         expect(error).toHaveProperty("message", expect.stringMatching(naming("join", joinOnly)));
         expect(error).toHaveProperty("message", expect.stringMatching(naming("loop", loopOnly)));
+      },
+    );
+
+    it.each([
+      { none: "loop", join: span(1, 8), loop: span(1, 7) },
+      { none: "join", join: span(1, 7), loop: span(1, 8) },
+    ])(
+      "names none for $none, which ran no repetition the other did not",
+      ({ none, join, loop }) => {
+        const error = errorOf(() =>
+          contestOf([timedOver("join", join, 100), timedOver("loop", loop, 200)]),
+        );
+
+        expect(error.message).toMatch(new RegExp(String.raw`concat/${none}[^/]*\bnone\b`, "u"));
       },
     );
 
@@ -479,5 +514,14 @@ describe("contestOf", () => {
         { id: "concat/join", ratio: null, rank: null },
       ]);
     });
+  });
+});
+
+describe("signedRankInterval", () => {
+  it("throws a RangeError naming the level and the count when too few differences reach it", () => {
+    const error = errorOf(() => signedRankInterval([0.1, 0.2], 0.95));
+
+    expect(error).toBeInstanceOf(RangeError);
+    expect(error.message).toMatch(wordsInOrder(0.95, 2));
   });
 });

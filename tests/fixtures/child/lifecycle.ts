@@ -96,3 +96,15 @@ bench("fn-and-teardown-throw-per-call", {
   },
   setupPerCall: true,
 });
+
+bench("async-setup-per-call", {
+  setupPerCall: true,
+  setup: () => Promise.resolve(0),
+  fn: () => undefined,
+});
+
+bench("async-fn-per-call", {
+  setupPerCall: true,
+  setup: () => 0,
+  fn: () => Promise.resolve(),
+});
